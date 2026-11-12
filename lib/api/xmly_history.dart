@@ -6,39 +6,59 @@ import 'package:crypto/crypto.dart';
 
 import '../models/xmly_models.dart';
 import 'xmly_client.dart';
+import "../services/app_log.dart";
 
 class XmlyHistory {
   XmlyHistory(this.client, {DateTime Function()? clock})
-    : _clock = clock ?? DateTime.now;
+    : _clock = clock ?? DateTime.now {
+    AppLog.instance.trace("lib/api/xmly_history.dart::XmlyHistory.new");
+  }
   final XmlyClient client;
   final DateTime Function() _clock;
   static const _material =
       '23627d1451047b8d257a96af5db359538f081d651df75b4aa169508547208159';
 
   static String signature(Map<String, String> params) {
+    AppLog.instance.trace("lib/api/xmly_history.dart::XmlyHistory.signature");
+
     final keys = params.keys.toList()..sort();
     final text =
-        '${keys.map((key) => '$key=${params[key]}&').join()}$_material';
+        '${keys.map((key) {
+          AppLog.instance.trace("lib/api/xmly_history.dart::XmlyHistory.signature.closure#1");
+          return '$key=${params[key]}&';
+        }).join()}$_material';
     // Native PLAY performs ASCII lowercasing, not Unicode case folding.
     final asciiLower = String.fromCharCodes(
-      text.codeUnits.map((c) => c >= 65 && c <= 90 ? c + 32 : c),
+      text.codeUnits.map((c) {
+        AppLog.instance.trace(
+          "lib/api/xmly_history.dart::XmlyHistory.signature.closure#2",
+        );
+        return c >= 65 && c <= 90 ? c + 32 : c;
+      }),
     );
     return md5.convert(utf8.encode(asciiLower)).toString();
   }
 
-  static int _integer(Object? value, [int fallback = 0]) => value is int
-      ? value
-      : value is String
-      ? int.tryParse(value) ?? fallback
-      : fallback;
+  static int _integer(Object? value, [int fallback = 0]) {
+    AppLog.instance.trace("lib/api/xmly_history.dart::XmlyHistory._integer");
+    return value is int
+        ? value
+        : value is String
+        ? int.tryParse(value) ?? fallback
+        : fallback;
+  }
 
   static String _id(String value) {
+    AppLog.instance.trace("lib/api/xmly_history.dart::XmlyHistory._id");
+
     final match = RegExp(r'^(?:xmly:)?([1-9][0-9]{0,18})$').firstMatch(value);
     if (match == null) throw ArgumentError('喜马拉雅 ID 无效');
     return match[1]!;
   }
 
   Map<String, String> _context() {
+    AppLog.instance.trace("lib/api/xmly_history.dart::XmlyHistory._context");
+
     final context = client.context();
     if (!RegExp(r'^[1-9][0-9]*$').hasMatch(context['uid'] ?? '') ||
         (context['token'] ?? '').isEmpty ||
@@ -53,6 +73,8 @@ class XmlyHistory {
   }
 
   static Map<String, dynamic>? normalize(Object? raw) {
+    AppLog.instance.trace("lib/api/xmly_history.dart::XmlyHistory.normalize");
+
     if (raw is! Map ||
         ![1, 9].contains(_integer(raw['type'])) ||
         _integer(raw['deleteTime']) > 0)
@@ -84,6 +106,8 @@ class XmlyHistory {
   }
 
   static Map<String, dynamic> _data(Map<String, dynamic> response) {
+    AppLog.instance.trace("lib/api/xmly_history.dart::XmlyHistory._data");
+
     Object? data = response['data'];
     if (data is String) {
       try {
@@ -98,12 +122,17 @@ class XmlyHistory {
     return data;
   }
 
-  Future<List<Map<String, dynamic>>> records() => _records();
+  Future<List<Map<String, dynamic>>> records() {
+    AppLog.instance.trace("lib/api/xmly_history.dart::XmlyHistory.records");
+    return _records();
+  }
 
   Future<List<Map<String, dynamic>>> _records({
     bool Function()? isActive,
     void Function(Iterable<Map<String, dynamic>>)? onPage,
   }) async {
+    AppLog.instance.trace("lib/api/xmly_history.dart::XmlyHistory._records");
+
     final context = _context();
     final identity = client.cacheIdentity;
     final items = <String, Map<String, dynamic>>{};
@@ -147,10 +176,14 @@ class XmlyHistory {
       }
       onPage?.call(items.values);
       if (!more) {
-        return items.values.toList()..sort(
-          (a, b) =>
-              (b['updated_at'] as double).compareTo(a['updated_at'] as double),
-        );
+        return items.values.toList()..sort((a, b) {
+          AppLog.instance.trace(
+            "lib/api/xmly_history.dart::XmlyHistory._records.closure#1",
+          );
+          return (b['updated_at'] as double).compareTo(
+            a['updated_at'] as double,
+          );
+        });
       }
       if (raw.isEmpty) throw XmlyException('invalid_response', '历史分页未返回记录');
     }
@@ -158,6 +191,8 @@ class XmlyHistory {
   }
 
   Future<Map<String, dynamic>> list({int page = 1, int pageSize = 50}) async {
+    AppLog.instance.trace("lib/api/xmly_history.dart::XmlyHistory.list");
+
     if (page < 1 || page > 10000 || pageSize < 1 || pageSize > 50) {
       throw ArgumentError('历史分页参数无效');
     }
@@ -176,6 +211,8 @@ class XmlyHistory {
     Duration? timeout,
     bool Function()? isActive,
   }) async {
+    AppLog.instance.trace("lib/api/xmly_history.dart::XmlyHistory.progress");
+
     final album = albumId.isEmpty ? '' : _id(albumId);
     final track = trackId.isEmpty ? '' : 'xmly:${_id(trackId)}';
     if (album.isEmpty && track.isEmpty) throw ArgumentError('请指定声音或专辑');
@@ -184,27 +221,46 @@ class XmlyHistory {
     }
     var active = true;
     Map<String, dynamic>? latest;
-    final scan = _records(
-      isActive: () => active && (isActive?.call() ?? true),
-      onPage: (items) {
-        latest = null;
-        for (final item in items) {
-          if ((album.isEmpty || item['album_id'] == album) &&
-              (track.isEmpty || item['track_id'] == track) &&
-              (latest == null ||
-                  (item['updated_at'] as double) >
-                      (latest!['updated_at'] as double))) {
-            latest = item;
-          }
-        }
-      },
-    ).then((_) => latest);
+    final scan =
+        _records(
+          isActive: () {
+            AppLog.instance.trace(
+              "lib/api/xmly_history.dart::XmlyHistory.progress.closure#1",
+            );
+            return active && (isActive?.call() ?? true);
+          },
+          onPage: (items) {
+            AppLog.instance.trace(
+              "lib/api/xmly_history.dart::XmlyHistory.progress.closure#2",
+            );
+
+            latest = null;
+            for (final item in items) {
+              if ((album.isEmpty || item['album_id'] == album) &&
+                  (track.isEmpty || item['track_id'] == track) &&
+                  (latest == null ||
+                      (item['updated_at'] as double) >
+                          (latest!['updated_at'] as double))) {
+                latest = item;
+              }
+            }
+          },
+        ).then((_) {
+          AppLog.instance.trace(
+            "lib/api/xmly_history.dart::XmlyHistory.progress.closure#3",
+          );
+          return latest;
+        });
     try {
       return await (timeout == null
           ? scan
           : scan.timeout(
               timeout,
               onTimeout: () {
+                AppLog.instance.trace(
+                  "lib/api/xmly_history.dart::XmlyHistory.progress.closure#4",
+                );
+
                 if (latest == null) {
                   throw const XmlyException('history_timeout', '云进度查询超时');
                 }
@@ -224,6 +280,8 @@ class XmlyHistory {
     int startedAtMs,
     int endedAtMs,
   ) async {
+    AppLog.instance.trace("lib/api/xmly_history.dart::XmlyHistory.sync");
+
     if (!track.id.startsWith('xmly:')) throw ArgumentError('只能同步喜马拉雅声音');
     final id = _id(track.id);
     final album = _id(

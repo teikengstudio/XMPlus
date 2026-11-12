@@ -35,6 +35,19 @@ dependencies:
   url_launcher: ^6.3.3
   pub_semver: ^2.2.1
   device_info_plus: ^13.3.0
+  sentry_flutter: 10.3.0
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  sentry_dart_plugin: 3.4.0
+  analyzer: 14.7.0
+sentry:
+  org: tkstudio
+  project: xmplus
+  upload_debug_symbols: true
+  upload_sources: false
+  upload_source_maps: false
+  wait_for_processing: true
 flutter:
   uses-material-design: true
   assets:

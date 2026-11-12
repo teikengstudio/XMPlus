@@ -1,5 +1,6 @@
 import '../models/xmly_models.dart';
 import 'xmly_client.dart';
+import "../services/app_log.dart";
 
 class TrackComment {
   const TrackComment({
@@ -21,7 +22,9 @@ class TrackCommentPage {
     required List<TrackComment> comments,
     required this.total,
     required this.hasMore,
-  }) : comments = List.unmodifiable(comments);
+  }) : comments = List.unmodifiable(comments) {
+    AppLog.instance.trace("lib/api/xmly_comments.dart::TrackCommentPage.new");
+  }
 
   final List<TrackComment> comments;
   final int total;
@@ -30,23 +33,32 @@ class TrackCommentPage {
 
 /// Public reading endpoints used by the official sound page. Never sends cookies.
 class XmlyComments {
-  XmlyComments(this.client);
+  XmlyComments(this.client) {
+    AppLog.instance.trace("lib/api/xmly_comments.dart::XmlyComments.new");
+  }
   final XmlyClient client;
 
   static const _invalid = XmlyException('invalid_comments', '评论列表格式无效，请重试');
 
   static int _count(Object? value) {
+    AppLog.instance.trace("lib/api/xmly_comments.dart::XmlyComments._count");
+
     if (value is! int || value < 0) throw _invalid;
     return value;
   }
 
-  static String _text(Object? value) => value is String ? value : '';
+  static String _text(Object? value) {
+    AppLog.instance.trace("lib/api/xmly_comments.dart::XmlyComments._text");
+    return value is String ? value : '';
+  }
 
   Future<TrackCommentPage> load(
     String trackId, {
     int page = 1,
     String? commentId,
   }) async {
+    AppLog.instance.trace("lib/api/xmly_comments.dart::XmlyComments.load");
+
     if (page < 1 || page > 250) {
       throw const XmlyException('comment_limit', '最多读取 5000 条评论，请刷新后查看');
     }

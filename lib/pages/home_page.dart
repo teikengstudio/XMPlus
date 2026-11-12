@@ -3,8 +3,52 @@ import 'package:flutter/material.dart';
 import '../api/xmly_experience.dart';
 import '../common/widgets/adaptive_text.dart';
 import '../models/xmly_models.dart';
+import '../services/app_log.dart';
 import '../services/app_runtime.dart';
 import 'catalogue_page.dart';
+
+void _recordHomeError(
+  String operation,
+  Object error,
+  StackTrace stack, {
+  bool recoverable = false,
+}) {
+  AppLog.instance.trace("lib/pages/home_page.dart::_recordHomeError");
+
+  final log = AppLog.instance;
+  if (log.errorWasRecorded(error)) return;
+  final expected =
+      error is XmlyException &&
+      const {
+        'client_closed',
+        'request_cancelled',
+        'cancelled',
+        'download_stopped',
+        'stopped',
+        'closed',
+        'login_required',
+        'login_expired',
+        'auth_required',
+        'account_changed',
+        'account_mismatch',
+        'missing_account',
+        'confirmation_required',
+        'confirmation_changed',
+        'insufficient_quota',
+        'usage_uncertain',
+        'rate_limited',
+        'queue_full',
+        'catalogue_limit',
+      }.contains(error.code);
+  log.write(
+    recoverable || expected ? AppLogLevel.warning : AppLogLevel.error,
+    'home_page',
+    operation,
+    error: error,
+    stackTrace: stack,
+    promptUser: !recoverable && !expected,
+  );
+}
 
 class HomePage extends StatefulWidget {
   const HomePage({
@@ -18,11 +62,20 @@ class HomePage extends StatefulWidget {
   final AlbumPlayback onPlayAlbum;
 
   @override
-  State<HomePage> createState() => _HomePageState();
+  State<HomePage> createState() {
+    AppLog.instance.trace("lib/pages/home_page.dart::HomePage.createState");
+    return _HomePageState();
+  }
 }
 
 class _HomePageState extends State<HomePage> {
-  bool get _compact => MediaQuery.sizeOf(context).width < 320;
+  bool get _compact {
+    AppLog.instance.trace(
+      "lib/pages/home_page.dart::_HomePageState._compact.get",
+    );
+    return MediaQuery.sizeOf(context).width < 320;
+  }
+
   final _scroll = ScrollController();
   List<HomeChannel> _channels = const [];
   List<HomeTab> _tabs = const [];
@@ -36,6 +89,8 @@ class _HomePageState extends State<HomePage> {
 
   @override
   void initState() {
+    AppLog.instance.trace("lib/pages/home_page.dart::_HomePageState.initState");
+
     super.initState();
     _identity = widget.runtime.client.cacheIdentity;
     widget.runtime.addListener(_accountChanged);
@@ -44,6 +99,10 @@ class _HomePageState extends State<HomePage> {
 
   @override
   void didUpdateWidget(covariant HomePage oldWidget) {
+    AppLog.instance.trace(
+      "lib/pages/home_page.dart::_HomePageState.didUpdateWidget",
+    );
+
     super.didUpdateWidget(oldWidget);
     if (oldWidget.runtime != widget.runtime) {
       oldWidget.runtime.removeListener(_accountChanged);
@@ -54,88 +113,146 @@ class _HomePageState extends State<HomePage> {
   }
 
   void _accountChanged() {
+    AppLog.instance.trace(
+      "lib/pages/home_page.dart::_HomePageState._accountChanged",
+    );
+
     final identity = widget.runtime.client.cacheIdentity;
     if (identity == _identity) return;
     _identity = identity;
     _loadChannels();
   }
 
-  bool _current(int generation, String identity) =>
-      mounted &&
-      generation == _generation &&
-      identity == widget.runtime.client.cacheIdentity;
-
-  Future<void> _loadChannels() async {
-    final generation = ++_generation;
-    final client = widget.runtime.client;
-    final identity = client.cacheIdentity;
-    setState(() {
-      _busy = true;
-      _error = null;
-      _content = null;
-      _channels = const [];
-      _tabs = const [];
-      _tabId = null;
-    });
-    try {
-      final api = XmlyExperience(client);
-      final channels = await api.channels();
-      if (!_current(generation, identity)) return;
-      if (channels.isEmpty)
-        throw const XmlyException('empty_channels', '暂时没有可用频道');
-      final selected = channels.any((channel) => channel.pageId == _pageId)
-          ? _pageId!
-          : channels.first.pageId;
-      setState(() {
-        _channels = channels;
-        _pageId = selected;
-      });
-      await _fetchHome(api, selected, generation, identity);
-    } catch (error) {
-      if (_current(generation, identity))
-        setState(() {
-          _error = _safeError(error);
-        });
-    } finally {
-      if (_current(generation, identity))
-        setState(() {
-          _busy = false;
-        });
-    }
+  bool _current(int generation, String identity) {
+    AppLog.instance.trace("lib/pages/home_page.dart::_HomePageState._current");
+    return mounted &&
+        generation == _generation &&
+        identity == widget.runtime.client.cacheIdentity;
   }
 
-  Future<void> _loadHome(int pageId, {int? tabId}) async {
-    final generation = ++_generation;
-    final client = widget.runtime.client;
-    final identity = client.cacheIdentity;
-    setState(() {
-      if (_pageId != pageId) _tabs = const [];
-      _pageId = pageId;
-      _tabId = tabId;
-      _busy = true;
-      _error = null;
-      _content = null;
-    });
-    if (_scroll.hasClients) _scroll.jumpTo(0);
-    try {
-      await _fetchHome(
-        XmlyExperience(client),
-        pageId,
-        generation,
-        identity,
-        tabId: tabId,
+  Future<void> _loadChannels() {
+    AppLog.instance.trace(
+      "lib/pages/home_page.dart::_HomePageState._loadChannels",
+    );
+    return AppLog.instance.runWithErrorScope(() async {
+      AppLog.instance.trace(
+        "lib/pages/home_page.dart::_HomePageState._loadChannels.closure#1",
       );
-    } catch (error) {
-      if (_current(generation, identity))
+
+      final generation = ++_generation;
+      final client = widget.runtime.client;
+      final identity = client.cacheIdentity;
+      setState(() {
+        AppLog.instance.trace(
+          "lib/pages/home_page.dart::_HomePageState._loadChannels.closure#1.closure#1",
+        );
+
+        _busy = true;
+        _error = null;
+        _content = null;
+        _channels = const [];
+        _tabs = const [];
+        _tabId = null;
+      });
+      try {
+        final api = XmlyExperience(client);
+        final channels = await api.channels();
+        if (!_current(generation, identity)) return;
+        if (channels.isEmpty)
+          throw const XmlyException('empty_channels', '暂时没有可用频道');
+        final selected =
+            channels.any((channel) {
+              AppLog.instance.trace(
+                "lib/pages/home_page.dart::_HomePageState._loadChannels.closure#1.closure#2",
+              );
+              return channel.pageId == _pageId;
+            })
+            ? _pageId!
+            : channels.first.pageId;
         setState(() {
-          _error = _safeError(error);
+          AppLog.instance.trace(
+            "lib/pages/home_page.dart::_HomePageState._loadChannels.closure#1.closure#3",
+          );
+
+          _channels = channels;
+          _pageId = selected;
         });
-    } finally {
-      if (_current(generation, identity))
-        setState(() {
-          _busy = false;
-        });
-    }
+        await _fetchHome(api, selected, generation, identity);
+      } catch (error, stack) {
+        _recordHomeError('Home channels load failed', error, stack);
+        if (_current(generation, identity))
+          setState(() {
+            AppLog.instance.trace(
+              "lib/pages/home_page.dart::_HomePageState._loadChannels.closure#1.closure#4",
+            );
+
+            _error = _safeError(error);
+          });
+      } finally {
+        if (_current(generation, identity))
+          setState(() {
+            AppLog.instance.trace(
+              "lib/pages/home_page.dart::_HomePageState._loadChannels.closure#1.closure#5",
+            );
+
+            _busy = false;
+          });
+      }
+    });
+  }
+
+  Future<void> _loadHome(int pageId, {int? tabId}) {
+    AppLog.instance.trace("lib/pages/home_page.dart::_HomePageState._loadHome");
+    return AppLog.instance.runWithErrorScope(() async {
+      AppLog.instance.trace(
+        "lib/pages/home_page.dart::_HomePageState._loadHome.closure#1",
+      );
+
+      final generation = ++_generation;
+      final client = widget.runtime.client;
+      final identity = client.cacheIdentity;
+      setState(() {
+        AppLog.instance.trace(
+          "lib/pages/home_page.dart::_HomePageState._loadHome.closure#1.closure#1",
+        );
+
+        if (_pageId != pageId) _tabs = const [];
+        _pageId = pageId;
+        _tabId = tabId;
+        _busy = true;
+        _error = null;
+        _content = null;
+      });
+      if (_scroll.hasClients) _scroll.jumpTo(0);
+      try {
+        await _fetchHome(
+          XmlyExperience(client),
+          pageId,
+          generation,
+          identity,
+          tabId: tabId,
+        );
+      } catch (error, stack) {
+        _recordHomeError('Home content load failed', error, stack);
+        if (_current(generation, identity))
+          setState(() {
+            AppLog.instance.trace(
+              "lib/pages/home_page.dart::_HomePageState._loadHome.closure#1.closure#2",
+            );
+
+            _error = _safeError(error);
+          });
+      } finally {
+        if (_current(generation, identity))
+          setState(() {
+            AppLog.instance.trace(
+              "lib/pages/home_page.dart::_HomePageState._loadHome.closure#1.closure#3",
+            );
+
+            _busy = false;
+          });
+      }
+    });
   }
 
   Future<void> _fetchHome(
@@ -145,15 +262,27 @@ class _HomePageState extends State<HomePage> {
     String identity, {
     int? tabId,
   }) async {
+    AppLog.instance.trace(
+      "lib/pages/home_page.dart::_HomePageState._fetchHome",
+    );
+
     var content = await api.home(pageId, tabId: tabId);
     if (!_current(generation, identity)) return;
     if (content.tabs.isNotEmpty) {
       setState(() {
+        AppLog.instance.trace(
+          "lib/pages/home_page.dart::_HomePageState._fetchHome.closure#1",
+        );
+
         _tabs = content.tabs;
       });
       if (tabId == null) {
         final selected = content.tabs.first.tabId;
         setState(() {
+          AppLog.instance.trace(
+            "lib/pages/home_page.dart::_HomePageState._fetchHome.closure#2",
+          );
+
           _tabId = selected;
         });
         content = await api.home(pageId, tabId: selected);
@@ -161,36 +290,60 @@ class _HomePageState extends State<HomePage> {
       }
     }
     setState(() {
+      AppLog.instance.trace(
+        "lib/pages/home_page.dart::_HomePageState._fetchHome.closure#3",
+      );
+
       _content = content;
     });
   }
 
-  void _search() => Navigator.of(context).push(
-    MaterialPageRoute<void>(
-      builder: (_) => Scaffold(
-        appBar: AppBar(title: const Text('搜索')),
-        body: DiscoveryPage(
-          runtime: widget.runtime,
-          onDownload: widget.onDownload,
-          onPlayAlbum: widget.onPlayAlbum,
-        ),
+  void _search() {
+    AppLog.instance.trace("lib/pages/home_page.dart::_HomePageState._search");
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) {
+          AppLog.instance.trace(
+            "lib/pages/home_page.dart::_HomePageState._search.closure#1",
+          );
+          return Scaffold(
+            appBar: AppBar(title: const Text('搜索')),
+            body: DiscoveryPage(
+              runtime: widget.runtime,
+              onDownload: widget.onDownload,
+              onPlayAlbum: widget.onPlayAlbum,
+            ),
+          );
+        },
       ),
-    ),
-  );
+    );
+  }
 
-  void _openAlbum(Album album) => Navigator.of(context).push(
-    MaterialPageRoute<void>(
-      builder: (_) => AlbumPageView(
-        runtime: widget.runtime,
-        albumId: album.id,
-        onDownload: widget.onDownload,
-        onPlayAlbum: widget.onPlayAlbum,
+  void _openAlbum(Album album) {
+    AppLog.instance.trace(
+      "lib/pages/home_page.dart::_HomePageState._openAlbum",
+    );
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) {
+          AppLog.instance.trace(
+            "lib/pages/home_page.dart::_HomePageState._openAlbum.closure#1",
+          );
+          return AlbumPageView(
+            runtime: widget.runtime,
+            albumId: album.id,
+            onDownload: widget.onDownload,
+            onPlayAlbum: widget.onPlayAlbum,
+          );
+        },
       ),
-    ),
-  );
+    );
+  }
 
   @override
   void dispose() {
+    AppLog.instance.trace("lib/pages/home_page.dart::_HomePageState.dispose");
+
     _generation++;
     widget.runtime.removeListener(_accountChanged);
     _scroll.dispose();
@@ -199,6 +352,8 @@ class _HomePageState extends State<HomePage> {
 
   @override
   Widget build(BuildContext context) {
+    AppLog.instance.trace("lib/pages/home_page.dart::_HomePageState.build");
+
     final sections = _content?.sections ?? const <HomeSection>[];
     return Center(
       child: ConstrainedBox(
@@ -246,8 +401,17 @@ class _HomePageState extends State<HomePage> {
                           horizontal: _compact ? 8 : 16,
                         ),
                         itemCount: _channels.length,
-                        separatorBuilder: (_, _) => const SizedBox(width: 8),
+                        separatorBuilder: (_, _) {
+                          AppLog.instance.trace(
+                            "lib/pages/home_page.dart::_HomePageState.build.closure#1",
+                          );
+                          return const SizedBox(width: 8);
+                        },
                         itemBuilder: (_, index) {
+                          AppLog.instance.trace(
+                            "lib/pages/home_page.dart::_HomePageState.build.closure#2",
+                          );
+
                           final channel = _channels[index];
                           return Center(
                             child: ConstrainedBox(
@@ -260,6 +424,10 @@ class _HomePageState extends State<HomePage> {
                                 ),
                                 selected: channel.pageId == _pageId,
                                 onSelected: (_) {
+                                  AppLog.instance.trace(
+                                    "lib/pages/home_page.dart::_HomePageState.build.closure#2.closure#1",
+                                  );
+
                                   if (channel.pageId != _pageId)
                                     _loadHome(channel.pageId);
                                 },
@@ -292,6 +460,10 @@ class _HomePageState extends State<HomePage> {
                                 ),
                                 selected: tab.tabId == _tabId,
                                 onSelected: (_) {
+                                  AppLog.instance.trace(
+                                    "lib/pages/home_page.dart::_HomePageState.build.closure#3",
+                                  );
+
                                   if (tab.tabId != _tabId)
                                     _loadHome(_pageId!, tabId: tab.tabId);
                                 },
@@ -321,7 +493,12 @@ class _HomePageState extends State<HomePage> {
                                 ? null
                                 : _pageId == null || _channels.isEmpty
                                 ? _loadChannels
-                                : () => _loadHome(_pageId!, tabId: _tabId),
+                                : () {
+                                    AppLog.instance.trace(
+                                      "lib/pages/home_page.dart::_HomePageState.build.closure#4",
+                                    );
+                                    _loadHome(_pageId!, tabId: _tabId);
+                                  },
                             child: const Text('重试'),
                           ),
                         ],
@@ -344,46 +521,58 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  Widget _section(HomeSection section) => Padding(
-    padding: EdgeInsets.fromLTRB(_compact ? 8 : 16, 16, _compact ? 8 : 16, 0),
-    child: Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        AdaptiveText(
-          section.isRanking ? '排行榜 · ${section.title}' : section.title,
-          style: Theme.of(context).textTheme.titleLarge,
-        ),
-        const SizedBox(height: 12),
-        LayoutBuilder(
-          builder: (context, constraints) {
-            final columns = constraints.maxWidth >= 1040
-                ? 3
-                : constraints.maxWidth >= 680
-                ? 2
-                : 1;
-            final width = (constraints.maxWidth - 12 * (columns - 1)) / columns;
-            return Wrap(
-              spacing: 12,
-              runSpacing: 12,
-              children: [
-                for (var index = 0; index < section.albums.length; index++)
-                  SizedBox(
-                    width: width,
-                    child: _albumCard(
-                      section.albums[index],
-                      section.stats[section.albums[index].id],
-                      section.isRanking ? index + 1 : null,
+  Widget _section(HomeSection section) {
+    AppLog.instance.trace("lib/pages/home_page.dart::_HomePageState._section");
+    return Padding(
+      padding: EdgeInsets.fromLTRB(_compact ? 8 : 16, 16, _compact ? 8 : 16, 0),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          AdaptiveText(
+            section.isRanking ? '排行榜 · ${section.title}' : section.title,
+            style: Theme.of(context).textTheme.titleLarge,
+          ),
+          const SizedBox(height: 12),
+          LayoutBuilder(
+            builder: (context, constraints) {
+              AppLog.instance.trace(
+                "lib/pages/home_page.dart::_HomePageState._section.closure#1",
+              );
+
+              final columns = constraints.maxWidth >= 1040
+                  ? 3
+                  : constraints.maxWidth >= 680
+                  ? 2
+                  : 1;
+              final width =
+                  (constraints.maxWidth - 12 * (columns - 1)) / columns;
+              return Wrap(
+                spacing: 12,
+                runSpacing: 12,
+                children: [
+                  for (var index = 0; index < section.albums.length; index++)
+                    SizedBox(
+                      width: width,
+                      child: _albumCard(
+                        section.albums[index],
+                        section.stats[section.albums[index].id],
+                        section.isRanking ? index + 1 : null,
+                      ),
                     ),
-                  ),
-              ],
-            );
-          },
-        ),
-      ],
-    ),
-  );
+                ],
+              );
+            },
+          ),
+        ],
+      ),
+    );
+  }
 
   Widget _albumCard(Album album, HomeAlbumStats? stats, int? rank) {
+    AppLog.instance.trace(
+      "lib/pages/home_page.dart::_HomePageState._albumCard",
+    );
+
     final details = <String>[
       if (album.total > 0) '${album.total} 集',
       if (stats?.playCount != null) '${_count(stats!.playCount!)} 播放',
@@ -391,6 +580,10 @@ class _HomePageState extends State<HomePage> {
     ];
     return LayoutBuilder(
       builder: (context, constraints) {
+        AppLog.instance.trace(
+          "lib/pages/home_page.dart::_HomePageState._albumCard.closure#1",
+        );
+
         final compact = MediaQuery.sizeOf(context).width < 320;
         final coverSize = rank == null
             ? (constraints.maxWidth * 0.24).clamp(64.0, 96.0).toDouble()
@@ -399,7 +592,12 @@ class _HomePageState extends State<HomePage> {
           margin: EdgeInsets.zero,
           clipBehavior: Clip.antiAlias,
           child: InkWell(
-            onTap: () => _openAlbum(album),
+            onTap: () {
+              AppLog.instance.trace(
+                "lib/pages/home_page.dart::_HomePageState._albumCard.closure#1.closure#1",
+              );
+              _openAlbum(album);
+            },
             child: Padding(
               padding: EdgeInsets.all(compact ? 8 : 12),
               child: Row(
@@ -490,10 +688,16 @@ class _HomePageState extends State<HomePage> {
   }
 }
 
-String _count(int count) => count >= 100000000
-    ? '${(count / 100000000).toStringAsFixed(1)}亿'
-    : count >= 10000
-    ? '${(count / 10000).toStringAsFixed(1)}万'
-    : '$count';
-String _safeError(Object error) =>
-    error is XmlyException ? error.message : '加载失败，请稍后重试';
+String _count(int count) {
+  AppLog.instance.trace("lib/pages/home_page.dart::_count");
+  return count >= 100000000
+      ? '${(count / 100000000).toStringAsFixed(1)}亿'
+      : count >= 10000
+      ? '${(count / 10000).toStringAsFixed(1)}万'
+      : '$count';
+}
+
+String _safeError(Object error) {
+  AppLog.instance.trace("lib/pages/home_page.dart::_safeError");
+  return error is XmlyException ? error.message : '加载失败，请稍后重试';
+}

@@ -17,12 +17,18 @@ import '../services/download_service.dart' show DownloadAlbumJob;
 import '../services/usage_ledger.dart';
 import 'app_storage.dart';
 import 'credential_store.dart';
+import "../services/app_log.dart";
 
 class ConfigArchiveException implements Exception {
   const ConfigArchiveException(this.message);
   final String message;
   @override
-  String toString() => message;
+  String toString() {
+    AppLog.instance.trace(
+      "lib/storage/config_archive.dart::ConfigArchiveException.toString",
+    );
+    return message;
+  }
 }
 
 /// A fully parsed and candidate-validated preview. Secrets are never exposed in
@@ -35,7 +41,9 @@ class ArchiveImport {
     List<String> summary,
     Iterable<String> missingDirectories,
   ) : summary = List.unmodifiable(summary),
-      missingDirectories = List.unmodifiable(missingDirectories);
+      missingDirectories = List.unmodifiable(missingDirectories) {
+    AppLog.instance.trace("lib/storage/config_archive.dart::ArchiveImport._");
+  }
   final String _payload;
   final ConfigArchive _owner;
   final bool sameOrigin;
@@ -48,7 +56,9 @@ class ConfigArchive {
     required this.storage,
     required this.accounts,
     required this.secrets,
-  });
+  }) {
+    AppLog.instance.trace("lib/storage/config_archive.dart::ConfigArchive.new");
+  }
   final AppStorage storage;
   final AccountService accounts;
   final CredentialStore secrets;
@@ -99,10 +109,18 @@ class ConfigArchive {
     'destination',
     'localPath',
   };
-  String get _origin =>
-      sha256.convert(utf8.encode(storage.directory)).toString();
+  String get _origin {
+    AppLog.instance.trace(
+      "lib/storage/config_archive.dart::ConfigArchive._origin.get",
+    );
+    return sha256.convert(utf8.encode(storage.directory)).toString();
+  }
 
   Future<List<int>> export({bool includeAccount = false}) async {
+    AppLog.instance.trace(
+      "lib/storage/config_archive.dart::ConfigArchive.export",
+    );
+
     final state = storage.state;
     final tasks = {
       'downloads': _clean(state['downloads']),
@@ -170,6 +188,10 @@ class ConfigArchive {
   }
 
   Future<ArchiveImport> inspect(List<int> bytes) async {
+    AppLog.instance.trace(
+      "lib/storage/config_archive.dart::ConfigArchive.inspect",
+    );
+
     final Map<String, dynamic> payload;
     try {
       if (bytes.length > maxBytes || bytes.isEmpty)
@@ -238,6 +260,10 @@ class ConfigArchive {
     }
     final missing = <String>{};
     Future<void> roots(Object? node) async {
+      AppLog.instance.trace(
+        "lib/storage/config_archive.dart::ConfigArchive.inspect.roots",
+      );
+
       if (node is Map) {
         for (final entry in node.entries) {
           if (_rootKeys.contains(entry.key) &&
@@ -286,12 +312,20 @@ class ConfigArchive {
     ArchiveImport draft, {
     Map<String, String> relocatedRoots = const {},
   }) async {
+    AppLog.instance.trace(
+      "lib/storage/config_archive.dart::ConfigArchive.restore",
+    );
+
     if (!identical(draft._owner, this))
       throw const ConfigArchiveException('请重新打开备份');
     final payload = jsonDecode(draft._payload) as Map<String, dynamic>;
     // A backup is data, not permission to spend quota on future voices.
     (payload['setting.json'] as Map?)?.remove('autoDownloads');
     Future<void> relocate(Object? node) async {
+      AppLog.instance.trace(
+        "lib/storage/config_archive.dart::ConfigArchive.restore.relocate",
+      );
+
       if (node is Map) {
         for (final key in node.keys) {
           final value = node[key];
@@ -353,6 +387,10 @@ class ConfigArchive {
   }
 
   static Object? _clean(Object? node) {
+    AppLog.instance.trace(
+      "lib/storage/config_archive.dart::ConfigArchive._clean",
+    );
+
     if (node is Map) {
       return <String, dynamic>{
         for (final entry in node.entries)
@@ -370,6 +408,10 @@ class ConfigArchive {
   }
 
   static void _validate(Map<String, dynamic> payload, Set<String> names) {
+    AppLog.instance.trace(
+      "lib/storage/config_archive.dart::ConfigArchive._validate",
+    );
+
     final meta = _map(payload['meta.json']);
     if (meta['type'] != 'data_archive' ||
         meta['appName'] != 'XMPlus' ||
@@ -386,7 +428,12 @@ class ConfigArchive {
         meta['files'] is! List)
       throw const FormatException();
     final listed = meta['files'] as List;
-    if (listed.any((name) => name is! String || name == 'meta.json') ||
+    if (listed.any((name) {
+          AppLog.instance.trace(
+            "lib/storage/config_archive.dart::ConfigArchive._validate.closure#1",
+          );
+          return name is! String || name == 'meta.json';
+        }) ||
         listed.toSet().length != listed.length ||
         !names.difference({'meta.json'}).containsAll(listed) ||
         !listed.toSet().containsAll(names.difference({'meta.json'})))
@@ -459,6 +506,10 @@ class ConfigArchive {
   }
 
   static void _validateTasks(Map<String, dynamic> value) {
+    AppLog.instance.trace(
+      "lib/storage/config_archive.dart::ConfigArchive._validateTasks",
+    );
+
     final tasks = <String, DownloadTask>{};
     if (value.containsKey('downloads')) {
       if (value['downloads'] is! List) throw const FormatException();
@@ -494,7 +545,12 @@ class ConfigArchive {
                 (job.page * xmlyAlbumPageSize).clamp(0, job.total) ||
             job.seen.toSet().length != job.seen.length ||
             job.taskIds.toSet().length != job.taskIds.length ||
-            job.taskIds.any((id) => !job.seen.contains(tasks[id]?.track.id)) ||
+            job.taskIds.any((id) {
+              AppLog.instance.trace(
+                "lib/storage/config_archive.dart::ConfigArchive._validateTasks.closure#1",
+              );
+              return !job.seen.contains(tasks[id]?.track.id);
+            }) ||
             !const {
               'queued',
               'running',
@@ -518,6 +574,10 @@ class ConfigArchive {
   }
 
   static void _validateLedger(Map<String, dynamic> ledger, String identity) {
+    AppLog.instance.trace(
+      "lib/storage/config_archive.dart::ConfigArchive._validateLedger",
+    );
+
     final receipts = ledger['receipts'];
     if (receipts != null) {
       if (receipts is! List) throw const FormatException();
@@ -553,11 +613,19 @@ class ConfigArchive {
   }
 
   static Map<String, dynamic> _map(Object? value) {
+    AppLog.instance.trace(
+      "lib/storage/config_archive.dart::ConfigArchive._map",
+    );
+
     if (value is! Map<String, dynamic>) throw const FormatException();
     return value;
   }
 
   static void _checkData(Object? value, [int depth = 0, String? rawTrackId]) {
+    AppLog.instance.trace(
+      "lib/storage/config_archive.dart::ConfigArchive._checkData",
+    );
+
     if (depth > 64) throw const FormatException();
     if (value is Map) {
       for (final entry in value.entries) {
@@ -641,10 +709,11 @@ class ConfigArchive {
   }
 
   static void _validateSettings(Map<String, dynamic> settings) {
+    AppLog.instance.trace(
+      "lib/storage/config_archive.dart::ConfigArchive._validateSettings",
+    );
+
     if (settings.containsKey('autoClaim') && settings['autoClaim'] is! bool)
-      throw const FormatException();
-    if (settings.containsKey('showRequestFailureBanner') &&
-        settings['showRequestFailureBanner'] is! bool)
       throw const FormatException();
     final appearance = settings['appearance'];
     if (settings.containsKey('catalogueAscending') &&
@@ -666,6 +735,10 @@ class ConfigArchive {
       _range(value, 'textScale', 0.8, 1.5);
     }
     void playback(Object? raw) {
+      AppLog.instance.trace(
+        "lib/storage/config_archive.dart::ConfigArchive._validateSettings.playback",
+      );
+
       if (raw == null) return;
       PlaybackSettings.parse(_map(raw));
     }
@@ -688,6 +761,10 @@ class ConfigArchive {
   }
 
   static void _range(Map value, String key, num minimum, num maximum) {
+    AppLog.instance.trace(
+      "lib/storage/config_archive.dart::ConfigArchive._range",
+    );
+
     if (!value.containsKey(key)) return;
     final number = value[key];
     if (number is! num ||
