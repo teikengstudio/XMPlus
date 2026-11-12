@@ -157,9 +157,11 @@ class PlayerService {
   int _observedAt = 0;
   String? error, status;
   String? _sourceWarning;
-  bool _closed = false, _loaded = false, _actual = false, _atEnd = false;
+  bool _closed = false, _loaded = false, _actual = false;
+  String? _completedTrackId;
   CloseSequence? _closeSteps;
-  bool _awaitingDuration = false, _manualChapterPosition = false;
+  double? _pendingDurationPosition;
+  bool _manualChapterPosition = false;
   bool _sleepStopped = false, _manualPaused = false;
   int _savedAt = 0;
   Future<void>? _tailFlight;
@@ -176,6 +178,8 @@ class PlayerService {
   List<Track> get queue => List.unmodifiable(_queue);
   Track? get current =>
       cursor >= 0 && cursor < _queue.length ? _queue[cursor] : null;
+  bool get _atEnd =>
+      _completedTrackId != null && _completedTrackId == current?.id;
   String get sourceKind => _source?.kind ?? '';
   bool get loading => _loading;
   // Policy warnings describe the current settings/duration. Do not retain one
@@ -311,7 +315,7 @@ class PlayerService {
     playing = false;
     buffering = false;
     _actual = false;
-    _atEnd = false;
+    _completedTrackId = null;
     _endSeekPosition = null;
     _startSeekPosition = null;
     _sleepStopped = false;
@@ -783,6 +787,9 @@ class PlayerService {
             if (!active()) return;
             ++_seekRevision;
             position = restored;
+            if (_pendingDurationPosition != null) {
+              _pendingDurationPosition = restored;
+            }
             // Only a subsequent device observation may persist the restored
             // position; the pre-seek fallback is not an official observation.
             _actual = false;
@@ -899,7 +906,7 @@ class PlayerService {
         prepaid: source.kind != 'online',
         speed: settings.speed,
       );
-      _atEnd = false;
+      _completedTrackId = null;
       _endSeekPosition = null;
       _actual = false;
       _observedAt = 0;
@@ -908,7 +915,6 @@ class PlayerService {
       _checkedEpochs.clear();
       final epoch = ++_epoch;
       duration = track.duration;
-      _awaitingDuration = duration <= 0;
       _manualChapterPosition = manualReplay;
       position = policy.start(
         duration: duration,
@@ -916,6 +922,7 @@ class PlayerService {
         settings: settings,
         manualReplay: manualReplay,
       );
+      _pendingDurationPosition = duration <= 0 ? position : null;
       rate = settings.speed;
       volume = settings.outputVolume;
       await _driver.open(source.uri, epoch: epoch);
@@ -1320,6 +1327,9 @@ class PlayerService {
         }
         _manualChapterPosition = true;
         position = policy.manualSeek(seconds);
+        if (_pendingDurationPosition != null) {
+          _pendingDurationPosition = position;
+        }
         await _driver.seek(position);
         if (_atEnd) {
           // Reopen a completed device at the user's selection on resume.
@@ -1439,18 +1449,20 @@ class PlayerService {
     }
     _observedPosition = snapshot.position;
     if (snapshot.duration > 0) duration = snapshot.duration;
-    if (_awaitingDuration && duration > 0) {
-      _awaitingDuration = false;
+    final pendingPosition = _pendingDurationPosition;
+    if (pendingPosition != null && duration > 0) {
+      _pendingDurationPosition = null;
+      // Opening may report zero after the requested resume seek was issued.
+      // Keep that target, or newer playback progress, when applying chapter skips.
+      final resume = position < pendingPosition ? pendingPosition : position;
       final initial = policy.start(
         duration: duration,
-        resumePosition: position,
+        resumePosition: resume,
         settings: effectiveSettings,
         manualReplay: _manualChapterPosition,
       );
-      if (initial != position) {
-        position = initial;
-        await _driver.seek(initial);
-      }
+      position = initial;
+      if (initial != resume) await _driver.seek(initial);
     }
     if (playing && !buffering) _actual = true;
     await ledger.observe(
@@ -1520,7 +1532,7 @@ class PlayerService {
   }
 
   Future<void> _finish() async {
-    _atEnd = true;
+    _completedTrackId = current?.id;
     // Completion owns advancement even when its page was prefetched before a seek.
     final intent = _advanceIntent;
     _endAdvanceIntent = intent;
@@ -2001,6 +2013,7 @@ class PlayerService {
       cursor = selected;
       sourceAlbumId = '';
       if (removedCurrent) {
+        _completedTrackId = null;
         position = 0;
         duration = current?.duration ?? 0;
       }
@@ -2040,6 +2053,7 @@ class PlayerService {
       cursor = -1;
       sourceAlbumId = '';
       ++generation;
+      _completedTrackId = null;
       position = 0;
       duration = 0;
       _notify();
@@ -2141,6 +2155,7 @@ class PlayerService {
     await _release();
     buffering = false;
     _actual = false;
+    _pendingDurationPosition = null;
   }
 
   Future<void> stopTaskReference(String taskId) async {
