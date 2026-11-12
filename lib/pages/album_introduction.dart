@@ -51,6 +51,10 @@ class AlbumIntroduction extends StatelessWidget {
                   client: client,
                   albumId: albumId,
                   onOpenAlbum: (album) {
+                    AppLog.instance.trace(
+                      "lib/pages/album_introduction.dart::AlbumIntroduction.build.closure#1.closure#1.closure#1",
+                    );
+
                     Navigator.of(context).pop();
                     onOpenAlbum(album);
                   },
@@ -105,6 +109,10 @@ class _CompleteIntroductionState extends State<_CompleteIntroduction> {
     );
     if (_busy) return;
     setState(() {
+      AppLog.instance.trace(
+        "lib/pages/album_introduction.dart::_CompleteIntroductionState._load.closure#1",
+      );
+
       _busy = true;
       _error = null;
     });
@@ -113,6 +121,10 @@ class _CompleteIntroductionState extends State<_CompleteIntroduction> {
           .albumIntroduction(widget.albumId);
       if (mounted)
         setState(() {
+          AppLog.instance.trace(
+            "lib/pages/album_introduction.dart::_CompleteIntroductionState._load.closure#2",
+          );
+
           _content = content;
         });
     } catch (error, stack) {
@@ -129,11 +141,19 @@ class _CompleteIntroductionState extends State<_CompleteIntroduction> {
       }
       if (mounted)
         setState(() {
+          AppLog.instance.trace(
+            "lib/pages/album_introduction.dart::_CompleteIntroductionState._load.closure#3",
+          );
+
           _error = error is XmlyException ? error.message : '完整简介加载失败，请重试';
         });
     } finally {
       if (mounted)
         setState(() {
+          AppLog.instance.trace(
+            "lib/pages/album_introduction.dart::_CompleteIntroductionState._load.closure#4",
+          );
+
           _busy = false;
         });
     }

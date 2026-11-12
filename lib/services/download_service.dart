@@ -1059,14 +1059,14 @@ class DownloadService {
           if ((!job.seen.contains(track.id) ||
                   _tasks.values.any((item) {
                     AppLog.instance.trace(
-                      'lib/services/download_service.dart::DownloadService._admitAlbumPage.closure#2',
+                      "lib/services/download_service.dart::DownloadService._admitAlbumPage.closure#1",
                     );
                     return item.track.id == track.id;
                   })) &&
               !_duplicate(job.accountIdentity, track.id) &&
               !_tasks.values.any((item) {
                 AppLog.instance.trace(
-                  "lib/services/download_service.dart::DownloadService._admitAlbumPage.closure#1",
+                  "lib/services/download_service.dart::DownloadService._admitAlbumPage.closure#2",
                 );
                 return item.track.id == track.id &&
                     (item.outputDeleted ||
@@ -3388,7 +3388,7 @@ class DownloadService {
           }.toList();
           record['pending'] = pending.where((item) {
             AppLog.instance.trace(
-              'lib/services/download_service.dart::DownloadService._save.closure#1.retainedPending',
+              "lib/services/download_service.dart::DownloadService._save.closure#1.closure#3",
             );
             return item is! Map || !retired.contains(item['id']);
           }).toList();

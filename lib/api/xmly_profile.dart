@@ -51,7 +51,6 @@ class XmlyProfile {
       XmlyClient.mobile,
       '/fmobile-user/homePage/ts-${DateTime.now().millisecondsSinceEpoch}',
       query: {'device': 'android', 'uid': uid},
-      account: false,
     );
     if ((response['ret'] != 0 && response['ret'] != '0') ||
         '${response['uid']}' != uid) {

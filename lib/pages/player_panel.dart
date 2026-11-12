@@ -127,7 +127,6 @@ class _PlayerPanelState extends State<PlayerPanel>
   XmlyClient? _favoriteClient;
   String? _favoriteKey, _favoriteTrackId, _favoriteError;
   bool? _favorite;
-  int? _favoriteCount;
   bool _favoriteBusy = false, _favoriteMutating = false;
   int _favoriteRequest = 0, _libraryRevision = -1;
   XmlyClient? _manuscriptClient;
@@ -598,7 +597,6 @@ class _PlayerPanelState extends State<PlayerPanel>
         );
 
         _favorite = null;
-        _favoriteCount = null;
         _favoriteError = null;
         _favoriteBusy = track != null && client.accountAvailable;
         _favoriteMutating = false;
@@ -714,7 +712,6 @@ class _PlayerPanelState extends State<PlayerPanel>
           );
 
           _favorite = null;
-          _favoriteCount = null;
           _favoriteError = error is XmlyException
               ? error.message
               : '收藏操作未完成，请重试';
@@ -1652,29 +1649,7 @@ class _PlayerPanelState extends State<PlayerPanel>
           spacing: 24,
           crossAxisAlignment: WrapCrossAlignment.center,
           children: [
-            Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                _favoriteControl(track),
-                Tooltip(
-                  message: _favoriteCount == null
-                      ? '收藏总数暂不可用'
-                      : '收藏总数 $_favoriteCount',
-                  child: Semantics(
-                    label: _favoriteCount == null
-                        ? '收藏总数暂不可用'
-                        : '收藏总数 $_favoriteCount',
-                    excludeSemantics: true,
-                    child: Text(
-                      _favoriteCount == null ? '收藏 —' : '收藏 $_favoriteCount',
-                      style: theme.textTheme.bodySmall?.copyWith(
-                        color: colors.onSurfaceVariant,
-                      ),
-                    ),
-                  ),
-                ),
-              ],
-            ),
+            _favoriteControl(track),
             TextButton.icon(
               onPressed: track == null || _busy || _cancelling
                   ? null
@@ -1708,7 +1683,7 @@ class _PlayerPanelState extends State<PlayerPanel>
                   ? null
                   : () {
                       AppLog.instance.trace(
-                        'lib/pages/player_panel.dart::_PlayerPanelState.build.replay',
+                        "lib/pages/player_panel.dart::_PlayerPanelState.build.closure#1.closure#6",
                       );
                       _act(player.replay);
                     },
@@ -1830,7 +1805,7 @@ class _PlayerPanelState extends State<PlayerPanel>
               TextButton(
                 onPressed: () {
                   AppLog.instance.trace(
-                    "lib/pages/player_panel.dart::_PlayerPanelState.build.closure#1.closure#6",
+                    "lib/pages/player_panel.dart::_PlayerPanelState.build.closure#1.closure#7",
                   );
 
                   player.cancelSleep();
@@ -1858,7 +1833,7 @@ class _PlayerPanelState extends State<PlayerPanel>
               tooltip: '收起播放器',
               onPressed: () {
                 AppLog.instance.trace(
-                  "lib/pages/player_panel.dart::_PlayerPanelState.build.closure#1.closure#7",
+                  "lib/pages/player_panel.dart::_PlayerPanelState.build.closure#1.closure#8",
                 );
                 Navigator.of(context).maybePop();
               },
@@ -1892,7 +1867,7 @@ class _PlayerPanelState extends State<PlayerPanel>
                         selected: _selectedPage == index,
                         onPressed: () {
                           AppLog.instance.trace(
-                            'lib/pages/player_panel.dart::_PlayerPanelState.build.contentTab',
+                            "lib/pages/player_panel.dart::_PlayerPanelState.build.closure#1.closure#9",
                           );
                           _tabs.animateTo(index);
                         },
@@ -1903,7 +1878,7 @@ class _PlayerPanelState extends State<PlayerPanel>
                   child: LayoutBuilder(
                     builder: (context, constraints) {
                       AppLog.instance.trace(
-                        'lib/pages/player_panel.dart::_PlayerPanelState.build.responsivePanes',
+                        "lib/pages/player_panel.dart::_PlayerPanelState.build.closure#1.closure#10",
                       );
                       final minPaneWidth = math.max(
                         460.0,
@@ -1922,7 +1897,7 @@ class _PlayerPanelState extends State<PlayerPanel>
                         LayoutBuilder(
                           builder: (context, constraints) {
                             AppLog.instance.trace(
-                              'lib/pages/player_panel.dart::_PlayerPanelState.build.playbackPage',
+                              "lib/pages/player_panel.dart::_PlayerPanelState.build.closure#1.closure#10.closure#1",
                             );
                             final textHeight = MediaQuery.textScalerOf(context)
                                 .scale(56);
@@ -2004,7 +1979,7 @@ class _PlayerPanelState extends State<PlayerPanel>
                             itemCount: 3,
                             findChildIndexCallback: (key) {
                               AppLog.instance.trace(
-                                'lib/pages/player_panel.dart::_PlayerPanelState.build.paneIndex',
+                                "lib/pages/player_panel.dart::_PlayerPanelState.build.closure#1.closure#10.closure#2",
                               );
                               return order.indexOf(
                                 (key as ValueKey<int>).value,
@@ -2012,7 +1987,7 @@ class _PlayerPanelState extends State<PlayerPanel>
                             },
                             itemBuilder: (context, index) {
                               AppLog.instance.trace(
-                                'lib/pages/player_panel.dart::_PlayerPanelState.build.pane',
+                                "lib/pages/player_panel.dart::_PlayerPanelState.build.closure#1.closure#10.closure#3",
                               );
                               final page = order[index];
                               return _PlayerPage(

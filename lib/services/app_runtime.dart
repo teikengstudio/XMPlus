@@ -211,8 +211,20 @@ class AppRuntime extends ChangeNotifier {
   final Map<String, DownloadState> _cachedDownloadStates = {};
   Future<void>? _restoreWork;
   bool _restoreNeedsReload = false;
-  bool get restoreNeedsReload => _restoreNeedsReload;
-  bool get restoringBackup => _restoreWork != null;
+  bool get restoreNeedsReload {
+    AppLog.instance.trace(
+      "lib/services/app_runtime.dart::AppRuntime.restoreNeedsReload.get",
+    );
+    return _restoreNeedsReload;
+  }
+
+  bool get restoringBackup {
+    AppLog.instance.trace(
+      "lib/services/app_runtime.dart::AppRuntime.restoringBackup.get",
+    );
+    return _restoreWork != null;
+  }
+
   bool closing = false;
   bool _closeRunning = false;
   CloseSequence? _release;

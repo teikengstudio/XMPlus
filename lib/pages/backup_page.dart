@@ -30,10 +30,14 @@ class _BackupPageState extends State<BackupPage> {
   bool _busy = false;
   bool _waitingForReload = false;
   String? _message;
-  String? get _statusMessage =>
-      _waitingForReload && !widget.runtime.restoreNeedsReload
-      ? '备份已恢复，未完成任务保持暂停'
-      : _message;
+  String? get _statusMessage {
+    AppLog.instance.trace(
+      "lib/pages/backup_page.dart::_BackupPageState._statusMessage.get",
+    );
+    return _waitingForReload && !widget.runtime.restoreNeedsReload
+        ? '备份已恢复，未完成任务保持暂停'
+        : _message;
+  }
 
   Future<bool> _confirm(String title, Widget content, String action) {
     AppLog.instance.trace(
@@ -301,11 +305,11 @@ class _BackupPageState extends State<BackupPage> {
                         ? null
                         : (value) {
                             AppLog.instance.trace(
-                              "lib/pages/backup_page.dart::_BackupPageState.build.closure#1",
+                              "lib/pages/backup_page.dart::_BackupPageState._content.closure#1",
                             );
                             setState(() {
                               AppLog.instance.trace(
-                                "lib/pages/backup_page.dart::_BackupPageState.build.closure#1.closure#1",
+                                "lib/pages/backup_page.dart::_BackupPageState._content.closure#1.closure#1",
                               );
                               _includeAccount = value;
                             });

@@ -68,16 +68,17 @@ class HomeAlbumSection extends StatelessWidget {
             final coverSize = section.isRanking
                 ? (width * .05).clamp(56.0, 64.0)
                 : cardWidth - 8;
-            final titleHeight = scaler.scale(16) * 1.4 * 2;
+            // Paragraph heights round up; reserve the same whole logical pixels.
+            final titleHeight = (scaler.scale(16) * 1.4 * 2).ceilToDouble();
             final extent = section.isRanking
                 ? math.max(
                     coverSize + 16,
-                    titleHeight + scaler.scale(12) * 1.4 + 20,
+                    titleHeight + (scaler.scale(12) * 1.4).ceilToDouble() + 20,
                   )
                 : (showCover ? coverSize + 6 : 0) +
                       titleHeight +
-                      scaler.scale(14) * 1.4 +
-                      scaler.scale(12) * 1.4 +
+                      (scaler.scale(14) * 1.4).ceilToDouble() +
+                      (scaler.scale(12) * 1.4).ceilToDouble() +
                       16;
             return SliverGrid.builder(
               gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(

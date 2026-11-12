@@ -382,7 +382,7 @@ class _ManuscriptReaderState extends State<ManuscriptReader> {
                     gestureRecognizers: {
                       Factory<OneSequenceGestureRecognizer>(() {
                         AppLog.instance.trace(
-                          'lib/pages/manuscript_reader.dart::_ManuscriptReaderState.build.verticalGesture',
+                          "lib/pages/manuscript_reader.dart::_ManuscriptReaderState.build.closure#2",
                         );
                         return VerticalDragGestureRecognizer();
                       }),
@@ -414,7 +414,7 @@ class _ManuscriptReaderState extends State<ManuscriptReader> {
                     onWebViewCreated: _created,
                     shouldOverrideUrlLoading: (_, action) async {
                       AppLog.instance.trace(
-                        "lib/pages/manuscript_reader.dart::_ManuscriptReaderState.build.closure#2",
+                        "lib/pages/manuscript_reader.dart::_ManuscriptReaderState.build.closure#3",
                       );
                       return action.request.url?.toString() == _documentUrl &&
                               action.navigationType !=
@@ -424,7 +424,7 @@ class _ManuscriptReaderState extends State<ManuscriptReader> {
                     },
                     shouldInterceptRequest: (_, request) async {
                       AppLog.instance.trace(
-                        "lib/pages/manuscript_reader.dart::_ManuscriptReaderState.build.closure#3",
+                        "lib/pages/manuscript_reader.dart::_ManuscriptReaderState.build.closure#4",
                       );
 
                       _webLog.intercepted(request);
@@ -455,13 +455,13 @@ class _ManuscriptReaderState extends State<ManuscriptReader> {
                     },
                     onCreateWindow: (_, __) async {
                       AppLog.instance.trace(
-                        "lib/pages/manuscript_reader.dart::_ManuscriptReaderState.build.closure#4",
+                        "lib/pages/manuscript_reader.dart::_ManuscriptReaderState.build.closure#5",
                       );
                       return false;
                     },
                     onPermissionRequest: (_, request) async {
                       AppLog.instance.trace(
-                        "lib/pages/manuscript_reader.dart::_ManuscriptReaderState.build.closure#5",
+                        "lib/pages/manuscript_reader.dart::_ManuscriptReaderState.build.closure#6",
                       );
                       return PermissionResponse(
                         resources: request.resources,
@@ -470,7 +470,7 @@ class _ManuscriptReaderState extends State<ManuscriptReader> {
                     },
                     onDownloadStartRequest: (controller, _) {
                       AppLog.instance.trace(
-                        "lib/pages/manuscript_reader.dart::_ManuscriptReaderState.build.closure#6",
+                        "lib/pages/manuscript_reader.dart::_ManuscriptReaderState.build.closure#7",
                       );
 
                       unawaited(controller.stopLoading());
@@ -478,7 +478,7 @@ class _ManuscriptReaderState extends State<ManuscriptReader> {
                     },
                     onReceivedError: (_, request, error) {
                       AppLog.instance.trace(
-                        "lib/pages/manuscript_reader.dart::_ManuscriptReaderState.build.closure#7",
+                        "lib/pages/manuscript_reader.dart::_ManuscriptReaderState.build.closure#8",
                       );
 
                       _webLog.resourceError(request, error);
@@ -486,7 +486,7 @@ class _ManuscriptReaderState extends State<ManuscriptReader> {
                     },
                     onReceivedHttpError: (_, request, response) {
                       AppLog.instance.trace(
-                        "lib/pages/manuscript_reader.dart::_ManuscriptReaderState.build.closure#8",
+                        "lib/pages/manuscript_reader.dart::_ManuscriptReaderState.build.closure#9",
                       );
 
                       _webLog.httpError(request, response);

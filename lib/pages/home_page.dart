@@ -504,7 +504,7 @@ class _HomePageState extends State<HomePage> {
                                               selected: tab.tabId == _tabId,
                                               onPressed: () {
                                                 AppLog.instance.trace(
-                                                  "lib/pages/home_page.dart::_HomePageState.build.closure#1.closure#3",
+                                                  "lib/pages/home_page.dart::_HomePageState.build.closure#1.closure#2",
                                                 );
                                                 if (tabsCurrent &&
                                                     tab.tabId != _tabId) {
@@ -560,7 +560,7 @@ class _HomePageState extends State<HomePage> {
                       ? _loadChannels
                       : () {
                           AppLog.instance.trace(
-                            "lib/pages/home_page.dart::_HomePageState.build.closure#1.closure#4",
+                            "lib/pages/home_page.dart::_HomePageState.build.closure#1.closure#3",
                           );
                           _loadHome(_pageId!, tabId: _tabId);
                         },

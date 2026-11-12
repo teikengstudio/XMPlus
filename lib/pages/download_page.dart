@@ -1244,7 +1244,7 @@ class _DownloadPageState extends State<DownloadPage> {
     final compact = MediaQuery.sizeOf(context).width < 320;
     final visible = tasks.where((task) {
       AppLog.instance.trace(
-        'lib/pages/download_page.dart::_DownloadPageState._taskList.matches',
+        "lib/pages/download_page.dart::_DownloadPageState._taskList.closure#1",
       );
       return '${task.track.title} ${task.track.album}'.toLowerCase().contains(
         _taskFilter,
@@ -1252,7 +1252,7 @@ class _DownloadPageState extends State<DownloadPage> {
     }).toList();
     final jobs = _service.albumJobs.where((job) {
       AppLog.instance.trace(
-        'lib/pages/download_page.dart::_DownloadPageState._taskList.visibleJob',
+        "lib/pages/download_page.dart::_DownloadPageState._taskList.closure#2",
       );
       return job.state != 'completed' &&
           job.state != 'cancelled' &&
@@ -1263,7 +1263,7 @@ class _DownloadPageState extends State<DownloadPage> {
         tasks.isNotEmpty ||
         _service.albumJobs.any((job) {
           AppLog.instance.trace(
-            'lib/pages/download_page.dart::_DownloadPageState._taskList.unfinishedJob',
+            "lib/pages/download_page.dart::_DownloadPageState._taskList.closure#3",
           );
           return job.state != 'completed' && job.state != 'cancelled';
         });
@@ -1274,7 +1274,7 @@ class _DownloadPageState extends State<DownloadPage> {
     return LayoutBuilder(
       builder: (context, constraints) {
         AppLog.instance.trace(
-          'lib/pages/download_page.dart::_DownloadPageState._taskList.layout',
+          "lib/pages/download_page.dart::_DownloadPageState._taskList.closure#4",
         );
         return Column(
           children: [
@@ -1296,11 +1296,11 @@ class _DownloadPageState extends State<DownloadPage> {
                         ),
                         onChanged: (text) {
                           AppLog.instance.trace(
-                            'lib/pages/download_page.dart::_DownloadPageState._taskList.filter',
+                            "lib/pages/download_page.dart::_DownloadPageState._taskList.closure#4.closure#1",
                           );
                           setState(() {
                             AppLog.instance.trace(
-                              'lib/pages/download_page.dart::_DownloadPageState._taskList.filter.closure#1',
+                              "lib/pages/download_page.dart::_DownloadPageState._taskList.closure#4.closure#1.closure#1",
                             );
                             _taskFilter = text.trim().toLowerCase();
                           });
@@ -1337,7 +1337,7 @@ class _DownloadPageState extends State<DownloadPage> {
                                     ? null
                                     : () {
                                         AppLog.instance.trace(
-                                          'lib/pages/download_page.dart::_DownloadPageState._taskList.globalAction',
+                                          "lib/pages/download_page.dart::_DownloadPageState._taskList.closure#4.closure#2",
                                         );
                                         _run(action);
                                       },
@@ -1352,11 +1352,11 @@ class _DownloadPageState extends State<DownloadPage> {
                                     ? null
                                     : () {
                                         AppLog.instance.trace(
-                                          'lib/pages/download_page.dart::_DownloadPageState._taskList.startSelection',
+                                          "lib/pages/download_page.dart::_DownloadPageState._taskList.closure#4.closure#3",
                                         );
                                         setState(() {
                                           AppLog.instance.trace(
-                                            'lib/pages/download_page.dart::_DownloadPageState._taskList.startSelection.closure#1',
+                                            "lib/pages/download_page.dart::_DownloadPageState._taskList.closure#4.closure#3.closure#1",
                                           );
                                           _selectingTasks = true;
                                         });
@@ -1373,7 +1373,7 @@ class _DownloadPageState extends State<DownloadPage> {
                                     ? null
                                     : () {
                                         AppLog.instance.trace(
-                                          'lib/pages/download_page.dart::_DownloadPageState._taskList.selectVisible',
+                                          "lib/pages/download_page.dart::_DownloadPageState._taskList.closure#4.closure#4",
                                         );
                                         _selectTasks(visible);
                                       },
@@ -1396,11 +1396,11 @@ class _DownloadPageState extends State<DownloadPage> {
                                       ? null
                                       : () {
                                           AppLog.instance.trace(
-                                            'lib/pages/download_page.dart::_DownloadPageState._taskList.selectedAction',
+                                            "lib/pages/download_page.dart::_DownloadPageState._taskList.closure#4.closure#5",
                                           );
                                           _run(() {
                                             AppLog.instance.trace(
-                                              'lib/pages/download_page.dart::_DownloadPageState._taskList.selectedAction.closure#1',
+                                              "lib/pages/download_page.dart::_DownloadPageState._taskList.closure#4.closure#5.closure#1",
                                             );
                                             return _taskBatch(action);
                                           });
@@ -1413,11 +1413,11 @@ class _DownloadPageState extends State<DownloadPage> {
                                     ? null
                                     : () {
                                         AppLog.instance.trace(
-                                          'lib/pages/download_page.dart::_DownloadPageState._taskList.endSelection',
+                                          "lib/pages/download_page.dart::_DownloadPageState._taskList.closure#4.closure#6",
                                         );
                                         setState(() {
                                           AppLog.instance.trace(
-                                            'lib/pages/download_page.dart::_DownloadPageState._taskList.endSelection.closure#1',
+                                            "lib/pages/download_page.dart::_DownloadPageState._taskList.closure#4.closure#6.closure#1",
                                           );
                                           _selectingTasks = false;
                                           _selectedTasks.clear();
@@ -1453,7 +1453,7 @@ class _DownloadPageState extends State<DownloadPage> {
                   itemCount: jobs.length + visible.length,
                   itemBuilder: (context, index) {
                     AppLog.instance.trace(
-                      'lib/pages/download_page.dart::_DownloadPageState._taskList.row',
+                      "lib/pages/download_page.dart::_DownloadPageState._taskList.closure#4.closure#7",
                     );
                     return index < jobs.length
                         ? _albumJobCard(jobs[index])
@@ -1491,16 +1491,55 @@ class _DownloadPageState extends State<DownloadPage> {
           children: [
             for (final (label, action) in <(String, Future<void> Function())>[
               if (job.state == 'running')
-                ('暂停专辑', () => _service.pauseAlbum(job.id)),
+                (
+                  '暂停专辑',
+                  () {
+                    AppLog.instance.trace(
+                      "lib/pages/download_page.dart::_DownloadPageState._albumJobCard.closure#1",
+                    );
+                    return _service.pauseAlbum(job.id);
+                  },
+                ),
               if (job.state != 'running')
-                ('继续专辑', () => _service.resumeAlbum(job.id)),
+                (
+                  '继续专辑',
+                  () {
+                    AppLog.instance.trace(
+                      "lib/pages/download_page.dart::_DownloadPageState._albumJobCard.closure#2",
+                    );
+                    return _service.resumeAlbum(job.id);
+                  },
+                ),
               if (job.state != 'running')
-                ('刷新专辑', () => _service.refreshAlbum(job.id)),
-              ('取消专辑任务', () => _cancelAlbum(job.id)),
+                (
+                  '刷新专辑',
+                  () {
+                    AppLog.instance.trace(
+                      "lib/pages/download_page.dart::_DownloadPageState._albumJobCard.closure#3",
+                    );
+                    return _service.refreshAlbum(job.id);
+                  },
+                ),
+              (
+                '取消专辑任务',
+                () {
+                  AppLog.instance.trace(
+                    "lib/pages/download_page.dart::_DownloadPageState._albumJobCard.closure#4",
+                  );
+                  return _cancelAlbum(job.id);
+                },
+              ),
             ])
               TextButton(
                 style: TextButton.styleFrom(minimumSize: const Size(48, 48)),
-                onPressed: _downloadActionsBlocked ? null : () => _run(action),
+                onPressed: _downloadActionsBlocked
+                    ? null
+                    : () {
+                        AppLog.instance.trace(
+                          "lib/pages/download_page.dart::_DownloadPageState._albumJobCard.closure#5",
+                        );
+                        _run(action);
+                      },
                 child: Text(label),
               ),
           ],
@@ -1593,7 +1632,7 @@ class _DownloadPageState extends State<DownloadPage> {
         await widget.runtime.cancelDownloads(
           selectedTasks.map((task) {
             AppLog.instance.trace(
-              'lib/pages/download_page.dart::_DownloadPageState._confirmTaskRemoval.selectedId',
+              "lib/pages/download_page.dart::_DownloadPageState._confirmTaskRemoval.closure#3",
             );
             return task.id;
           }),
@@ -1607,7 +1646,7 @@ class _DownloadPageState extends State<DownloadPage> {
       if (mounted)
         setState(() {
           AppLog.instance.trace(
-            'lib/pages/download_page.dart::_DownloadPageState._confirmTaskRemoval.closure#3',
+            "lib/pages/download_page.dart::_DownloadPageState._confirmTaskRemoval.closure#4",
           );
           _removingTasks = false;
         });
@@ -2627,7 +2666,7 @@ class _DownloadPageState extends State<DownloadPage> {
         itemCount: albums.length + 1,
         itemBuilder: (context, index) {
           AppLog.instance.trace(
-            "lib/pages/download_page.dart::_DownloadPageState._albumList.closure#4",
+            "lib/pages/download_page.dart::_DownloadPageState._albumList.closure#3",
           );
 
           if (index > 0) {
@@ -2755,7 +2794,7 @@ class _DownloadPageState extends State<DownloadPage> {
                   ? null
                   : (_) {
                       AppLog.instance.trace(
-                        'lib/pages/download_page.dart::_DownloadPageState._taskCard.selectTask',
+                        "lib/pages/download_page.dart::_DownloadPageState._taskCard.closure#1",
                       );
                       _selectTasks([task]);
                     },
@@ -2812,11 +2851,11 @@ class _DownloadPageState extends State<DownloadPage> {
               TextButton(
                 onPressed: () {
                   AppLog.instance.trace(
-                    "lib/pages/download_page.dart::_DownloadPageState._taskCard.closure#1",
+                    "lib/pages/download_page.dart::_DownloadPageState._taskCard.closure#2",
                   );
                   _run(() {
                     AppLog.instance.trace(
-                      "lib/pages/download_page.dart::_DownloadPageState._taskCard.closure#1.closure#1",
+                      "lib/pages/download_page.dart::_DownloadPageState._taskCard.closure#2.closure#1",
                     );
                     return _retry(task);
                   });
@@ -2829,12 +2868,12 @@ class _DownloadPageState extends State<DownloadPage> {
               TextButton(
                 onPressed: () {
                   AppLog.instance.trace(
-                    "lib/pages/download_page.dart::_DownloadPageState._taskCard.closure#2",
+                    "lib/pages/download_page.dart::_DownloadPageState._taskCard.closure#3",
                   );
 
                   _run(() {
                     AppLog.instance.trace(
-                      "lib/pages/download_page.dart::_DownloadPageState._taskCard.closure#2.closure#1",
+                      "lib/pages/download_page.dart::_DownloadPageState._taskCard.closure#3.closure#1",
                     );
                     return widget.runtime.pauseDownload(task.id);
                   });
@@ -2845,11 +2884,11 @@ class _DownloadPageState extends State<DownloadPage> {
               TextButton(
                 onPressed: () {
                   AppLog.instance.trace(
-                    "lib/pages/download_page.dart::_DownloadPageState._taskCard.closure#3",
+                    "lib/pages/download_page.dart::_DownloadPageState._taskCard.closure#4",
                   );
                   _run(() {
                     AppLog.instance.trace(
-                      "lib/pages/download_page.dart::_DownloadPageState._taskCard.closure#3.closure#1",
+                      "lib/pages/download_page.dart::_DownloadPageState._taskCard.closure#4.closure#1",
                     );
                     return _retry(task);
                   });
@@ -2864,11 +2903,11 @@ class _DownloadPageState extends State<DownloadPage> {
               TextButton(
                 onPressed: () {
                   AppLog.instance.trace(
-                    "lib/pages/download_page.dart::_DownloadPageState._taskCard.closure#4",
+                    "lib/pages/download_page.dart::_DownloadPageState._taskCard.closure#5",
                   );
                   _run(() {
                     AppLog.instance.trace(
-                      "lib/pages/download_page.dart::_DownloadPageState._taskCard.closure#4.closure#1",
+                      "lib/pages/download_page.dart::_DownloadPageState._taskCard.closure#5.closure#1",
                     );
                     return _retry(task);
                   });
@@ -2885,34 +2924,16 @@ class _DownloadPageState extends State<DownloadPage> {
               TextButton(
                 onPressed: () {
                   AppLog.instance.trace(
-                    "lib/pages/download_page.dart::_DownloadPageState._taskCard.closure#5",
-                  );
-                  _run(() {
-                    AppLog.instance.trace(
-                      "lib/pages/download_page.dart::_DownloadPageState._taskCard.closure#5.closure#1",
-                    );
-                    return _retry(task);
-                  });
-                },
-                child: Text(task.processingFailed ? '恢复并重试处理' : '恢复任务'),
-              ),
-            if (task.processingFailed &&
-                (task.state == DownloadState.failed ||
-                    task.state == DownloadState.paused ||
-                    task.state == DownloadState.cancelled))
-              TextButton(
-                onPressed: () {
-                  AppLog.instance.trace(
                     "lib/pages/download_page.dart::_DownloadPageState._taskCard.closure#6",
                   );
                   _run(() {
                     AppLog.instance.trace(
                       "lib/pages/download_page.dart::_DownloadPageState._taskCard.closure#6.closure#1",
                     );
-                    return _reacquire(task);
+                    return _retry(task);
                   });
                 },
-                child: const Text('重新获取音频'),
+                child: Text(task.processingFailed ? '恢复并重试处理' : '恢复任务'),
               ),
             if (task.processingFailed &&
                 (task.state == DownloadState.failed ||
@@ -2927,6 +2948,24 @@ class _DownloadPageState extends State<DownloadPage> {
                     AppLog.instance.trace(
                       "lib/pages/download_page.dart::_DownloadPageState._taskCard.closure#7.closure#1",
                     );
+                    return _reacquire(task);
+                  });
+                },
+                child: const Text('重新获取音频'),
+              ),
+            if (task.processingFailed &&
+                (task.state == DownloadState.failed ||
+                    task.state == DownloadState.paused ||
+                    task.state == DownloadState.cancelled))
+              TextButton(
+                onPressed: () {
+                  AppLog.instance.trace(
+                    "lib/pages/download_page.dart::_DownloadPageState._taskCard.closure#8",
+                  );
+                  _run(() {
+                    AppLog.instance.trace(
+                      "lib/pages/download_page.dart::_DownloadPageState._taskCard.closure#8.closure#1",
+                    );
                     return _adjustProcessing(task);
                   });
                 },
@@ -2937,11 +2976,11 @@ class _DownloadPageState extends State<DownloadPage> {
                   ? null
                   : () {
                       AppLog.instance.trace(
-                        "lib/pages/download_page.dart::_DownloadPageState._taskCard.closure#8",
+                        "lib/pages/download_page.dart::_DownloadPageState._taskCard.closure#9",
                       );
                       _run(() {
                         AppLog.instance.trace(
-                          "lib/pages/download_page.dart::_DownloadPageState._taskCard.closure#8.closure#1",
+                          "lib/pages/download_page.dart::_DownloadPageState._taskCard.closure#9.closure#1",
                         );
                         return _cancel(task);
                       });
@@ -2952,11 +2991,11 @@ class _DownloadPageState extends State<DownloadPage> {
               TextButton(
                 onPressed: () {
                   AppLog.instance.trace(
-                    "lib/pages/download_page.dart::_DownloadPageState._taskCard.closure#9",
+                    "lib/pages/download_page.dart::_DownloadPageState._taskCard.closure#10",
                   );
                   _run(() {
                     AppLog.instance.trace(
-                      "lib/pages/download_page.dart::_DownloadPageState._taskCard.closure#9.closure#1",
+                      "lib/pages/download_page.dart::_DownloadPageState._taskCard.closure#10.closure#1",
                     );
                     return _relocate(task);
                   });
@@ -2966,11 +3005,11 @@ class _DownloadPageState extends State<DownloadPage> {
             TextButton(
               onPressed: () {
                 AppLog.instance.trace(
-                  "lib/pages/download_page.dart::_DownloadPageState._taskCard.closure#10",
+                  "lib/pages/download_page.dart::_DownloadPageState._taskCard.closure#11",
                 );
                 _run(() {
                   AppLog.instance.trace(
-                    "lib/pages/download_page.dart::_DownloadPageState._taskCard.closure#10.closure#1",
+                    "lib/pages/download_page.dart::_DownloadPageState._taskCard.closure#11.closure#1",
                   );
                   return _open(task);
                 }, recoverable: true);
@@ -2981,11 +3020,11 @@ class _DownloadPageState extends State<DownloadPage> {
               TextButton(
                 onPressed: () {
                   AppLog.instance.trace(
-                    "lib/pages/download_page.dart::_DownloadPageState._taskCard.closure#11",
+                    "lib/pages/download_page.dart::_DownloadPageState._taskCard.closure#12",
                   );
                   _run(() {
                     AppLog.instance.trace(
-                      "lib/pages/download_page.dart::_DownloadPageState._taskCard.closure#11.closure#1",
+                      "lib/pages/download_page.dart::_DownloadPageState._taskCard.closure#12.closure#1",
                     );
                     return _delete(task);
                   });

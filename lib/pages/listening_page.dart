@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import '../api/xmly_experience.dart';
 import '../api/xmly_history.dart';
 import '../common/widgets/adaptive_text.dart';
+import '../common/widgets/app_tab_button.dart';
 import '../common/widgets/confirmation_dialog.dart';
 import '../models/xmly_models.dart';
 import '../services/app_log.dart';
@@ -236,6 +237,7 @@ class _ListeningPageState extends State<ListeningPage>
     with SingleTickerProviderStateMixin {
   final _search = TextEditingController();
   late final TabController _tabs;
+  int _selectedTab = 0;
   Timer? _favoriteSearchTimer;
   bool _favoriteSearchPaused = false;
   final _busy = [false, false, false, false];
@@ -693,6 +695,14 @@ class _ListeningPageState extends State<ListeningPage>
       "lib/pages/listening_page.dart::_ListeningPageState._searchTabChanged",
     );
 
+    if (mounted && _selectedTab != _tabs.index) {
+      setState(() {
+        AppLog.instance.trace(
+          "lib/pages/listening_page.dart::_ListeningPageState._searchTabChanged.closure#1",
+        );
+        _selectedTab = _tabs.index;
+      });
+    }
     _scheduleFavoriteSearch();
   }
 
@@ -1066,7 +1076,38 @@ class _ListeningPageState extends State<ListeningPage>
     );
     return Padding(
       padding: const EdgeInsets.all(28),
-      child: Center(child: Text(message)),
+      child: Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              _query.isEmpty
+                  ? Icons.library_music_outlined
+                  : Icons.search_off_rounded,
+              size: 40,
+              color: Theme.of(context).colorScheme.onSurfaceVariant,
+            ),
+            const SizedBox(height: 16),
+            Text(
+              message,
+              textAlign: TextAlign.center,
+              style: Theme.of(context).textTheme.bodyLarge,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _itemTitle(String title) {
+    AppLog.instance.trace(
+      "lib/pages/listening_page.dart::_ListeningPageState._itemTitle",
+    );
+    return Text(
+      title,
+      maxLines: 2,
+      overflow: TextOverflow.ellipsis,
+      style: Theme.of(context).textTheme.titleMedium,
     );
   }
 
@@ -1126,7 +1167,7 @@ class _ListeningPageState extends State<ListeningPage>
       minVerticalPadding: 4,
       horizontalTitleGap: 12,
       leading: compact ? null : CoverImage(uri: track.coverUrl, size: 48),
-      title: AdaptiveText(track.title.isEmpty ? track.id : track.title),
+      title: _itemTitle(track.title.isEmpty ? track.id : track.title),
       subtitle: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -1141,7 +1182,11 @@ class _ListeningPageState extends State<ListeningPage>
           if (position > 0 && progress != null)
             Padding(
               padding: const EdgeInsets.only(top: 4),
-              child: LinearProgressIndicator(value: progress, minHeight: 2),
+              child: LinearProgressIndicator(
+                value: progress,
+                minHeight: 2,
+                semanticsLabel: positionLabel,
+              ),
             ),
         ],
       ),
@@ -1465,8 +1510,12 @@ class _ListeningPageState extends State<ListeningPage>
           leading: MediaQuery.sizeOf(context).width < 320
               ? null
               : CoverImage(uri: row.album.coverUrl, size: 48),
-          title: AdaptiveText(row.album.title),
-          subtitle: AdaptiveText(row.latestTitle),
+          title: _itemTitle(row.album.title),
+          subtitle: Text(
+            row.latestTitle,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+          ),
           trailing: PopupMenuButton<String>(
             tooltip: '专辑操作',
             enabled: !_acting,
@@ -1796,6 +1845,90 @@ class _ListeningPageState extends State<ListeningPage>
     );
   }
 
+  Widget _libraryHeader() {
+    AppLog.instance.trace(
+      "lib/pages/listening_page.dart::_ListeningPageState._libraryHeader",
+    );
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        AppLog.instance.trace(
+          "lib/pages/listening_page.dart::_ListeningPageState._libraryHeader.closure#1",
+        );
+        final title = Text(
+          '我的收听',
+          style: Theme.of(context).textTheme.headlineLarge?.copyWith(
+            fontSize: 30,
+            fontWeight: FontWeight.w600,
+            height: 1.3,
+          ),
+        );
+        final search = Row(
+          children: [
+            Expanded(
+              child: TextField(
+                controller: _search,
+                onChanged: (_) {
+                  AppLog.instance.trace(
+                    "lib/pages/listening_page.dart::_ListeningPageState._libraryHeader.closure#1.closure#1",
+                  );
+                  _searchChanged();
+                },
+                decoration: InputDecoration(
+                  hintText: '搜索收听内容',
+                  prefixIcon: const Icon(Icons.search_rounded),
+                  suffixIcon: _search.text.isEmpty
+                      ? null
+                      : IconButton(
+                          tooltip: '清空搜索',
+                          onPressed: () {
+                            AppLog.instance.trace(
+                              "lib/pages/listening_page.dart::_ListeningPageState._libraryHeader.closure#1.closure#2",
+                            );
+                            _search.clear();
+                            _searchChanged();
+                          },
+                          icon: const Icon(Icons.close_rounded),
+                        ),
+                ),
+              ),
+            ),
+            const SizedBox(width: 8),
+            IconButton(
+              tooltip: '刷新收听列表',
+              icon: const Icon(Icons.refresh_rounded),
+              onPressed: !_signedIn
+                  ? null
+                  : () {
+                      AppLog.instance.trace(
+                        "lib/pages/listening_page.dart::_ListeningPageState._libraryHeader.closure#1.closure#3",
+                      );
+                      _runtime.libraryChanged();
+                      unawaited(_loadHistory());
+                    },
+            ),
+          ],
+        );
+        if (constraints.maxWidth <
+            720 * MediaQuery.textScalerOf(context).scale(14) / 14) {
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [title, const SizedBox(height: 16), search],
+          );
+        }
+        return Row(
+          children: [
+            Expanded(child: title),
+            const SizedBox(width: 32),
+            SizedBox(
+              width: (constraints.maxWidth * .5).clamp(320.0, 520.0),
+              child: search,
+            ),
+          ],
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     AppLog.instance.trace(
@@ -1819,52 +1952,31 @@ class _ListeningPageState extends State<ListeningPage>
                     8,
                     8,
                   ),
-                  child: Row(
-                    children: [
-                      Expanded(
-                        child: TextField(
-                          controller: _search,
-                          onChanged: (_) {
-                            AppLog.instance.trace(
-                              "lib/pages/listening_page.dart::_ListeningPageState.build.closure#1.closure#1",
-                            );
-                            _searchChanged();
-                          },
-                          decoration: const InputDecoration(
-                            hintText: '搜索更新、订阅、历史、收藏和书签',
-                            prefixIcon: Icon(Icons.search),
-                          ),
-                        ),
-                      ),
-                      IconButton(
-                        tooltip: '刷新收听列表',
-                        icon: const Icon(Icons.refresh),
-                        onPressed: !_signedIn
-                            ? null
-                            : () {
-                                AppLog.instance.trace(
-                                  "lib/pages/listening_page.dart::_ListeningPageState.build.closure#1.closure#2",
-                                );
-
-                                _runtime.libraryChanged();
-                                unawaited(_loadHistory());
-                              },
-                      ),
-                    ],
-                  ),
+                  child: _libraryHeader(),
                 ),
               ),
               SliverToBoxAdapter(
-                child: TabBar(
-                  controller: _tabs,
-                  isScrollable: true,
-                  tabAlignment: TabAlignment.start,
-                  tabs: const [
-                    Tab(text: '听更新'),
-                    Tab(text: '订阅'),
-                    Tab(text: '历史'),
-                    Tab(text: '收藏'),
-                    Tab(text: '书签'),
+                child: AppTabStrip(
+                  key: const ValueKey('listeningContentTabs'),
+                  children: [
+                    for (final (index, label) in const [
+                      (0, '听更新'),
+                      (1, '订阅'),
+                      (2, '历史'),
+                      (3, '收藏'),
+                      (4, '书签'),
+                    ])
+                      AppTabButton(
+                        key: ValueKey(index),
+                        label: label,
+                        selected: _selectedTab == index,
+                        onPressed: () {
+                          AppLog.instance.trace(
+                            "lib/pages/listening_page.dart::_ListeningPageState.build.closure#1.closure#1",
+                          );
+                          _tabs.animateTo(index);
+                        },
+                      ),
                   ],
                 ),
               ),

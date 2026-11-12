@@ -708,7 +708,7 @@ class _AccountPageState extends State<AccountPage> {
                         ? null
                         : () {
                             AppLog.instance.trace(
-                              "lib/pages/account_page.dart::_AccountPageState._account.closure#1",
+                              "lib/pages/account_page.dart::_AccountPageState._account.closure#2",
                             );
                             _openImport(recoveryIdentity: identity);
                           },
@@ -720,7 +720,7 @@ class _AccountPageState extends State<AccountPage> {
                         ? null
                         : () {
                             AppLog.instance.trace(
-                              "lib/pages/account_page.dart::_AccountPageState._account.closure#2",
+                              "lib/pages/account_page.dart::_AccountPageState._account.closure#3",
                             );
                             _remove(identity, uid);
                           },
@@ -754,7 +754,7 @@ class _AccountPageState extends State<AccountPage> {
                         ? null
                         : () {
                             AppLog.instance.trace(
-                              "lib/pages/account_page.dart::_AccountPageState._account.closure#2",
+                              "lib/pages/account_page.dart::_AccountPageState._account.closure#4",
                             );
                             _openImport(recoveryIdentity: identity);
                           },
@@ -767,11 +767,11 @@ class _AccountPageState extends State<AccountPage> {
                           ? null
                           : () {
                               AppLog.instance.trace(
-                                "lib/pages/account_page.dart::_AccountPageState._account.closure#3",
+                                "lib/pages/account_page.dart::_AccountPageState._account.closure#5",
                               );
                               _run(() {
                                 AppLog.instance.trace(
-                                  "lib/pages/account_page.dart::_AccountPageState._account.closure#3.closure#1",
+                                  "lib/pages/account_page.dart::_AccountPageState._account.closure#5.closure#1",
                                 );
                                 return widget.accounts.setPrimary(identity);
                               });
@@ -783,7 +783,7 @@ class _AccountPageState extends State<AccountPage> {
                         ? null
                         : () {
                             AppLog.instance.trace(
-                              "lib/pages/account_page.dart::_AccountPageState._account.closure#4",
+                              "lib/pages/account_page.dart::_AccountPageState._account.closure#6",
                             );
                             _quota(identity);
                           },
@@ -794,7 +794,7 @@ class _AccountPageState extends State<AccountPage> {
                         ? null
                         : () {
                             AppLog.instance.trace(
-                              "lib/pages/account_page.dart::_AccountPageState._account.closure#5",
+                              "lib/pages/account_page.dart::_AccountPageState._account.closure#7",
                             );
                             _claim(identity, uid);
                           },
@@ -806,7 +806,7 @@ class _AccountPageState extends State<AccountPage> {
                           ? null
                           : () {
                               AppLog.instance.trace(
-                                "lib/pages/account_page.dart::_AccountPageState._account.closure#6",
+                                "lib/pages/account_page.dart::_AccountPageState._account.closure#8",
                               );
                               _resumeRewards(identity, uid);
                             },
@@ -817,7 +817,7 @@ class _AccountPageState extends State<AccountPage> {
                         ? null
                         : () {
                             AppLog.instance.trace(
-                              "lib/pages/account_page.dart::_AccountPageState._account.closure#7",
+                              "lib/pages/account_page.dart::_AccountPageState._account.closure#9",
                             );
                             _remove(identity, uid);
                           },

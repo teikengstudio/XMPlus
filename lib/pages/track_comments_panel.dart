@@ -183,6 +183,10 @@ class _TrackCommentsPanelState extends State<TrackCommentsPanel> {
     final client = widget.runtime.client, trackId = widget.track.id;
     final content = _compose.text;
     setState(() {
+      AppLog.instance.trace(
+        "lib/pages/track_comments_panel.dart::_TrackCommentsPanelState._send.closure#1",
+      );
+
       _sending = true;
       _composeError = null;
     });
@@ -204,12 +208,20 @@ class _TrackCommentsPanelState extends State<TrackCommentsPanel> {
           widget.track.id == trackId &&
           identical(client, widget.runtime.client)) {
         setState(() {
+          AppLog.instance.trace(
+            "lib/pages/track_comments_panel.dart::_TrackCommentsPanelState._send.closure#2",
+          );
+
           _composeError = error is XmlyException ? error.message : '评论发送失败，请重试';
         });
       }
     } finally {
       if (mounted)
         setState(() {
+          AppLog.instance.trace(
+            "lib/pages/track_comments_panel.dart::_TrackCommentsPanelState._send.closure#3",
+          );
+
           _sending = false;
         });
     }
@@ -333,7 +345,12 @@ class _TrackCommentsPanelState extends State<TrackCommentsPanel> {
                           comment: comment,
                           runtime: widget.runtime,
                           trackId: widget.track.id,
-                          onChanged: () => _feed.load(reset: true),
+                          onChanged: () {
+                            AppLog.instance.trace(
+                              "lib/pages/track_comments_panel.dart::_TrackCommentsPanelState.build.closure#1.closure#1",
+                            );
+                            return _feed.load(reset: true);
+                          },
                           action: comment.replyCount == 0
                               ? null
                               : TextButton.icon(
@@ -349,11 +366,11 @@ class _TrackCommentsPanelState extends State<TrackCommentsPanel> {
                                   ),
                                   onPressed: () {
                                     AppLog.instance.trace(
-                                      "lib/pages/track_comments_panel.dart::_TrackCommentsPanelState.build.closure#1.closure#1",
+                                      "lib/pages/track_comments_panel.dart::_TrackCommentsPanelState.build.closure#1.closure#2",
                                     );
                                     setState(() {
                                       AppLog.instance.trace(
-                                        "lib/pages/track_comments_panel.dart::_TrackCommentsPanelState.build.closure#1.closure#1.closure#1",
+                                        "lib/pages/track_comments_panel.dart::_TrackCommentsPanelState.build.closure#1.closure#2.closure#1",
                                       );
 
                                       _expandedComment = expanded
@@ -458,6 +475,7 @@ class _TrackCommentsPanelState extends State<TrackCommentsPanel> {
 
 class _CommentContent extends StatefulWidget {
   const _CommentContent({
+    super.key,
     required this.comment,
     required this.runtime,
     required this.trackId,
@@ -501,6 +519,10 @@ class _CommentContentState extends State<_CommentContent> {
     final runtime = widget.runtime, client = widget.runtime.client;
     final comment = _updated ?? widget.comment;
     setState(() {
+      AppLog.instance.trace(
+        "lib/pages/track_comments_panel.dart::_CommentContentState._mutate.closure#1",
+      );
+
       _error = null;
       _busy = true;
     });
@@ -517,20 +539,35 @@ class _CommentContentState extends State<_CommentContent> {
         }
         final confirmed = await showDialog<bool>(
           context: context,
-          builder: (context) => AlertDialog(
-            title: const Text('删除评论？'),
-            content: const Text('删除后无法恢复。'),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(context, false),
-                child: const Text('取消'),
-              ),
-              FilledButton(
-                onPressed: () => Navigator.pop(context, true),
-                child: const Text('删除'),
-              ),
-            ],
-          ),
+          builder: (context) {
+            AppLog.instance.trace(
+              "lib/pages/track_comments_panel.dart::_CommentContentState._mutate.closure#2",
+            );
+            return AlertDialog(
+              title: const Text('删除评论？'),
+              content: const Text('删除后无法恢复。'),
+              actions: [
+                TextButton(
+                  onPressed: () {
+                    AppLog.instance.trace(
+                      "lib/pages/track_comments_panel.dart::_CommentContentState._mutate.closure#2.closure#1",
+                    );
+                    Navigator.pop(context, false);
+                  },
+                  child: const Text('取消'),
+                ),
+                FilledButton(
+                  onPressed: () {
+                    AppLog.instance.trace(
+                      "lib/pages/track_comments_panel.dart::_CommentContentState._mutate.closure#2.closure#2",
+                    );
+                    Navigator.pop(context, true);
+                  },
+                  child: const Text('删除'),
+                ),
+              ],
+            );
+          },
         );
         if (confirmed != true || !mounted) return;
       }
@@ -545,6 +582,10 @@ class _CommentContentState extends State<_CommentContent> {
         await api.setLiked(widget.trackId, comment, liked: !comment.liked);
         if (mounted)
           setState(() {
+            AppLog.instance.trace(
+              "lib/pages/track_comments_panel.dart::_CommentContentState._mutate.closure#3",
+            );
+
             _updated = comment.withLike(!comment.liked);
           });
       }
@@ -554,11 +595,19 @@ class _CommentContentState extends State<_CommentContent> {
       _recordCommentsError('Comment mutation failed', error, stack);
       if (mounted)
         setState(() {
+          AppLog.instance.trace(
+            "lib/pages/track_comments_panel.dart::_CommentContentState._mutate.closure#4",
+          );
+
           _error = error is XmlyException ? error.message : '评论操作失败，请重试';
         });
     } finally {
       if (mounted)
         setState(() {
+          AppLog.instance.trace(
+            "lib/pages/track_comments_panel.dart::_CommentContentState._mutate.closure#5",
+          );
+
           _busy = false;
         });
     }
@@ -586,8 +635,15 @@ class _CommentContentState extends State<_CommentContent> {
                   : Image(
                       image: LoggedNetworkImage(comment.avatarUrl.toString()),
                       fit: BoxFit.cover,
-                      errorBuilder: (context, error, stack) =>
-                          const Icon(Icons.account_circle_outlined, size: 32),
+                      errorBuilder: (context, error, stack) {
+                        AppLog.instance.trace(
+                          "lib/pages/track_comments_panel.dart::_CommentContentState.build.closure#1",
+                        );
+                        return const Icon(
+                          Icons.account_circle_outlined,
+                          size: 32,
+                        );
+                      },
                     ),
             ),
           ),
@@ -638,7 +694,14 @@ class _CommentContentState extends State<_CommentContent> {
                             ? theme.colorScheme.primary
                             : theme.colorScheme.onSurfaceVariant,
                       ),
-                      onPressed: _busy ? null : () => _mutate(),
+                      onPressed: _busy
+                          ? null
+                          : () {
+                              AppLog.instance.trace(
+                                "lib/pages/track_comments_panel.dart::_CommentContentState.build.closure#2",
+                              );
+                              _mutate();
+                            },
                       icon: _busy
                           ? const SizedBox.square(
                               dimension: 16,
@@ -670,7 +733,14 @@ class _CommentContentState extends State<_CommentContent> {
                     if (widget.action != null) widget.action!,
                     if (own)
                       TextButton(
-                        onPressed: _busy ? null : () => _mutate(delete: true),
+                        onPressed: _busy
+                            ? null
+                            : () {
+                                AppLog.instance.trace(
+                                  "lib/pages/track_comments_panel.dart::_CommentContentState.build.closure#3",
+                                );
+                                _mutate(delete: true);
+                              },
                         style: TextButton.styleFrom(
                           minimumSize: const Size(48, 48),
                         ),
@@ -783,7 +853,12 @@ class _InlineRepliesState extends State<_InlineReplies>
                     comment: comment,
                     runtime: widget.runtime,
                     trackId: widget.trackId,
-                    onChanged: () => _feed.load(reset: true),
+                    onChanged: () {
+                      AppLog.instance.trace(
+                        "lib/pages/track_comments_panel.dart::_InlineRepliesState.build.closure#1.closure#1",
+                      );
+                      return _feed.load(reset: true);
+                    },
                   ),
                 ),
               ],
@@ -791,11 +866,11 @@ class _InlineRepliesState extends State<_InlineReplies>
                 TextButton(
                   onPressed: () {
                     AppLog.instance.trace(
-                      "lib/pages/track_comments_panel.dart::_InlineRepliesState.build.closure#1.closure#1",
+                      "lib/pages/track_comments_panel.dart::_InlineRepliesState.build.closure#1.closure#2",
                     );
                     setState(() {
                       AppLog.instance.trace(
-                        "lib/pages/track_comments_panel.dart::_InlineRepliesState.build.closure#1.closure#1.closure#1",
+                        "lib/pages/track_comments_panel.dart::_InlineRepliesState.build.closure#1.closure#2.closure#1",
                       );
 
                       _visibleCount = math.min(
@@ -812,14 +887,14 @@ class _InlineRepliesState extends State<_InlineReplies>
                   emptyLabel: '还没有回复',
                   onMore: () async {
                     AppLog.instance.trace(
-                      "lib/pages/track_comments_panel.dart::_InlineRepliesState.build.closure#1.closure#2",
+                      "lib/pages/track_comments_panel.dart::_InlineRepliesState.build.closure#1.closure#3",
                     );
 
                     await _feed.load();
                     if (mounted)
                       setState(() {
                         AppLog.instance.trace(
-                          "lib/pages/track_comments_panel.dart::_InlineRepliesState.build.closure#1.closure#2.closure#1",
+                          "lib/pages/track_comments_panel.dart::_InlineRepliesState.build.closure#1.closure#3.closure#1",
                         );
                         _visibleCount += 10;
                       });
