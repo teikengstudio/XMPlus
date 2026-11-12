@@ -4,6 +4,7 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:sentry_flutter/sentry_flutter.dart';
 
+import '../common/widgets/app_header.dart';
 import '../app.dart';
 import '../common/theme.dart';
 import '../common/widgets/log_upload_prompt_host.dart';
@@ -282,6 +283,9 @@ class _StartupPageState extends State<StartupPage> {
             "lib/pages/startup_page.dart::_StartupPageState.build.closure#2",
           );
           return Scaffold(
+            appBar: usesWindowHeader
+                ? const AppHeader(title: Text('XMPlus'), showBrand: true)
+                : null,
             body: SafeArea(
               child: Center(
                 child: ConstrainedBox(

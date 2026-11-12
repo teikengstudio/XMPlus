@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../common/widgets/app_header.dart';
 import '../common/widgets/local_panel.dart';
 import '../models/xmly_models.dart';
 import '../services/app_runtime.dart';
@@ -71,7 +72,8 @@ Future<void> showQuickPlaybackSettings(
 
   var global = albumId == null;
   var saving = false;
-  final fullSettings = await showLocalPanel<bool>(
+  var fullSettings = false;
+  await showLocalPanel<void>(
     context: context,
     title: '播放选项',
     builder: (context) {
@@ -89,6 +91,8 @@ Future<void> showQuickPlaybackSettings(
                 Padding(
                   padding: const EdgeInsets.all(12),
                   child: SegmentedButton<bool>(
+                    showSelectedIcon: false,
+                    expandedInsets: EdgeInsets.zero,
                     segments: const [
                       ButtonSegment(value: false, label: Text('此专辑')),
                       ButtonSegment(value: true, label: Text('全局')),
@@ -111,12 +115,12 @@ Future<void> showQuickPlaybackSettings(
                 ),
               Expanded(
                 child: PlaybackSettingsPage(
-                  key: ValueKey(global),
+                  key: ValueKey((global, fullSettings)),
                   runtime: runtime,
                   albumId: global ? null : albumId,
                   albumTitle: global ? null : albumTitle,
                   embedded: true,
-                  quick: true,
+                  quick: !fullSettings,
                   onSavingChanged: (value) {
                     AppLog.instance.trace(
                       "lib/pages/playback_settings_page.dart::showQuickPlaybackSettings.closure#1.closure#1.closure#2",
@@ -134,30 +138,50 @@ Future<void> showQuickPlaybackSettings(
                     AppLog.instance.trace(
                       "lib/pages/playback_settings_page.dart::showQuickPlaybackSettings.closure#1.closure#1.closure#3",
                     );
-                    Navigator.pop(context, true);
+
+                    setPanelState(() {
+                      AppLog.instance.trace(
+                        "lib/pages/playback_settings_page.dart::showQuickPlaybackSettings.closure#1.closure#1.closure#3.closure#1",
+                      );
+                      fullSettings = true;
+                    });
+                  },
+                  onOpenGlobalSettings: () {
+                    AppLog.instance.trace(
+                      "lib/pages/playback_settings_page.dart::showQuickPlaybackSettings.closure#1.closure#1.closure#4",
+                    );
+                    setPanelState(() {
+                      AppLog.instance.trace(
+                        "lib/pages/playback_settings_page.dart::showQuickPlaybackSettings.closure#1.closure#1.closure#4.closure#1",
+                      );
+                      global = true;
+                    });
                   },
                 ),
               ),
+              if (fullSettings)
+                TextButton.icon(
+                  onPressed: saving
+                      ? null
+                      : () {
+                          AppLog.instance.trace(
+                            "lib/pages/playback_settings_page.dart::showQuickPlaybackSettings.closure#1.closure#1.closure#5",
+                          );
+                          setPanelState(() {
+                            AppLog.instance.trace(
+                              "lib/pages/playback_settings_page.dart::showQuickPlaybackSettings.closure#1.closure#1.closure#5.closure#1",
+                            );
+                            fullSettings = false;
+                          });
+                        },
+                  icon: const Icon(Icons.unfold_less_rounded),
+                  label: const Text('收起高级设置'),
+                ),
             ],
           );
         },
       );
     },
-  );
-  if (fullSettings != true || !context.mounted) return;
-  await Navigator.of(context).push<void>(
-    MaterialPageRoute<void>(
-      builder: (_) {
-        AppLog.instance.trace(
-          "lib/pages/playback_settings_page.dart::showQuickPlaybackSettings.closure#2",
-        );
-        return PlaybackSettingsPage(
-          runtime: runtime,
-          albumId: global ? null : albumId,
-          albumTitle: global ? null : albumTitle,
-        );
-      },
-    ),
   );
 }
 
@@ -170,6 +194,7 @@ class PlaybackSettingsPage extends StatefulWidget {
     this.quick = false,
     this.onSavingChanged,
     this.onOpenFullSettings,
+    this.onOpenGlobalSettings,
     super.key,
   });
   final AppRuntime runtime;
@@ -178,6 +203,7 @@ class PlaybackSettingsPage extends StatefulWidget {
   final bool quick;
   final ValueChanged<bool>? onSavingChanged;
   final VoidCallback? onOpenFullSettings;
+  final VoidCallback? onOpenGlobalSettings;
 
   @override
   State<PlaybackSettingsPage> createState() {
@@ -385,12 +411,15 @@ class _PlaybackSettingsPageState extends State<PlaybackSettingsPage> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Wrap(
-            alignment: WrapAlignment.spaceBetween,
-            spacing: 16,
-            runSpacing: 4,
+          Row(
             children: [
-              Text(title, style: Theme.of(context).textTheme.titleMedium),
+              Expanded(
+                child: Text(
+                  title,
+                  style: Theme.of(context).textTheme.titleMedium,
+                ),
+              ),
+              const SizedBox(width: 12),
               Text(
                 label(current),
                 style: Theme.of(context).textTheme.titleMedium
@@ -399,7 +428,12 @@ class _PlaybackSettingsPageState extends State<PlaybackSettingsPage> {
             ],
           ),
           const SizedBox(height: 4),
-          Text(_source(key), style: Theme.of(context).textTheme.bodySmall),
+          Text(
+            _source(key),
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+              color: Theme.of(context).colorScheme.onSurfaceVariant,
+            ),
+          ),
           Slider(
             key: ValueKey(key),
             value: current.clamp(min, max).toDouble(),
@@ -445,6 +479,7 @@ class _PlaybackSettingsPageState extends State<PlaybackSettingsPage> {
               children: [
                 for (final speed in [0.75, 1.0, 1.25, 1.5, 2.0])
                   ChoiceChip(
+                    showCheckmark: false,
                     label: Text('${speed}×'),
                     selected: current == speed,
                     onSelected: _busy
@@ -824,13 +859,28 @@ class _PlaybackSettingsPageState extends State<PlaybackSettingsPage> {
                   _section('声音', [
                     Padding(
                       padding: const EdgeInsets.symmetric(horizontal: 16),
-                      child: PlaybackVolumeControl(runtime: widget.runtime),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              '主音量',
+                              style: Theme.of(context).textTheme.titleMedium,
+                            ),
+                          ),
+                          PlaybackVolumeControl(runtime: widget.runtime),
+                        ],
+                      ),
                     ),
-                    const Padding(
+                    Padding(
                       padding: EdgeInsets.symmetric(horizontal: 16),
-                      child: Text('主音量对所有专辑生效，与下面的专辑音量共同控制响度。'),
+                      child: Text(
+                        '所有专辑共用，专辑音量可单独调整。',
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: Theme.of(context).colorScheme.onSurfaceVariant,
+                        ),
+                      ),
                     ),
-                    const Divider(indent: 16, endIndent: 16),
+                    const SizedBox(height: 12),
                     _slider('speed', '播放倍速', resolved.speed, 0.5, 3, 25, (
                       value,
                     ) {
@@ -839,7 +889,7 @@ class _PlaybackSettingsPageState extends State<PlaybackSettingsPage> {
                       );
                       return '${value.toStringAsFixed(2)}×';
                     }),
-                    const Divider(indent: 16, endIndent: 16),
+                    const SizedBox(height: 12),
                     _slider(
                       'volume',
                       widget.albumId == null ? '默认专辑音量' : '专辑音量',
@@ -907,32 +957,35 @@ class _PlaybackSettingsPageState extends State<PlaybackSettingsPage> {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          DropdownButtonFormField<String>(
-                            key: ValueKey('loopMode:${resolved.loopMode}'),
-                            initialValue: resolved.loopMode,
-                            isExpanded: true,
-                            decoration: InputDecoration(
-                              labelText: '循环方式',
-                              helperText: _source('loopMode'),
-                            ),
-                            items: const [
-                              DropdownMenuItem(
-                                value: 'off',
-                                child: Text('顺序播放'),
-                              ),
-                              DropdownMenuItem(
-                                value: 'single',
-                                child: Text('单集循环'),
-                              ),
+                          Text(
+                            '循环方式',
+                            style: Theme.of(context).textTheme.titleMedium,
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            _source('loopMode'),
+                            style: Theme.of(context).textTheme.bodySmall
+                                ?.copyWith(
+                                  color: Theme.of(context)
+                                      .colorScheme
+                                      .onSurfaceVariant,
+                                ),
+                          ),
+                          const SizedBox(height: 12),
+                          _PlaybackChoices<String>(
+                            key: const ValueKey('loopModeOptions'),
+                            options: const [
+                              ('off', '顺序播放'),
+                              ('single', '单集循环'),
                             ],
-                            onChanged: _busy
+                            selected: resolved.loopMode,
+                            onSelected: _busy
                                 ? null
                                 : (value) {
                                     AppLog.instance.trace(
                                       "lib/pages/playback_settings_page.dart::_PlaybackSettingsPageState.build.closure#1.closure#3",
                                     );
-
-                                    if (value != null) _save('loopMode', value);
+                                    _save('loopMode', value);
                                   },
                           ),
                           _inherit('loopMode'),
@@ -1018,23 +1071,18 @@ class _PlaybackSettingsPageState extends State<PlaybackSettingsPage> {
                       title: const Text('全局播放设置'),
                       subtitle: const Text('历史同步、下载与定时偏好'),
                       trailing: const Icon(Icons.chevron_right),
-                      onTap: () {
-                        AppLog.instance.trace(
-                          "lib/pages/playback_settings_page.dart::_PlaybackSettingsPageState.build.closure#1.closure#7",
-                        );
-                        Navigator.of(context).push(
-                          MaterialPageRoute<void>(
-                            builder: (_) {
-                              AppLog.instance.trace(
-                                "lib/pages/playback_settings_page.dart::_PlaybackSettingsPageState.build.closure#1.closure#7.closure#1",
-                              );
-                              return PlaybackSettingsPage(
-                                runtime: widget.runtime,
-                              );
-                            },
-                          ),
-                        );
-                      },
+                      onTap: _busy
+                          ? null
+                          : widget.onOpenGlobalSettings ??
+                                () {
+                                  AppLog.instance.trace(
+                                    "lib/pages/playback_settings_page.dart::_PlaybackSettingsPageState.build.closure#1.closure#7",
+                                  );
+                                  showQuickPlaybackSettings(
+                                    context,
+                                    widget.runtime,
+                                  );
+                                },
                     ),
                 ],
               ),
@@ -1046,9 +1094,94 @@ class _PlaybackSettingsPageState extends State<PlaybackSettingsPage> {
     return widget.embedded
         ? PopScope(canPop: !_busy, child: content)
         : Scaffold(
-            appBar: AppBar(title: const Text('播放设置')),
+            appBar: AppHeader(title: const Text('播放设置')),
             body: content,
           );
+  }
+}
+
+class _PlaybackChoices<T> extends StatelessWidget {
+  const _PlaybackChoices({
+    required this.options,
+    required this.selected,
+    required this.onSelected,
+    this.minimumWidth = 128,
+    super.key,
+  });
+
+  final List<(T, String)> options;
+  final T selected;
+  final ValueChanged<T>? onSelected;
+  final double minimumWidth;
+
+  @override
+  Widget build(BuildContext context) {
+    AppLog.instance.trace(
+      "lib/pages/playback_settings_page.dart::_PlaybackChoices.build",
+    );
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        AppLog.instance.trace(
+          "lib/pages/playback_settings_page.dart::_PlaybackChoices.build.closure#1",
+        );
+
+        final theme = Theme.of(context);
+        final scale = MediaQuery.textScalerOf(context).scale(14) / 14;
+        final columns =
+            ((constraints.maxWidth + 8) / (minimumWidth * scale + 8))
+                .floor()
+                .clamp(1, options.length);
+        final width = (constraints.maxWidth - (columns - 1) * 8) / columns;
+        return Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            for (final option in options)
+              SizedBox(
+                width: width,
+                child: ChoiceChip(
+                  key: ValueKey(option.$1),
+                  showCheckmark: false,
+                  labelPadding: EdgeInsets.zero,
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 10,
+                  ),
+                  label: Center(
+                    child: Text(option.$2, textAlign: TextAlign.center),
+                  ),
+                  selected: selected == option.$1,
+                  selectedColor: theme.colorScheme.primaryContainer,
+                  backgroundColor: theme.colorScheme.surfaceContainerLow,
+                  labelStyle: TextStyle(
+                    color: selected == option.$1
+                        ? theme.colorScheme.onPrimaryContainer
+                        : theme.colorScheme.onSurface,
+                  ),
+                  side: BorderSide(
+                    color: selected == option.$1
+                        ? theme.colorScheme.primary.withValues(alpha: 0.6)
+                        : theme.colorScheme.outlineVariant.withValues(
+                            alpha: 0.6,
+                          ),
+                  ),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  onSelected: onSelected == null
+                      ? null
+                      : (_) {
+                          AppLog.instance.trace(
+                            "lib/pages/playback_settings_page.dart::_PlaybackChoices.build.closure#1.closure#1",
+                          );
+                          onSelected!(option.$1);
+                        },
+                ),
+              ),
+          ],
+        );
+      },
+    );
   }
 }
 
@@ -1226,175 +1359,186 @@ class _SleepTimerPageState extends State<_SleepTimerPage> {
                         ),
                       ),
                     ),
-                  DropdownButtonFormField<SleepMode>(
-                    initialValue: _mode,
-                    isExpanded: true,
-                    decoration: const InputDecoration(labelText: '结束时间'),
-                    items: const [
-                      DropdownMenuItem(
-                        value: SleepMode.afterDuration,
-                        child: Text('倒计时'),
-                      ),
-                      DropdownMenuItem(
-                        value: SleepMode.endOfTrack,
-                        child: Text('本集结束'),
-                      ),
+                  Text('结束时间', style: Theme.of(context).textTheme.titleMedium),
+                  const SizedBox(height: 12),
+                  _PlaybackChoices<SleepMode>(
+                    key: const ValueKey('sleepModeOptions'),
+                    options: const [
+                      (SleepMode.afterDuration, '倒计时'),
+                      (SleepMode.endOfTrack, '本集结束'),
                     ],
-                    onChanged: _saving
+                    selected: _mode,
+                    onSelected: _saving
                         ? null
                         : (value) {
                             AppLog.instance.trace(
                               "lib/pages/playback_settings_page.dart::_SleepTimerPageState.build.closure#1",
                             );
-
-                            if (value != null)
-                              setState(() {
-                                AppLog.instance.trace(
-                                  "lib/pages/playback_settings_page.dart::_SleepTimerPageState.build.closure#1.closure#1",
-                                );
-                                _mode = value;
-                              });
+                            setState(() {
+                              AppLog.instance.trace(
+                                "lib/pages/playback_settings_page.dart::_SleepTimerPageState.build.closure#1.closure#1",
+                              );
+                              _mode = value;
+                            });
                           },
                   ),
                   const SizedBox(height: 20),
-                  if (_mode == SleepMode.afterDuration) ...[
-                    Wrap(
-                      spacing: 8,
-                      runSpacing: 8,
-                      children: [
-                        for (final minutes in [15, 30, 45, 60])
-                          ChoiceChip(
-                            label: Text('$minutes 分钟'),
-                            selected:
-                                !_customMinutes && _minutes.text == '$minutes',
-                            onSelected: _saving
-                                ? null
-                                : (_) {
-                                    AppLog.instance.trace(
-                                      "lib/pages/playback_settings_page.dart::_SleepTimerPageState.build.closure#2",
-                                    );
-                                    setState(() {
-                                      AppLog.instance.trace(
-                                        "lib/pages/playback_settings_page.dart::_SleepTimerPageState.build.closure#2.closure#1",
-                                      );
+                  AnimatedSize(
+                    duration: MediaQuery.disableAnimationsOf(context)
+                        ? Duration.zero
+                        : const Duration(milliseconds: 220),
+                    curve: Curves.easeOutCubic,
+                    alignment: Alignment.topCenter,
+                    child: _mode != SleepMode.afterDuration
+                        ? const SizedBox(width: double.infinity)
+                        : Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                '时长（分钟）',
+                                style: Theme.of(context).textTheme.titleMedium,
+                              ),
+                              const SizedBox(height: 12),
+                              _PlaybackChoices<int?>(
+                                key: const ValueKey('sleepDurationOptions'),
+                                options: const [
+                                  (15, '15'),
+                                  (30, '30'),
+                                  (45, '45'),
+                                  (60, '60'),
+                                  (null, '自定义'),
+                                ],
+                                selected: _customMinutes
+                                    ? null
+                                    : int.tryParse(_minutes.text),
+                                minimumWidth: 76,
+                                onSelected: _saving
+                                    ? null
+                                    : (value) {
+                                        AppLog.instance.trace(
+                                          "lib/pages/playback_settings_page.dart::_SleepTimerPageState.build.closure#2",
+                                        );
+                                        setState(() {
+                                          AppLog.instance.trace(
+                                            "lib/pages/playback_settings_page.dart::_SleepTimerPageState.build.closure#2.closure#1",
+                                          );
 
-                                      _minutes.text = '$minutes';
-                                      _customMinutes = false;
-                                    });
-                                  },
-                          ),
-                        if (!_customMinutes)
-                          ActionChip(
-                            label: const Text('自定义'),
-                            onPressed: _saving
-                                ? null
-                                : () {
-                                    AppLog.instance.trace(
-                                      "lib/pages/playback_settings_page.dart::_SleepTimerPageState.build.closure#3",
-                                    );
-                                    setState(() {
-                                      AppLog.instance.trace(
-                                        "lib/pages/playback_settings_page.dart::_SleepTimerPageState.build.closure#3.closure#1",
-                                      );
-                                      _customMinutes = true;
-                                    });
-                                  },
-                          ),
-                      ],
-                    ),
-                    const SizedBox(height: 16),
-                    if (_customMinutes)
-                      TextFormField(
-                        key: const ValueKey('sleepMinutes'),
-                        controller: _minutes,
-                        enabled: !_saving,
-                        decoration: const InputDecoration(
-                          labelText: '自定义分钟（1–1440）',
-                        ),
-                        keyboardType: TextInputType.number,
-                        validator: (text) {
-                          AppLog.instance.trace(
-                            "lib/pages/playback_settings_page.dart::_SleepTimerPageState.build.closure#4",
-                          );
+                                          _customMinutes = value == null;
+                                          if (value != null)
+                                            _minutes.text = '$value';
+                                        });
+                                      },
+                              ),
+                              AnimatedSize(
+                                duration:
+                                    MediaQuery.disableAnimationsOf(context)
+                                    ? Duration.zero
+                                    : const Duration(milliseconds: 180),
+                                curve: Curves.easeOutCubic,
+                                alignment: Alignment.topCenter,
+                                child: !_customMinutes
+                                    ? const SizedBox(width: double.infinity)
+                                    : Padding(
+                                        padding: const EdgeInsets.only(top: 16),
+                                        child: TextFormField(
+                                          key: const ValueKey('sleepMinutes'),
+                                          controller: _minutes,
+                                          enabled: !_saving,
+                                          decoration: const InputDecoration(
+                                            labelText: '自定义分钟（1–1440）',
+                                          ),
+                                          keyboardType: TextInputType.number,
+                                          validator: (text) {
+                                            AppLog.instance.trace(
+                                              "lib/pages/playback_settings_page.dart::_SleepTimerPageState.build.closure#3",
+                                            );
 
-                          final n = int.tryParse(text ?? '');
-                          return n == null || n < 1 || n > 1440
-                              ? '请输入 1–1440 分钟'
-                              : null;
-                        },
-                      ),
-                    CheckboxListTile(
-                      contentPadding: EdgeInsets.zero,
-                      title: const Text('到时等待本集结束'),
-                      value: _wait,
-                      onChanged: _saving
-                          ? null
-                          : (value) {
-                              AppLog.instance.trace(
-                                "lib/pages/playback_settings_page.dart::_SleepTimerPageState.build.closure#5",
-                              );
-                              setState(() {
-                                AppLog.instance.trace(
-                                  "lib/pages/playback_settings_page.dart::_SleepTimerPageState.build.closure#5.closure#1",
-                                );
-                                _wait = value == true;
-                              });
-                            },
-                    ),
-                    const SizedBox(height: 16),
-                  ],
-                  DropdownButtonFormField<SleepAction>(
-                    initialValue: _action,
-                    isExpanded: true,
-                    decoration: const InputDecoration(labelText: '结束动作'),
-                    items: const [
-                      DropdownMenuItem(
-                        value: SleepAction.pause,
-                        child: Text('暂停'),
-                      ),
-                      DropdownMenuItem(
-                        value: SleepAction.exit,
-                        child: Text('保存并退出应用'),
-                      ),
+                                            final n = int.tryParse(text ?? '');
+                                            return n == null ||
+                                                    n < 1 ||
+                                                    n > 1440
+                                                ? '请输入 1–1440 分钟'
+                                                : null;
+                                          },
+                                        ),
+                                      ),
+                              ),
+                              const SizedBox(height: 8),
+                              CheckboxListTile(
+                                contentPadding: EdgeInsets.zero,
+                                title: const Text('到时等待本集结束'),
+                                value: _wait,
+                                onChanged: _saving
+                                    ? null
+                                    : (value) {
+                                        AppLog.instance.trace(
+                                          "lib/pages/playback_settings_page.dart::_SleepTimerPageState.build.closure#4",
+                                        );
+
+                                        setState(() {
+                                          AppLog.instance.trace(
+                                            "lib/pages/playback_settings_page.dart::_SleepTimerPageState.build.closure#4.closure#1",
+                                          );
+                                          _wait = value == true;
+                                        });
+                                      },
+                              ),
+                              const SizedBox(height: 20),
+                            ],
+                          ),
+                  ),
+                  Text('结束动作', style: Theme.of(context).textTheme.titleMedium),
+                  const SizedBox(height: 12),
+                  _PlaybackChoices<SleepAction>(
+                    key: const ValueKey('sleepActionOptions'),
+                    options: const [
+                      (SleepAction.pause, '暂停播放'),
+                      (SleepAction.exit, '保存并退出'),
                     ],
-                    onChanged: _saving
+                    selected: _action,
+                    onSelected: _saving
                         ? null
                         : (value) {
                             AppLog.instance.trace(
-                              "lib/pages/playback_settings_page.dart::_SleepTimerPageState.build.closure#6",
+                              "lib/pages/playback_settings_page.dart::_SleepTimerPageState.build.closure#5",
                             );
-
-                            if (value != null)
-                              setState(() {
-                                AppLog.instance.trace(
-                                  "lib/pages/playback_settings_page.dart::_SleepTimerPageState.build.closure#6.closure#1",
-                                );
-                                _action = value;
-                              });
+                            setState(() {
+                              AppLog.instance.trace(
+                                "lib/pages/playback_settings_page.dart::_SleepTimerPageState.build.closure#5.closure#1",
+                              );
+                              _action = value;
+                            });
                           },
                   ),
                   const SizedBox(height: 28),
-                  FilledButton(
-                    key: const ValueKey('saveSleep'),
-                    onPressed: _saving ? null : _save,
-                    child: Text(
-                      _saving
-                          ? '正在保存…'
-                          : widget.startTimer
-                          ? '开始定时'
-                          : '保存偏好',
-                    ),
-                  ),
-                  TextButton(
-                    onPressed: _saving
-                        ? null
-                        : () {
-                            AppLog.instance.trace(
-                              "lib/pages/playback_settings_page.dart::_SleepTimerPageState.build.closure#7",
-                            );
-                            Navigator.pop(context);
-                          },
-                    child: const Text('取消'),
+                  OverflowBar(
+                    alignment: MainAxisAlignment.end,
+                    spacing: 8,
+                    overflowSpacing: 8,
+                    children: [
+                      TextButton(
+                        onPressed: _saving
+                            ? null
+                            : () {
+                                AppLog.instance.trace(
+                                  "lib/pages/playback_settings_page.dart::_SleepTimerPageState.build.closure#6",
+                                );
+                                Navigator.pop(context);
+                              },
+                        child: const Text('取消'),
+                      ),
+                      FilledButton(
+                        key: const ValueKey('saveSleep'),
+                        onPressed: _saving ? null : _save,
+                        child: Text(
+                          _saving
+                              ? '正在保存'
+                              : widget.startTimer
+                              ? '开始定时'
+                              : '保存偏好',
+                        ),
+                      ),
+                    ],
                   ),
                 ],
               ),

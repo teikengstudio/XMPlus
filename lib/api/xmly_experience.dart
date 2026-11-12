@@ -489,6 +489,17 @@ class XmlyExperience {
       'pageSize': pageSize,
     });
     final maxPage = _integer(data['maxPageId']);
+    // Lite returns zeroed pagination for an empty favorite library, including
+    // pageId/pageSize, regardless of the requested first page.
+    if (page == 1 &&
+        _integer(data['pageId']) == 0 &&
+        _integer(data['pageSize']) == 0 &&
+        maxPage == 0 &&
+        _integer(data['totalCount']) == 0 &&
+        data['dataList'] is List &&
+        (data['dataList'] as List).isEmpty) {
+      return FavoritePage(items: const [], hasMore: false);
+    }
     if (_integer(data['pageId']) != page ||
         _integer(data['pageSize']) != pageSize ||
         maxPage == null)

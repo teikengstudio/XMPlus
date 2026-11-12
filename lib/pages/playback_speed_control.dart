@@ -104,8 +104,25 @@ class _PlaybackSpeedControlState extends State<PlaybackSpeedControl> {
 
     final current = _draft ?? widget.runtime.player.effectiveSettings.speed;
     final theme = Theme.of(context);
+    final menuWidth = math.min(340.0, MediaQuery.sizeOf(context).width - 32);
+    const speeds = [1.0, 1.25, 1.5, 2.0];
+    final scale = MediaQuery.textScalerOf(context).scale(14) / 14;
+    final columns = ((menuWidth - 24) / (68 * scale + 8)).floor().clamp(
+      1,
+      speeds.length,
+    );
+    final presetWidth = (menuWidth - 32 - (columns - 1) * 8) / columns;
     return MenuAnchor(
       consumeOutsideTap: true,
+      style: MenuStyle(
+        backgroundColor: WidgetStatePropertyAll(theme.colorScheme.surface),
+        surfaceTintColor: const WidgetStatePropertyAll(Colors.transparent),
+        padding: const WidgetStatePropertyAll(EdgeInsets.zero),
+        elevation: const WidgetStatePropertyAll(6),
+        shape: WidgetStatePropertyAll(
+          RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        ),
+      ),
       onClose: () {
         AppLog.instance.trace(
           "lib/pages/playback_speed_control.dart::_PlaybackSpeedControlState.build.closure#1",
@@ -122,7 +139,7 @@ class _PlaybackSpeedControlState extends State<PlaybackSpeedControl> {
       },
       menuChildren: [
         SizedBox(
-          width: math.min(340, MediaQuery.sizeOf(context).width - 32),
+          width: menuWidth,
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
             child: Column(
@@ -134,11 +151,60 @@ class _PlaybackSpeedControlState extends State<PlaybackSpeedControl> {
                     Expanded(
                       child: Text(
                         widget.albumId == null ? '全局倍速' : '专辑倍速',
-                        style: theme.textTheme.labelLarge,
+                        style: theme.textTheme.titleMedium,
                       ),
                     ),
                     const SizedBox(width: 12),
-                    Text(_label(current), style: theme.textTheme.labelLarge),
+                    SizedBox(
+                      width: 14,
+                      height: 14,
+                      child: _saving
+                          ? const CircularProgressIndicator(
+                              strokeWidth: 2,
+                              semanticsLabel: '正在保存倍速',
+                            )
+                          : null,
+                    ),
+                    const SizedBox(width: 8),
+                    Text(
+                      _label(current),
+                      style: theme.textTheme.titleMedium?.copyWith(
+                        color: theme.colorScheme.primary,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    for (final speed in speeds)
+                      SizedBox(
+                        width: presetWidth,
+                        child: ChoiceChip(
+                          key: ValueKey('quickSpeed:$speed'),
+                          showCheckmark: false,
+                          labelPadding: EdgeInsets.zero,
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 8,
+                            vertical: 8,
+                          ),
+                          label: Center(child: Text(_label(speed))),
+                          selected: current == speed,
+                          onSelected: _saving
+                              ? null
+                              : (_) {
+                                  AppLog.instance.trace(
+                                    "lib/pages/playback_speed_control.dart::_PlaybackSpeedControlState.build.closure#2",
+                                  );
+                                  _save(speed);
+                                },
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                        ),
+                      ),
                   ],
                 ),
                 Slider(
@@ -154,13 +220,13 @@ class _PlaybackSpeedControlState extends State<PlaybackSpeedControl> {
                   // second edit until the current value has been applied.
                   onChanged: (value) {
                     AppLog.instance.trace(
-                      "lib/pages/playback_speed_control.dart::_PlaybackSpeedControlState.build.closure#2",
+                      "lib/pages/playback_speed_control.dart::_PlaybackSpeedControlState.build.closure#3",
                     );
 
                     if (!_saving)
                       setState(() {
                         AppLog.instance.trace(
-                          "lib/pages/playback_speed_control.dart::_PlaybackSpeedControlState.build.closure#2.closure#1",
+                          "lib/pages/playback_speed_control.dart::_PlaybackSpeedControlState.build.closure#3.closure#1",
                         );
                         _draft = value;
                       });
@@ -169,9 +235,21 @@ class _PlaybackSpeedControlState extends State<PlaybackSpeedControl> {
                 ),
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [const Text('0.5×'), const Text('3.0×')],
+                  children: [
+                    Text(
+                      '0.5×',
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                    Text(
+                      '3.0×',
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ],
                 ),
-                if (_saving) Text('正在保存…', style: theme.textTheme.bodySmall),
                 if (_error != null)
                   Padding(
                     padding: const EdgeInsets.only(top: 8),
@@ -189,19 +267,24 @@ class _PlaybackSpeedControlState extends State<PlaybackSpeedControl> {
       ],
       builder: (context, controller, _) {
         AppLog.instance.trace(
-          "lib/pages/playback_speed_control.dart::_PlaybackSpeedControlState.build.closure#3",
+          "lib/pages/playback_speed_control.dart::_PlaybackSpeedControlState.build.closure#4",
         );
         return Tooltip(
           message: '调整播放倍速',
           child: TextButton(
+            style: TextButton.styleFrom(
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+            ),
             onPressed: () {
               AppLog.instance.trace(
-                "lib/pages/playback_speed_control.dart::_PlaybackSpeedControlState.build.closure#3.closure#1",
+                "lib/pages/playback_speed_control.dart::_PlaybackSpeedControlState.build.closure#4.closure#1",
               );
-
               controller.isOpen ? controller.close() : controller.open();
             },
-            child: Text(_label(current)),
+            child: SizedBox(
+              width: MediaQuery.textScalerOf(context).scale(44),
+              child: Text(_label(current), textAlign: TextAlign.center),
+            ),
           ),
         );
       },

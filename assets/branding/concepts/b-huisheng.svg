@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="XMPlus 回声">
+  <rect x="16" y="16" width="480" height="480" rx="128" fill="#272E36"/>
+  <path d="M335 154a128 128 0 1 0 0 204" fill="none" stroke="#F8F6F0" stroke-width="44" stroke-linecap="round"/>
+  <path d="M245 197c-8-5-18 1-18 11v96c0 10 10 16 18 11l77-48c8-5 8-17 0-22z" fill="#DBB88D"/>
+</svg>

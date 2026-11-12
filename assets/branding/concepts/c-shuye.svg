@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="XMPlus 书语">
+  <rect x="16" y="16" width="480" height="480" rx="128" fill="#A45E4C"/>
+  <path d="M125 157c44-5 79 6 111 33v172c-32-26-67-39-111-34-8 1-13-4-13-12V171c0-8 5-13 13-14zM276 190c32-27 67-38 111-33 8 1 13 6 13 14v145c0 8-5 13-13 12-44-5-79 8-111 34z" fill="#FFF6EB"/>
+  <path d="M316 220v66l46-33z" fill="#A45E4C" stroke="#A45E4C" stroke-width="10" stroke-linejoin="round"/>
+</svg>

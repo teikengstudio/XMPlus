@@ -1,10 +1,14 @@
+import 'dart:async';
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 
+import '../api/xmly_client.dart';
 import '../api/xmly_comments.dart';
-import '../common/widgets/local_panel.dart';
 import '../models/xmly_models.dart';
 import '../services/app_log.dart';
 import '../services/app_runtime.dart';
+import 'comment_text.dart';
 
 void _recordCommentsError(
   String operation,
@@ -51,38 +55,17 @@ void _recordCommentsError(
   );
 }
 
-Future<void> showTrackComments(
-  BuildContext context,
-  AppRuntime runtime,
-  Track track, {
-  TrackComment? parent,
-}) {
-  AppLog.instance.trace(
-    "lib/pages/track_comments_panel.dart::showTrackComments",
-  );
-  return showLocalPanel<void>(
-    context: context,
-    title: parent == null ? '单集评论' : '评论回复',
-    builder: (_) {
-      AppLog.instance.trace(
-        "lib/pages/track_comments_panel.dart::showTrackComments.closure#1",
-      );
-      return TrackCommentsPanel(runtime: runtime, track: track, parent: parent);
-    },
-  );
-}
-
 class TrackCommentsPanel extends StatefulWidget {
   const TrackCommentsPanel({
     required this.runtime,
     required this.track,
-    this.parent,
+    this.onClose,
     super.key,
   });
 
   final AppRuntime runtime;
   final Track track;
-  final TrackComment? parent;
+  final VoidCallback? onClose;
 
   @override
   State<TrackCommentsPanel> createState() {
@@ -95,11 +78,8 @@ class TrackCommentsPanel extends StatefulWidget {
 
 class _TrackCommentsPanelState extends State<TrackCommentsPanel> {
   final _scroll = ScrollController();
-  List<TrackComment> _comments = [];
-  int _page = 0, _total = 0, _request = 0;
-  bool _busy = false, _hasMore = false;
-  bool _retryReset = true;
-  String? _error;
+  late _CommentFeed _feed;
+  String? _expandedComment;
 
   @override
   void initState() {
@@ -108,7 +88,76 @@ class _TrackCommentsPanelState extends State<TrackCommentsPanel> {
     );
 
     super.initState();
-    _load(reset: true);
+    _scroll.addListener(_loadNearEnd);
+    _openFeed();
+  }
+
+  void _openFeed() {
+    AppLog.instance.trace(
+      "lib/pages/track_comments_panel.dart::_TrackCommentsPanelState._openFeed",
+    );
+
+    _feed = _CommentFeed(widget.runtime.anonymous, widget.track.id)
+      ..addListener(_feedChanged);
+    unawaited(_feed.load(reset: true));
+  }
+
+  void _feedChanged() {
+    AppLog.instance.trace(
+      "lib/pages/track_comments_panel.dart::_TrackCommentsPanelState._feedChanged",
+    );
+
+    if (!mounted) return;
+    setState(() {
+      AppLog.instance.trace(
+        "lib/pages/track_comments_panel.dart::_TrackCommentsPanelState._feedChanged.closure#1",
+      );
+    });
+    if (!_feed.busy) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        AppLog.instance.trace(
+          "lib/pages/track_comments_panel.dart::_TrackCommentsPanelState._feedChanged.closure#2",
+        );
+
+        if (mounted) _loadNearEnd();
+      });
+    }
+  }
+
+  void _loadNearEnd() {
+    AppLog.instance.trace(
+      "lib/pages/track_comments_panel.dart::_TrackCommentsPanelState._loadNearEnd",
+    );
+
+    if (_scroll.hasClients &&
+        _scroll.position.extentAfter < 240 &&
+        _feed.hasMore &&
+        _feed.error == null &&
+        _feed.page < 250) {
+      unawaited(_feed.load());
+    }
+  }
+
+  Future<void> _refresh() async {
+    AppLog.instance.trace(
+      "lib/pages/track_comments_panel.dart::_TrackCommentsPanelState._refresh",
+    );
+
+    if (_feed.busy) return;
+    setState(() {
+      AppLog.instance.trace(
+        "lib/pages/track_comments_panel.dart::_TrackCommentsPanelState._refresh.closure#1",
+      );
+      _expandedComment = null;
+    });
+    final feed = _feed;
+    await feed.load(reset: true);
+    if (mounted &&
+        identical(feed, _feed) &&
+        feed.error == null &&
+        _scroll.hasClients) {
+      _scroll.jumpTo(0);
+    }
   }
 
   @override
@@ -119,13 +168,11 @@ class _TrackCommentsPanelState extends State<TrackCommentsPanel> {
 
     super.didUpdateWidget(oldWidget);
     if (oldWidget.runtime != widget.runtime ||
-        oldWidget.track.id != widget.track.id ||
-        oldWidget.parent?.id != widget.parent?.id) {
-      _request++;
-      _comments = [];
-      _page = _total = 0;
-      _busy = _hasMore = false;
-      _load(reset: true);
+        oldWidget.track.id != widget.track.id) {
+      _feed.dispose();
+      _expandedComment = null;
+      if (_scroll.hasClients) _scroll.jumpTo(0);
+      _openFeed();
     }
   }
 
@@ -135,133 +182,9 @@ class _TrackCommentsPanelState extends State<TrackCommentsPanel> {
       "lib/pages/track_comments_panel.dart::_TrackCommentsPanelState.dispose",
     );
 
-    _request++;
+    _feed.dispose();
     _scroll.dispose();
     super.dispose();
-  }
-
-  Future<void> _load({bool reset = false}) {
-    AppLog.instance.trace(
-      "lib/pages/track_comments_panel.dart::_TrackCommentsPanelState._load",
-    );
-    return AppLog.instance.runWithErrorScope(() async {
-      AppLog.instance.trace(
-        "lib/pages/track_comments_panel.dart::_TrackCommentsPanelState._load.closure#1",
-      );
-
-      if (_busy) return;
-      final request = ++_request;
-      final page = reset ? 1 : _page + 1;
-      setState(() {
-        AppLog.instance.trace(
-          "lib/pages/track_comments_panel.dart::_TrackCommentsPanelState._load.closure#1.closure#1",
-        );
-
-        _busy = true;
-        _retryReset = reset;
-        _error = null;
-      });
-      try {
-        final result = await XmlyComments(widget.runtime.anonymous)
-            .load(widget.track.id, page: page, commentId: widget.parent?.id);
-        if (!mounted || request != _request) return;
-        final known = reset
-            ? <String>{}
-            : _comments.map((row) {
-                AppLog.instance.trace(
-                  "lib/pages/track_comments_panel.dart::_TrackCommentsPanelState._load.closure#1.closure#2",
-                );
-                return row.id;
-              }).toSet();
-        final added = result.comments.where((row) {
-          AppLog.instance.trace(
-            "lib/pages/track_comments_panel.dart::_TrackCommentsPanelState._load.closure#1.closure#3",
-          );
-          return known.add(row.id);
-        }).toList();
-        if (result.hasMore && added.isEmpty) {
-          throw const XmlyException('repeated_comments', '评论分页没有前进，请刷新后重试');
-        }
-        setState(() {
-          AppLog.instance.trace(
-            "lib/pages/track_comments_panel.dart::_TrackCommentsPanelState._load.closure#1.closure#4",
-          );
-
-          _comments = [if (!reset) ..._comments, ...added];
-          _page = page;
-          _total = result.total;
-          _hasMore = result.hasMore;
-        });
-        if (reset && _scroll.hasClients) _scroll.jumpTo(0);
-      } catch (error, stack) {
-        _recordCommentsError('Comments load failed', error, stack);
-        if (mounted && request == _request) {
-          setState(() {
-            AppLog.instance.trace(
-              "lib/pages/track_comments_panel.dart::_TrackCommentsPanelState._load.closure#1.closure#5",
-            );
-            _error = error is XmlyException ? error.message : '评论加载失败，请重试';
-          });
-        }
-      } finally {
-        if (mounted && request == _request)
-          setState(() {
-            AppLog.instance.trace(
-              "lib/pages/track_comments_panel.dart::_TrackCommentsPanelState._load.closure#1.closure#6",
-            );
-            _busy = false;
-          });
-      }
-    });
-  }
-
-  Widget _comment(TrackComment comment, {bool parent = false}) {
-    AppLog.instance.trace(
-      "lib/pages/track_comments_panel.dart::_TrackCommentsPanelState._comment",
-    );
-    return Card(
-      margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-      child: Padding(
-        padding: const EdgeInsets.all(12),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              comment.author.isEmpty ? '听友' : comment.author,
-              style: Theme.of(context).textTheme.titleSmall,
-            ),
-            if (comment.parentAuthor.isNotEmpty)
-              Text('回复 ${comment.parentAuthor}'),
-            const SizedBox(height: 8),
-            SelectableText(comment.content),
-            const SizedBox(height: 8),
-            Wrap(
-              spacing: 12,
-              crossAxisAlignment: WrapCrossAlignment.center,
-              children: [
-                if (comment.createdAt.isNotEmpty) Text(comment.createdAt),
-                Text('${comment.likes} 赞'),
-                if (!parent && widget.parent == null && comment.replyCount > 0)
-                  TextButton(
-                    onPressed: () {
-                      AppLog.instance.trace(
-                        "lib/pages/track_comments_panel.dart::_TrackCommentsPanelState._comment.closure#1",
-                      );
-                      showTrackComments(
-                        context,
-                        widget.runtime,
-                        widget.track,
-                        parent: comment,
-                      );
-                    },
-                    child: Text('查看回复（${comment.replyCount}）'),
-                  ),
-              ],
-            ),
-          ],
-        ),
-      ),
-    );
   }
 
   @override
@@ -269,108 +192,492 @@ class _TrackCommentsPanelState extends State<TrackCommentsPanel> {
     AppLog.instance.trace(
       "lib/pages/track_comments_panel.dart::_TrackCommentsPanelState.build",
     );
-    return Scrollbar(
-      controller: _scroll,
-      child: RefreshIndicator(
-        onRefresh: () {
-          AppLog.instance.trace(
-            "lib/pages/track_comments_panel.dart::_TrackCommentsPanelState.build.closure#1",
-          );
-          return _load(reset: true);
-        },
-        child: ListView.builder(
-          controller: _scroll,
-          physics: const AlwaysScrollableScrollPhysics(),
-          itemCount: _comments.length + 2,
-          itemBuilder: (context, index) {
-            AppLog.instance.trace(
-              "lib/pages/track_comments_panel.dart::_TrackCommentsPanelState.build.closure#2",
-            );
 
-            if (index == 0) {
-              return Padding(
-                padding: const EdgeInsets.all(12),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
+    final theme = Theme.of(context);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Row(
+          children: [
+            Expanded(
+              child: Text.rich(
+                TextSpan(
+                  text: _feed.page > 0 ? '共' : '评论',
                   children: [
-                    Text(
-                      widget.track.title.isEmpty
-                          ? widget.track.id
-                          : widget.track.title,
-                    ),
-                    Wrap(
-                      alignment: WrapAlignment.spaceBetween,
-                      crossAxisAlignment: WrapCrossAlignment.center,
+                    if (_feed.page > 0)
+                      TextSpan(
+                        text: ' ${_feed.total} 条评论',
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: theme.colorScheme.onSurfaceVariant,
+                        ),
+                      ),
+                  ],
+                ),
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
+              ),
+            ),
+            IconButton(
+              tooltip: '刷新评论',
+              onPressed: _feed.busy ? null : _refresh,
+              icon: const Icon(Icons.refresh_rounded, size: 20),
+            ),
+            if (widget.onClose != null)
+              IconButton(
+                tooltip: '收起评论',
+                onPressed: widget.onClose,
+                icon: const Icon(Icons.close_rounded, size: 20),
+              ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        Expanded(
+          child: Scrollbar(
+            controller: _scroll,
+            child: RefreshIndicator(
+              onRefresh: _refresh,
+              child: ListView.builder(
+                key: const ValueKey('trackCommentsScroll'),
+                controller: _scroll,
+                primary: false,
+                physics: const AlwaysScrollableScrollPhysics(),
+                padding: const EdgeInsets.only(bottom: 16),
+                itemCount: _feed.comments.length + 1,
+                itemBuilder: (context, index) {
+                  AppLog.instance.trace(
+                    "lib/pages/track_comments_panel.dart::_TrackCommentsPanelState.build.closure#1",
+                  );
+
+                  if (index == _feed.comments.length) {
+                    return _FeedFooter(feed: _feed, emptyLabel: '还没有评论');
+                  }
+                  final comment = _feed.comments[index];
+                  final expanded = _expandedComment == comment.id;
+                  return Padding(
+                    key: ValueKey((widget.track.id, comment.id)),
+                    padding: const EdgeInsets.fromLTRB(4, 16, 12, 20),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
-                        if (_page > 0)
-                          Text(
-                            '$_total 条${widget.parent == null ? "评论" : "回复"}',
-                          ),
-                        TextButton.icon(
-                          onPressed: _busy
+                        _CommentContent(
+                          comment: comment,
+                          action: comment.replyCount == 0
                               ? null
-                              : () {
-                                  AppLog.instance.trace(
-                                    "lib/pages/track_comments_panel.dart::_TrackCommentsPanelState.build.closure#2.closure#1",
-                                  );
-                                  _load(reset: true);
-                                },
-                          icon: const Icon(Icons.refresh),
-                          label: const Text('刷新'),
+                              : TextButton.icon(
+                                  key: ValueKey('commentReplies:${comment.id}'),
+                                  style: TextButton.styleFrom(
+                                    foregroundColor:
+                                        theme.colorScheme.onSurfaceVariant,
+                                    textStyle: theme.textTheme.bodySmall,
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 8,
+                                    ),
+                                    minimumSize: const Size(0, 36),
+                                  ),
+                                  onPressed: () {
+                                    AppLog.instance.trace(
+                                      "lib/pages/track_comments_panel.dart::_TrackCommentsPanelState.build.closure#1.closure#1",
+                                    );
+                                    setState(() {
+                                      AppLog.instance.trace(
+                                        "lib/pages/track_comments_panel.dart::_TrackCommentsPanelState.build.closure#1.closure#1.closure#1",
+                                      );
+
+                                      _expandedComment = expanded
+                                          ? null
+                                          : comment.id;
+                                    });
+                                  },
+                                  icon: Icon(
+                                    expanded
+                                        ? Icons.expand_less
+                                        : Icons.expand_more,
+                                    size: 18,
+                                  ),
+                                  label: Text(
+                                    expanded
+                                        ? '收起回复'
+                                        : '${comment.replyCount} 条回复',
+                                  ),
+                                ),
+                        ),
+                        AnimatedSize(
+                          duration: MediaQuery.disableAnimationsOf(context)
+                              ? Duration.zero
+                              : const Duration(milliseconds: 200),
+                          curve: Curves.easeInOutCubic,
+                          alignment: Alignment.topCenter,
+                          child: expanded
+                              ? _InlineReplies(
+                                  key: ValueKey((widget.track.id, comment.id)),
+                                  client: widget.runtime.anonymous,
+                                  trackId: widget.track.id,
+                                  commentId: comment.id,
+                                )
+                              : const SizedBox(width: double.infinity),
                         ),
                       ],
                     ),
-                    if (widget.parent case final parent?)
-                      _comment(parent, parent: true),
+                  );
+                },
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _CommentContent extends StatelessWidget {
+  const _CommentContent({required this.comment, this.action});
+  final TrackComment comment;
+  final Widget? action;
+
+  @override
+  Widget build(BuildContext context) {
+    AppLog.instance.trace(
+      "lib/pages/track_comments_panel.dart::_CommentContent.build",
+    );
+
+    final theme = Theme.of(context);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          comment.author.isEmpty ? '听友' : comment.author,
+          style: theme.textTheme.titleSmall?.copyWith(
+            color: theme.colorScheme.primary,
+          ),
+        ),
+        if (comment.parentAuthor.isNotEmpty)
+          Text('回复 ${comment.parentAuthor}', style: theme.textTheme.bodySmall),
+        const SizedBox(height: 8),
+        CommentText(
+          comment.content,
+          style: theme.textTheme.bodyMedium?.copyWith(
+            fontSize: 15,
+            height: 1.65,
+          ),
+        ),
+        const SizedBox(height: 8),
+        DefaultTextStyle(
+          style: theme.textTheme.bodySmall!.copyWith(
+            color: theme.colorScheme.onSurfaceVariant,
+          ),
+          child: Row(
+            children: [
+              Expanded(
+                child: Text(
+                  comment.createdAt,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              const SizedBox(width: 16),
+              Semantics(
+                label: '${comment.likes} 个赞',
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      Icons.thumb_up_outlined,
+                      size: 14,
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                    const SizedBox(width: 5),
+                    Text('${comment.likes}'),
                   ],
                 ),
-              );
-            }
-            if (index <= _comments.length)
-              return _comment(_comments[index - 1]);
-            return Padding(
-              padding: const EdgeInsets.all(16),
-              child: Column(
-                children: [
-                  if (_busy) const CircularProgressIndicator(),
-                  if (_error != null) ...[
-                    Text(
-                      _error!,
-                      style: TextStyle(
-                        color: Theme.of(context).colorScheme.error,
-                      ),
-                    ),
-                    TextButton(
-                      onPressed: _busy
-                          ? null
-                          : () {
-                              AppLog.instance.trace(
-                                "lib/pages/track_comments_panel.dart::_TrackCommentsPanelState.build.closure#2.closure#2",
-                              );
-                              _load(reset: _retryReset);
-                            },
-                      child: const Text('重试'),
-                    ),
-                  ] else if (!_busy && _comments.isEmpty)
-                    Text(widget.parent == null ? '暂无评论' : '暂无回复')
-                  else if (!_busy && _hasMore)
-                    TextButton(
-                      onPressed: _page >= 250
-                          ? null
-                          : () {
-                              AppLog.instance.trace(
-                                "lib/pages/track_comments_panel.dart::_TrackCommentsPanelState.build.closure#2.closure#3",
-                              );
-                              _load();
-                            },
-                      child: Text(_page >= 250 ? '已加载 5000 条，请刷新查看' : '加载更多'),
-                    ),
-                ],
               ),
-            );
-          },
+              if (action != null) ...[const SizedBox(width: 12), action!],
+            ],
+          ),
         ),
+      ],
+    );
+  }
+}
+
+class _InlineReplies extends StatefulWidget {
+  const _InlineReplies({
+    required this.client,
+    required this.trackId,
+    required this.commentId,
+    super.key,
+  });
+  final XmlyClient client;
+  final String trackId, commentId;
+
+  @override
+  State<_InlineReplies> createState() {
+    AppLog.instance.trace(
+      "lib/pages/track_comments_panel.dart::_InlineReplies.createState",
+    );
+    return _InlineRepliesState();
+  }
+}
+
+class _InlineRepliesState extends State<_InlineReplies>
+    with AutomaticKeepAliveClientMixin {
+  late final _CommentFeed _feed;
+  int _visibleCount = 3;
+
+  @override
+  bool get wantKeepAlive {
+    AppLog.instance.trace(
+      "lib/pages/track_comments_panel.dart::_InlineRepliesState.wantKeepAlive.get",
+    );
+    return true;
+  }
+
+  @override
+  void initState() {
+    AppLog.instance.trace(
+      "lib/pages/track_comments_panel.dart::_InlineRepliesState.initState",
+    );
+
+    super.initState();
+    _feed = _CommentFeed(
+      widget.client,
+      widget.trackId,
+      commentId: widget.commentId,
+    );
+    unawaited(_feed.load(reset: true));
+  }
+
+  @override
+  void dispose() {
+    AppLog.instance.trace(
+      "lib/pages/track_comments_panel.dart::_InlineRepliesState.dispose",
+    );
+
+    _feed.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    AppLog.instance.trace(
+      "lib/pages/track_comments_panel.dart::_InlineRepliesState.build",
+    );
+
+    super.build(context);
+    return Container(
+      margin: const EdgeInsets.only(top: 12),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.surfaceContainerLow,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: ListenableBuilder(
+        listenable: _feed,
+        builder: (context, _) {
+          AppLog.instance.trace(
+            "lib/pages/track_comments_panel.dart::_InlineRepliesState.build.closure#1",
+          );
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              for (final comment in _feed.comments.take(_visibleCount))
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 10),
+                  child: _CommentContent(comment: comment),
+                ),
+              if (_visibleCount < _feed.comments.length)
+                TextButton(
+                  onPressed: () {
+                    AppLog.instance.trace(
+                      "lib/pages/track_comments_panel.dart::_InlineRepliesState.build.closure#1.closure#1",
+                    );
+                    setState(() {
+                      AppLog.instance.trace(
+                        "lib/pages/track_comments_panel.dart::_InlineRepliesState.build.closure#1.closure#1.closure#1",
+                      );
+
+                      _visibleCount = math.min(
+                        _visibleCount + 10,
+                        _feed.comments.length,
+                      );
+                    });
+                  },
+                  child: const Text('展开更多回复'),
+                )
+              else
+                _FeedFooter(
+                  feed: _feed,
+                  emptyLabel: '还没有回复',
+                  onMore: () async {
+                    AppLog.instance.trace(
+                      "lib/pages/track_comments_panel.dart::_InlineRepliesState.build.closure#1.closure#2",
+                    );
+
+                    await _feed.load();
+                    if (mounted)
+                      setState(() {
+                        AppLog.instance.trace(
+                          "lib/pages/track_comments_panel.dart::_InlineRepliesState.build.closure#1.closure#2.closure#1",
+                        );
+                        _visibleCount += 10;
+                      });
+                  },
+                ),
+            ],
+          );
+        },
       ),
     );
+  }
+}
+
+class _FeedFooter extends StatelessWidget {
+  const _FeedFooter({
+    required this.feed,
+    required this.emptyLabel,
+    this.onMore,
+  });
+  final _CommentFeed feed;
+  final String emptyLabel;
+  final VoidCallback? onMore;
+
+  @override
+  Widget build(BuildContext context) {
+    AppLog.instance.trace(
+      "lib/pages/track_comments_panel.dart::_FeedFooter.build",
+    );
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 16),
+      child: Center(
+        child: feed.busy
+            ? const SizedBox.square(
+                dimension: 22,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              )
+            : feed.error != null
+            ? Column(
+                children: [
+                  Text(
+                    feed.error!,
+                    style: TextStyle(
+                      color: Theme.of(context).colorScheme.error,
+                    ),
+                  ),
+                  TextButton(
+                    onPressed: () {
+                      AppLog.instance.trace(
+                        "lib/pages/track_comments_panel.dart::_FeedFooter.build.closure#1",
+                      );
+                      feed.load(reset: feed.retryReset);
+                    },
+                    child: const Text('重试'),
+                  ),
+                ],
+              )
+            : feed.comments.isEmpty
+            ? Text(emptyLabel)
+            : feed.hasMore
+            ? TextButton(
+                onPressed: feed.page >= 250
+                    ? null
+                    : onMore ??
+                          () {
+                            AppLog.instance.trace(
+                              "lib/pages/track_comments_panel.dart::_FeedFooter.build.closure#2",
+                            );
+                            feed.load();
+                          },
+                child: Text(feed.page >= 250 ? '已加载 5000 条，请刷新查看' : '加载更多'),
+              )
+            : Text(
+                '已显示全部',
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                ),
+              ),
+      ),
+    );
+  }
+}
+
+class _CommentFeed extends ChangeNotifier {
+  _CommentFeed(this.client, this.trackId, {this.commentId}) {
+    AppLog.instance.trace(
+      "lib/pages/track_comments_panel.dart::_CommentFeed.new",
+    );
+  }
+  final XmlyClient client;
+  final String trackId;
+  final String? commentId;
+  List<TrackComment> comments = [];
+  int page = 0, total = 0, _request = 0;
+  bool busy = false, hasMore = false, retryReset = true, _disposed = false;
+  String? error;
+
+  Future<void> load({bool reset = false}) {
+    AppLog.instance.trace(
+      "lib/pages/track_comments_panel.dart::_CommentFeed.load",
+    );
+
+    return AppLog.instance.runWithErrorScope(() async {
+      AppLog.instance.trace(
+        "lib/pages/track_comments_panel.dart::_CommentFeed.load.closure#1",
+      );
+
+      if (_disposed || busy || (!reset && page >= 250)) return;
+      final request = ++_request;
+      final nextPage = reset ? 1 : page + 1;
+      busy = true;
+      retryReset = reset;
+      error = null;
+      notifyListeners();
+      try {
+        final result = await XmlyComments(client)
+            .load(trackId, page: nextPage, commentId: commentId);
+        if (_disposed || request != _request) return;
+        final known = reset
+            ? <String>{}
+            : comments.map((row) {
+                AppLog.instance.trace(
+                  "lib/pages/track_comments_panel.dart::_CommentFeed.load.closure#1.closure#1",
+                );
+                return row.id;
+              }).toSet();
+        final added = result.comments.where((row) {
+          AppLog.instance.trace(
+            "lib/pages/track_comments_panel.dart::_CommentFeed.load.closure#1.closure#2",
+          );
+          return known.add(row.id);
+        }).toList();
+        if (result.hasMore && added.isEmpty) {
+          throw const XmlyException('repeated_comments', '评论分页没有前进，请刷新后重试');
+        }
+        comments = [if (!reset) ...comments, ...added];
+        page = nextPage;
+        total = result.total;
+        hasMore = result.hasMore;
+      } catch (failure, stack) {
+        _recordCommentsError('Comments load failed', failure, stack);
+        if (!_disposed && request == _request) {
+          error = failure is XmlyException ? failure.message : '评论加载失败，请重试';
+        }
+      } finally {
+        if (!_disposed && request == _request) {
+          busy = false;
+          notifyListeners();
+        }
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    AppLog.instance.trace(
+      "lib/pages/track_comments_panel.dart::_CommentFeed.dispose",
+    );
+
+    _disposed = true;
+    _request++;
+    super.dispose();
   }
 }

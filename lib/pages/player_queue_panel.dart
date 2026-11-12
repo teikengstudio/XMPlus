@@ -3,8 +3,6 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 
 import '../common/widgets/adaptive_text.dart';
-import '../common/widgets/confirmation_dialog.dart';
-import '../common/widgets/local_panel.dart';
 import '../models/xmly_models.dart';
 import '../services/app_log.dart';
 import '../services/app_runtime.dart';
@@ -60,50 +58,32 @@ class _QueuePosition {
   double fraction = 0;
 }
 
-Future<void> showPlayerQueuePanel(BuildContext context, AppRuntime runtime) {
-  AppLog.instance.trace(
-    "lib/pages/player_queue_panel.dart::showPlayerQueuePanel",
-  );
-  return showLocalPanel<void>(
-    context: context,
-    title: '播放列表',
-    builder: (_) {
-      AppLog.instance.trace(
-        "lib/pages/player_queue_panel.dart::showPlayerQueuePanel.closure#1",
-      );
-      return _QueuePanel(
-        runtime: runtime,
-        position: _positions[runtime.player] ??= _QueuePosition(),
-      );
-    },
-  );
-}
-
-class _QueuePanel extends StatefulWidget {
-  const _QueuePanel({required this.runtime, required this.position});
+class PlayerQueuePanel extends StatefulWidget {
+  const PlayerQueuePanel({required this.runtime, super.key});
   final AppRuntime runtime;
-  final _QueuePosition position;
 
   @override
-  State<_QueuePanel> createState() {
+  State<PlayerQueuePanel> createState() {
     AppLog.instance.trace(
-      "lib/pages/player_queue_panel.dart::_QueuePanel.createState",
+      "lib/pages/player_queue_panel.dart::PlayerQueuePanel.createState",
     );
-    return _QueuePanelState();
+    return _PlayerQueuePanelState();
   }
 }
 
-class _QueuePanelState extends State<_QueuePanel> {
+class _PlayerQueuePanelState extends State<PlayerQueuePanel> {
+  late final _position = _positions[widget.runtime.player] ??= _QueuePosition();
   ScrollController? _scroll;
   List<Track> _tracks = const [];
   double _rowExtent = 76;
   bool _busy = false;
+  bool _confirmClear = false;
   String? _error;
 
   @override
   void didChangeDependencies() {
     AppLog.instance.trace(
-      "lib/pages/player_queue_panel.dart::_QueuePanelState.didChangeDependencies",
+      "lib/pages/player_queue_panel.dart::_PlayerQueuePanelState.didChangeDependencies",
     );
 
     super.didChangeDependencies();
@@ -113,20 +93,20 @@ class _QueuePanelState extends State<_QueuePanel> {
     _tracks = widget.runtime.player.queue;
     final anchor = _tracks.indexWhere((track) {
       AppLog.instance.trace(
-        "lib/pages/player_queue_panel.dart::_QueuePanelState.didChangeDependencies.closure#1",
+        "lib/pages/player_queue_panel.dart::_PlayerQueuePanelState.didChangeDependencies.closure#1",
       );
-      return track.id == widget.position.trackId;
+      return track.id == _position.trackId;
     });
     final index = anchor >= 0 ? anchor : widget.runtime.player.cursor;
     _scroll = ScrollController(
       initialScrollOffset:
-          (math.max(0, index) + (anchor >= 0 ? widget.position.fraction : 0)) *
+          (math.max(0, index) + (anchor >= 0 ? _position.fraction : 0)) *
           _rowExtent,
       keepScrollOffset: false,
     )..addListener(_remember);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       AppLog.instance.trace(
-        "lib/pages/player_queue_panel.dart::_QueuePanelState.didChangeDependencies.closure#2",
+        "lib/pages/player_queue_panel.dart::_PlayerQueuePanelState.didChangeDependencies.closure#2",
       );
 
       if (mounted) _remember();
@@ -135,14 +115,14 @@ class _QueuePanelState extends State<_QueuePanel> {
 
   void _remember() {
     AppLog.instance.trace(
-      "lib/pages/player_queue_panel.dart::_QueuePanelState._remember",
+      "lib/pages/player_queue_panel.dart::_PlayerQueuePanelState._remember",
     );
 
     final scroll = _scroll;
     if (scroll == null || !scroll.hasClients || _tracks.isEmpty) return;
     final row = math.max(0, scroll.offset) / _rowExtent;
     final index = row.floor().clamp(0, _tracks.length - 1);
-    widget.position
+    _position
       ..trackId = _tracks[index].id
       ..fraction = (row - index).clamp(0, 1);
   }
@@ -150,7 +130,7 @@ class _QueuePanelState extends State<_QueuePanel> {
   @override
   void dispose() {
     AppLog.instance.trace(
-      "lib/pages/player_queue_panel.dart::_QueuePanelState.dispose",
+      "lib/pages/player_queue_panel.dart::_PlayerQueuePanelState.dispose",
     );
 
     _remember();
@@ -160,7 +140,7 @@ class _QueuePanelState extends State<_QueuePanel> {
 
   void _showCurrent() {
     AppLog.instance.trace(
-      "lib/pages/player_queue_panel.dart::_QueuePanelState._showCurrent",
+      "lib/pages/player_queue_panel.dart::_PlayerQueuePanelState._showCurrent",
     );
 
     final scroll = _scroll, index = widget.runtime.player.cursor;
@@ -177,17 +157,17 @@ class _QueuePanelState extends State<_QueuePanel> {
 
   Future<void> _run(Future<void> Function() command) {
     AppLog.instance.trace(
-      "lib/pages/player_queue_panel.dart::_QueuePanelState._run",
+      "lib/pages/player_queue_panel.dart::_PlayerQueuePanelState._run",
     );
     return AppLog.instance.runWithErrorScope(() async {
       AppLog.instance.trace(
-        "lib/pages/player_queue_panel.dart::_QueuePanelState._run.closure#1",
+        "lib/pages/player_queue_panel.dart::_PlayerQueuePanelState._run.closure#1",
       );
 
       if (_busy) return;
       setState(() {
         AppLog.instance.trace(
-          "lib/pages/player_queue_panel.dart::_QueuePanelState._run.closure#1.closure#1",
+          "lib/pages/player_queue_panel.dart::_PlayerQueuePanelState._run.closure#1.closure#1",
         );
 
         _busy = true;
@@ -200,7 +180,7 @@ class _QueuePanelState extends State<_QueuePanel> {
         if (mounted) {
           setState(() {
             AppLog.instance.trace(
-              "lib/pages/player_queue_panel.dart::_QueuePanelState._run.closure#1.closure#2",
+              "lib/pages/player_queue_panel.dart::_PlayerQueuePanelState._run.closure#1.closure#2",
             );
 
             _error = error is XmlyException ? error.message : '队列操作失败，请重试';
@@ -210,7 +190,7 @@ class _QueuePanelState extends State<_QueuePanel> {
         if (mounted)
           setState(() {
             AppLog.instance.trace(
-              "lib/pages/player_queue_panel.dart::_QueuePanelState._run.closure#1.closure#3",
+              "lib/pages/player_queue_panel.dart::_PlayerQueuePanelState._run.closure#1.closure#3",
             );
             _busy = false;
           });
@@ -220,35 +200,34 @@ class _QueuePanelState extends State<_QueuePanel> {
 
   Future<void> _clear() async {
     AppLog.instance.trace(
-      "lib/pages/player_queue_panel.dart::_QueuePanelState._clear",
+      "lib/pages/player_queue_panel.dart::_PlayerQueuePanelState._clear",
     );
-
-    final confirmed = await showConfirmationDialog(
-      context,
-      const Text('清空播放队列？'),
-    );
-    if (confirmed && mounted) {
-      await _run(widget.runtime.player.clearQueue);
-    }
+    setState(() {
+      AppLog.instance.trace(
+        "lib/pages/player_queue_panel.dart::_PlayerQueuePanelState._clear.closure#1",
+      );
+      _confirmClear = false;
+    });
+    await _run(widget.runtime.player.clearQueue);
   }
 
   @override
   Widget build(BuildContext context) {
     AppLog.instance.trace(
-      "lib/pages/player_queue_panel.dart::_QueuePanelState.build",
+      "lib/pages/player_queue_panel.dart::_PlayerQueuePanelState.build",
     );
     return SafeArea(
       top: false,
       child: LayoutBuilder(
         builder: (context, constraints) {
           AppLog.instance.trace(
-            "lib/pages/player_queue_panel.dart::_QueuePanelState.build.closure#1",
+            "lib/pages/player_queue_panel.dart::_PlayerQueuePanelState.build.closure#1",
           );
           return ListenableBuilder(
             listenable: widget.runtime,
             builder: (context, _) {
               AppLog.instance.trace(
-                "lib/pages/player_queue_panel.dart::_QueuePanelState.build.closure#1.closure#1",
+                "lib/pages/player_queue_panel.dart::_PlayerQueuePanelState.build.closure#1.closure#1",
               );
 
               final player = widget.runtime.player;
@@ -266,30 +245,99 @@ class _QueuePanelState extends State<_QueuePanel> {
                       primary: false,
                       child: Column(
                         children: [
-                          ListTile(
-                            title: AdaptiveText(
-                              '${_tracks.length} 集 · ${player.queueSourceLabel}',
-                            ),
-                            subtitle: AdaptiveText(player.queueOrderLabel),
-                            trailing: TextButton(
-                              onPressed: _busy || _tracks.isEmpty
-                                  ? null
-                                  : _clear,
-                              child: const Text('清空'),
+                          Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 4),
+                            child: Row(
+                              children: [
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      AdaptiveText(
+                                        '${_tracks.length} 集 · ${player.queueSource == 'album' ? '专辑播放' : player.queueSourceLabel}',
+                                        style: Theme.of(context)
+                                            .textTheme
+                                            .bodySmall,
+                                      ),
+                                      if (player.queueSource == 'updates') ...[
+                                        const SizedBox(height: 4),
+                                        AdaptiveText(
+                                          player.queueOrderLabel,
+                                          style: Theme.of(context)
+                                              .textTheme
+                                              .bodySmall,
+                                        ),
+                                      ],
+                                    ],
+                                  ),
+                                ),
+                                IconButton(
+                                  tooltip: '回到当前播放',
+                                  onPressed: player.current == null
+                                      ? null
+                                      : _showCurrent,
+                                  icon: const Icon(
+                                    Icons.my_location_rounded,
+                                    size: 20,
+                                  ),
+                                ),
+                                TextButton(
+                                  onPressed: _busy || _tracks.isEmpty
+                                      ? null
+                                      : () {
+                                          AppLog.instance.trace(
+                                            "lib/pages/player_queue_panel.dart::_PlayerQueuePanelState.build.closure#1.closure#1.closure#1",
+                                          );
+
+                                          setState(() {
+                                            AppLog.instance.trace(
+                                              "lib/pages/player_queue_panel.dart::_PlayerQueuePanelState.build.closure#1.closure#1.closure#1.closure#1",
+                                            );
+                                            _confirmClear = true;
+                                          });
+                                        },
+                                  child: const Text('清空'),
+                                ),
+                              ],
                             ),
                           ),
+                          if (_confirmClear)
+                            Padding(
+                              padding: const EdgeInsets.symmetric(vertical: 8),
+                              child: Wrap(
+                                alignment: WrapAlignment.center,
+                                crossAxisAlignment: WrapCrossAlignment.center,
+                                spacing: 12,
+                                children: [
+                                  const Text('清空当前播放列表？'),
+                                  TextButton(
+                                    onPressed: () {
+                                      AppLog.instance.trace(
+                                        "lib/pages/player_queue_panel.dart::_PlayerQueuePanelState.build.closure#1.closure#1.closure#2",
+                                      );
+
+                                      setState(() {
+                                        AppLog.instance.trace(
+                                          "lib/pages/player_queue_panel.dart::_PlayerQueuePanelState.build.closure#1.closure#1.closure#2.closure#1",
+                                        );
+                                        _confirmClear = false;
+                                      });
+                                    },
+                                    child: const Text('保留列表'),
+                                  ),
+                                  TextButton(
+                                    onPressed: _busy ? null : _clear,
+                                    child: const Text('确认清空'),
+                                  ),
+                                ],
+                              ),
+                            ),
                           Padding(
                             padding: const EdgeInsets.symmetric(horizontal: 8),
                             child: Wrap(
                               spacing: 8,
                               children: [
-                                TextButton.icon(
-                                  onPressed: player.current == null
-                                      ? null
-                                      : _showCurrent,
-                                  icon: const Icon(Icons.my_location),
-                                  label: const Text('回到当前播放'),
-                                ),
                                 if (player.queueSource == 'album' &&
                                     player.sourceAlbumId.isNotEmpty)
                                   TextButton(
@@ -297,11 +345,11 @@ class _QueuePanelState extends State<_QueuePanel> {
                                         ? null
                                         : () {
                                             AppLog.instance.trace(
-                                              "lib/pages/player_queue_panel.dart::_QueuePanelState.build.closure#1.closure#1.closure#1",
+                                              "lib/pages/player_queue_panel.dart::_PlayerQueuePanelState.build.closure#1.closure#1.closure#3",
                                             );
                                             _run(() {
                                               AppLog.instance.trace(
-                                                "lib/pages/player_queue_panel.dart::_QueuePanelState.build.closure#1.closure#1.closure#1.closure#1",
+                                                "lib/pages/player_queue_panel.dart::_PlayerQueuePanelState.build.closure#1.closure#1.closure#3.closure#1",
                                               );
                                               return player.refreshAlbumTail(
                                                 player.sourceAlbumId,
@@ -337,6 +385,7 @@ class _QueuePanelState extends State<_QueuePanel> {
                         : Scrollbar(
                             controller: _scroll,
                             child: ReorderableListView.builder(
+                              key: const ValueKey('playerQueueScroll'),
                               scrollController: _scroll,
                               padding: EdgeInsets.zero,
                               itemExtent: _rowExtent,
@@ -344,25 +393,31 @@ class _QueuePanelState extends State<_QueuePanel> {
                               buildDefaultDragHandles: false,
                               onReorderItem: (from, to) {
                                 AppLog.instance.trace(
-                                  "lib/pages/player_queue_panel.dart::_QueuePanelState.build.closure#1.closure#1.closure#2",
+                                  "lib/pages/player_queue_panel.dart::_PlayerQueuePanelState.build.closure#1.closure#1.closure#4",
                                 );
 
                                 _run(() {
                                   AppLog.instance.trace(
-                                    "lib/pages/player_queue_panel.dart::_QueuePanelState.build.closure#1.closure#1.closure#2.closure#1",
+                                    "lib/pages/player_queue_panel.dart::_PlayerQueuePanelState.build.closure#1.closure#1.closure#4.closure#1",
                                   );
                                   return player.moveQueueItem(from, to);
                                 });
                               },
                               itemBuilder: (context, index) {
                                 AppLog.instance.trace(
-                                  "lib/pages/player_queue_panel.dart::_QueuePanelState.build.closure#1.closure#1.closure#3",
+                                  "lib/pages/player_queue_panel.dart::_PlayerQueuePanelState.build.closure#1.closure#1.closure#5",
                                 );
 
                                 final track = _tracks[index];
                                 return ListTile(
                                   key: ValueKey('queue:$index:${track.id}'),
                                   selected: index == player.cursor,
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(12),
+                                  ),
+                                  selectedTileColor: Theme.of(context)
+                                      .colorScheme
+                                      .surfaceContainerHigh,
                                   minTileHeight: _rowExtent,
                                   minLeadingWidth: 32,
                                   horizontalTitleGap: 12,
@@ -402,12 +457,11 @@ class _QueuePanelState extends State<_QueuePanel> {
                                       ? null
                                       : () {
                                           AppLog.instance.trace(
-                                            "lib/pages/player_queue_panel.dart::_QueuePanelState.build.closure#1.closure#1.closure#3.closure#1",
+                                            "lib/pages/player_queue_panel.dart::_PlayerQueuePanelState.build.closure#1.closure#1.closure#5.closure#1",
                                           );
-
                                           _run(() {
                                             AppLog.instance.trace(
-                                              "lib/pages/player_queue_panel.dart::_QueuePanelState.build.closure#1.closure#1.closure#3.closure#1.closure#1",
+                                              "lib/pages/player_queue_panel.dart::_PlayerQueuePanelState.build.closure#1.closure#1.closure#5.closure#1.closure#1",
                                             );
                                             return player.playQueueItem(index);
                                           });
@@ -423,11 +477,11 @@ class _QueuePanelState extends State<_QueuePanel> {
                                             ? null
                                             : () {
                                                 AppLog.instance.trace(
-                                                  "lib/pages/player_queue_panel.dart::_QueuePanelState.build.closure#1.closure#1.closure#3.closure#2",
+                                                  "lib/pages/player_queue_panel.dart::_PlayerQueuePanelState.build.closure#1.closure#1.closure#5.closure#2",
                                                 );
                                                 _run(() {
                                                   AppLog.instance.trace(
-                                                    "lib/pages/player_queue_panel.dart::_QueuePanelState.build.closure#1.closure#1.closure#3.closure#2.closure#1",
+                                                    "lib/pages/player_queue_panel.dart::_PlayerQueuePanelState.build.closure#1.closure#1.closure#5.closure#2.closure#1",
                                                   );
                                                   return player.playNext(track);
                                                 });
@@ -440,11 +494,11 @@ class _QueuePanelState extends State<_QueuePanel> {
                                             ? null
                                             : () {
                                                 AppLog.instance.trace(
-                                                  "lib/pages/player_queue_panel.dart::_QueuePanelState.build.closure#1.closure#1.closure#3.closure#3",
+                                                  "lib/pages/player_queue_panel.dart::_PlayerQueuePanelState.build.closure#1.closure#1.closure#5.closure#3",
                                                 );
                                                 _run(() {
                                                   AppLog.instance.trace(
-                                                    "lib/pages/player_queue_panel.dart::_QueuePanelState.build.closure#1.closure#1.closure#3.closure#3.closure#1",
+                                                    "lib/pages/player_queue_panel.dart::_PlayerQueuePanelState.build.closure#1.closure#1.closure#5.closure#3.closure#1",
                                                   );
                                                   return player.removeQueueItem(
                                                     index,

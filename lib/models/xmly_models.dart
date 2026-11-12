@@ -381,6 +381,8 @@ class Track {
     AppLog.instance.trace("lib/models/xmly_models.dart::Track.factory:fromApi");
 
     final duration = value['duration'];
+    // A validated catalogue position defines playback order. Preserve provider
+    // ordinal fields in raw, where they cannot override that page position.
     return Track(
       id: _text(value['trackId'] ?? value['id']),
       title: _text(value['title']),
@@ -393,7 +395,9 @@ class Track {
       albumId: _text(value['album_id'] ?? value['albumId'] ?? album?.id),
       duration: duration is num ? duration.toDouble() : 0,
       orderNo:
-          xmlyPositive(value['orderNo']) ?? xmlyPositive(value['orderNum']),
+          position ??
+          xmlyPositive(value['orderNo']) ??
+          xmlyPositive(value['orderNum']),
       episode: xmlyPositive(value['episode']),
       isPaid: _flag(value['is_paid'] ?? value['isPaid']),
       isAuthorized: _flag(value['isAuthorized']),

@@ -47,6 +47,10 @@ Future<void> main(List<String> arguments) async {
             defaultTargetPlatform == TargetPlatform.macOS ||
             defaultTargetPlatform == TargetPlatform.linux)) {
       await windowManager.ensureInitialized();
+      if (defaultTargetPlatform == TargetPlatform.windows) {
+        await windowManager.waitUntilReadyToShow();
+        await windowManager.setTitleBarStyle(TitleBarStyle.hidden);
+      }
       await windowManager.setMinimumSize(const Size(320, 320));
     }
     runApp(SentryWidget(child: StartupPage(arguments: arguments)));

@@ -967,15 +967,16 @@ class XmlyClient {
     );
   }
 
+  static const _albumOrderKeys = ['orderNo', 'orderNum', 'order_no'];
+
   static int? _albumOrder(Map<String, dynamic> raw) {
     AppLog.instance.trace("lib/api/xmly_client.dart::XmlyClient._albumOrder");
 
     int? order;
-    for (final key in ['orderNo', 'orderNum', 'order_no']) {
+    for (final key in _albumOrderKeys) {
       final value = xmlyPositive(raw[key]);
       if (value == null) continue;
-      if (order != null && order != value)
-        throw const XmlyException('invalid_catalogue', '专辑声音序号冲突');
+      if (order != null && order != value) return null;
       order = value;
     }
     return order;
@@ -1032,8 +1033,7 @@ class XmlyClient {
     }
     final order = _albumOrder(preferred) ?? _albumOrder(other);
     if (order != null) {
-      for (final key in ['orderNo', 'orderNum', 'order_no'])
-        result[key] = order;
+      for (final key in _albumOrderKeys) result[key] = order;
     }
     for (final source in [preferred, other]) {
       final names = [
@@ -1072,6 +1072,8 @@ class XmlyClient {
       throw const XmlyException('catalogue_changed', '专辑总数不一致，请刷新重试');
     final items = <String, Map<String, dynamic>>{};
     final orders = <int, String>{};
+    final itemOrders = <String, int>{};
+    var reliableOrders = true;
     final successors = <String, Set<String>>{};
     final incoming = <String, int>{};
     void before(String left, String right) {
@@ -1082,20 +1084,16 @@ class XmlyClient {
       if (successors[left]!.add(right)) incoming[right] = incoming[right]! + 1;
     }
 
-    // Both relative orders constrain the result. Unlike officialPosition, real
-    // server ordinals may also order disjoint runs between two common anchors.
+    // Both ID sequences always constrain the result. Server ordinal aliases
+    // can disagree or restart; only consistent ordinals may join disjoint runs.
     for (final source in sources) {
       String? previous;
+      int? previousOrder;
       for (final raw in source['list'] as List) {
         final item = xmlyMap(raw);
         final id = xmlyIdentifier('${item['trackId'] ?? item['id']}');
         final existing = items[id];
         final order = _albumOrder(item);
-        if (existing != null &&
-            order != null &&
-            _albumOrder(existing) != null &&
-            _albumOrder(existing) != order)
-          throw const XmlyException('invalid_catalogue', '专辑声音序号冲突');
         items[id] = existing == null ? item : _albumMetadata(existing, item);
         successors.putIfAbsent(id, () {
           AppLog.instance.trace(
@@ -1110,25 +1108,42 @@ class XmlyClient {
           return 0;
         });
         if (order != null) {
-          if (orders.containsKey(order) && orders[order] != id)
-            throw const XmlyException('invalid_catalogue', '专辑声音序号重复');
+          if ((itemOrders.containsKey(id) && itemOrders[id] != order) ||
+              (orders.containsKey(order) && orders[order] != id) ||
+              (previousOrder != null &&
+                  (ascending
+                      ? order <= previousOrder
+                      : order >= previousOrder))) {
+            reliableOrders = false;
+          }
+          itemOrders[id] = order;
           orders[order] = id;
+          previousOrder = order;
+        } else if (_albumOrderKeys.any((key) {
+          AppLog.instance.trace(
+            "lib/api/xmly_client.dart::XmlyClient._mergeAlbumPages.closure#3",
+          );
+          return xmlyPositive(item[key]) != null;
+        })) {
+          reliableOrders = false;
         }
         if (previous != null) before(previous, id);
         previous = id;
       }
     }
-    final ordinals = orders.keys.toList()..sort();
-    if (!ascending) {
-      for (var index = ordinals.length - 1; index > 0; index--)
-        before(orders[ordinals[index]]!, orders[ordinals[index - 1]]!);
-    } else {
-      for (var index = 1; index < ordinals.length; index++)
-        before(orders[ordinals[index - 1]]!, orders[ordinals[index]]!);
+    if (reliableOrders) {
+      final ordinals = orders.keys.toList()..sort();
+      if (!ascending) {
+        for (var index = ordinals.length - 1; index > 0; index--)
+          before(orders[ordinals[index]]!, orders[ordinals[index - 1]]!);
+      } else {
+        for (var index = 1; index < ordinals.length; index++)
+          before(orders[ordinals[index - 1]]!, orders[ordinals[index]]!);
+      }
     }
     final ready = incoming.keys.where((id) {
       AppLog.instance.trace(
-        "lib/api/xmly_client.dart::XmlyClient._mergeAlbumPages.closure#3",
+        "lib/api/xmly_client.dart::XmlyClient._mergeAlbumPages.closure#4",
       );
       return incoming[id] == 0;
     }).toSet();
@@ -1202,8 +1217,6 @@ class XmlyClient {
       }
     }
     final identifiers = <String>{};
-    final orders = <int>{};
-    int? previousOrder;
     for (final raw in data['list'] as List) {
       if (raw is! Map)
         throw const XmlyException('invalid_catalogue', '专辑声音信息无效');
@@ -1216,14 +1229,6 @@ class XmlyClient {
       final id = xmlyIdentifier('${raw['trackId'] ?? raw['id'] ?? ''}');
       if (!identifiers.add(id))
         throw const XmlyException('duplicate_page', '专辑声音重复，请刷新重试');
-      final order = _albumOrder(xmlyMap(raw));
-      if (order != null) {
-        if (!orders.add(order) ||
-            (previousOrder != null &&
-                (ascending ? order <= previousOrder : order >= previousOrder)))
-          throw const XmlyException('invalid_catalogue', '专辑声音序号冲突');
-        previousOrder = order;
-      }
     }
     return data;
   }
@@ -1489,6 +1494,7 @@ class XmlyClient {
         (sameAlbum ? previous!.officialPosition : null);
     return Track.fromJson({
       ...value.toJson(),
+      if (position != null) 'order_no': position,
       'raw': {
         ...value.raw,
         if (total != null) 'totalCount': total,

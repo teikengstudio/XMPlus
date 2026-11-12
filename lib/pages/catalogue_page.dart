@@ -2,7 +2,6 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart' show listEquals;
-
 import 'package:flutter/material.dart';
 
 import '../api/xmly_catalogue.dart';
@@ -10,6 +9,8 @@ import '../api/xmly_client.dart';
 import '../api/xmly_experience.dart';
 import '../common/widgets/adaptive_text.dart';
 import '../common/widgets/logged_network_image.dart';
+import '../common/widgets/app_header.dart';
+import '../common/widgets/local_panel.dart';
 import '../models/xmly_models.dart';
 import '../services/app_log.dart';
 import '../services/app_runtime.dart';
@@ -537,6 +538,7 @@ class AlbumPageView extends StatefulWidget {
     this.initialTrack,
     this.onDownload,
     this.onPlayAlbum,
+    this.inPanel = false,
     super.key,
   });
   final AppRuntime runtime;
@@ -544,6 +546,7 @@ class AlbumPageView extends StatefulWidget {
   final Track? initialTrack;
   final TrackDownload? onDownload;
   final AlbumPlayback? onPlayAlbum;
+  final bool inPanel;
   @override
   State<AlbumPageView> createState() {
     AppLog.instance.trace(
@@ -1746,19 +1749,20 @@ class _AlbumPageViewState extends State<AlbumPageView> {
         _search.clear();
         _loadPage(1);
       case 'tags':
-        Navigator.of(context).push(
-          MaterialPageRoute<void>(
-            builder: (_) {
-              AppLog.instance.trace(
-                "lib/pages/catalogue_page.dart::_AlbumPageViewState._albumAction.closure#1",
-              );
-              return AlbumTagsPage(
-                runtime: widget.runtime,
-                albumId: widget.albumId,
-                albumTitle: _album?.title ?? '',
-              );
-            },
-          ),
+        showLocalPanel<void>(
+          context: context,
+          title: '专辑标签',
+          builder: (_) {
+            AppLog.instance.trace(
+              "lib/pages/catalogue_page.dart::_AlbumPageViewState._albumAction.closure#1",
+            );
+            return AlbumTagsPage(
+              runtime: widget.runtime,
+              albumId: widget.albumId,
+              albumTitle: _album?.title ?? '',
+              embedded: true,
+            );
+          },
         );
       case 'settings':
         showQuickPlaybackSettings(
@@ -1779,10 +1783,24 @@ class _AlbumPageViewState extends State<AlbumPageView> {
     final album = _album;
     final identity = widget.runtime.accounts.primaryAccountId;
     final automatic = widget.runtime.autoDownloads;
-    final compact = MediaQuery.sizeOf(context).width < 320;
+    final compact =
+        MediaQuery.sizeOf(context).width < (usesWindowHeader ? 640 : 320);
     final canDownload = !_busy && !widget.runtime.accounts.admissionPaused;
     return Scaffold(
-      appBar: AppBar(
+      appBar: AppHeader(
+        windowControls: !widget.inPanel,
+        leading: widget.inPanel
+            ? IconButton(
+                tooltip: '收起专辑',
+                onPressed: () {
+                  AppLog.instance.trace(
+                    "lib/pages/catalogue_page.dart::_AlbumPageViewState.build.closure#1",
+                  );
+                  Navigator.of(context).maybePop();
+                },
+                icon: const Icon(Icons.close_rounded),
+              )
+            : null,
         title: AdaptiveText(
           album?.title.isNotEmpty == true
               ? album!.title
@@ -1797,7 +1815,7 @@ class _AlbumPageViewState extends State<AlbumPageView> {
                   ? null
                   : () {
                       AppLog.instance.trace(
-                        "lib/pages/catalogue_page.dart::_AlbumPageViewState.build.closure#1",
+                        "lib/pages/catalogue_page.dart::_AlbumPageViewState.build.closure#2",
                       );
                       _albumAction('refresh');
                     },
@@ -1807,11 +1825,11 @@ class _AlbumPageViewState extends State<AlbumPageView> {
             icon: Icon(_showSearch ? Icons.search_off : Icons.search),
             onPressed: () {
               AppLog.instance.trace(
-                "lib/pages/catalogue_page.dart::_AlbumPageViewState.build.closure#2",
+                "lib/pages/catalogue_page.dart::_AlbumPageViewState.build.closure#3",
               );
               setState(() {
                 AppLog.instance.trace(
-                  "lib/pages/catalogue_page.dart::_AlbumPageViewState.build.closure#2.closure#1",
+                  "lib/pages/catalogue_page.dart::_AlbumPageViewState.build.closure#3.closure#1",
                 );
                 _showSearch = !_showSearch;
               });
@@ -1820,10 +1838,11 @@ class _AlbumPageViewState extends State<AlbumPageView> {
           if (compact)
             PopupMenuButton<String>(
               tooltip: '更多操作',
+              offset: const Offset(0, 12),
               onSelected: _albumAction,
               itemBuilder: (_) {
                 AppLog.instance.trace(
-                  "lib/pages/catalogue_page.dart::_AlbumPageViewState.build.closure#3",
+                  "lib/pages/catalogue_page.dart::_AlbumPageViewState.build.closure#4",
                 );
                 return [
                   ..._orderMenu(),
@@ -1847,11 +1866,12 @@ class _AlbumPageViewState extends State<AlbumPageView> {
           else ...[
             PopupMenuButton<String>(
               tooltip: '目录排序：${_ascending ? "最早在前" : "最新在前"}',
+              offset: const Offset(0, 12),
               icon: const Icon(Icons.sort),
               onSelected: _albumAction,
               itemBuilder: (_) {
                 AppLog.instance.trace(
-                  "lib/pages/catalogue_page.dart::_AlbumPageViewState.build.closure#4",
+                  "lib/pages/catalogue_page.dart::_AlbumPageViewState.build.closure#5",
                 );
                 return _orderMenu();
               },
@@ -1861,7 +1881,7 @@ class _AlbumPageViewState extends State<AlbumPageView> {
               icon: const Icon(Icons.edit_note),
               onPressed: () {
                 AppLog.instance.trace(
-                  "lib/pages/catalogue_page.dart::_AlbumPageViewState.build.closure#5",
+                  "lib/pages/catalogue_page.dart::_AlbumPageViewState.build.closure#6",
                 );
                 _albumAction('tags');
               },
@@ -1871,7 +1891,7 @@ class _AlbumPageViewState extends State<AlbumPageView> {
               icon: const Icon(Icons.headphones_outlined),
               onPressed: () {
                 AppLog.instance.trace(
-                  "lib/pages/catalogue_page.dart::_AlbumPageViewState.build.closure#6",
+                  "lib/pages/catalogue_page.dart::_AlbumPageViewState.build.closure#7",
                 );
                 _albumAction('settings');
               },
@@ -1884,7 +1904,7 @@ class _AlbumPageViewState extends State<AlbumPageView> {
         child: LayoutBuilder(
           builder: (context, constraints) {
             AppLog.instance.trace(
-              "lib/pages/catalogue_page.dart::_AlbumPageViewState.build.closure#7",
+              "lib/pages/catalogue_page.dart::_AlbumPageViewState.build.closure#8",
             );
 
             final padding = EdgeInsets.symmetric(
@@ -1916,7 +1936,7 @@ class _AlbumPageViewState extends State<AlbumPageView> {
                                       ? null
                                       : () {
                                           AppLog.instance.trace(
-                                            "lib/pages/catalogue_page.dart::_AlbumPageViewState.build.closure#7.closure#1",
+                                            "lib/pages/catalogue_page.dart::_AlbumPageViewState.build.closure#8.closure#1",
                                           );
 
                                           _filter = '';
@@ -1950,7 +1970,7 @@ class _AlbumPageViewState extends State<AlbumPageView> {
                                             .tasks
                                             .any((task) {
                                               AppLog.instance.trace(
-                                                "lib/pages/catalogue_page.dart::_AlbumPageViewState.build.closure#7.closure#2",
+                                                "lib/pages/catalogue_page.dart::_AlbumPageViewState.build.closure#8.closure#2",
                                               );
                                               return task.track.albumId ==
                                                       widget.albumId &&
@@ -2019,7 +2039,7 @@ class _AlbumPageViewState extends State<AlbumPageView> {
                                   ? null
                                   : (_) {
                                       AppLog.instance.trace(
-                                        "lib/pages/catalogue_page.dart::_AlbumPageViewState.build.closure#7.closure#3",
+                                        "lib/pages/catalogue_page.dart::_AlbumPageViewState.build.closure#8.closure#3",
                                       );
                                       _autoDownload(identity);
                                     },
@@ -2071,7 +2091,7 @@ class _AlbumPageViewState extends State<AlbumPageView> {
                                         ),
                                         onSubmitted: (_) {
                                           AppLog.instance.trace(
-                                            "lib/pages/catalogue_page.dart::_AlbumPageViewState.build.closure#7.closure#4",
+                                            "lib/pages/catalogue_page.dart::_AlbumPageViewState.build.closure#8.closure#4",
                                           );
                                           _filterAll();
                                         },
@@ -2094,11 +2114,11 @@ class _AlbumPageViewState extends State<AlbumPageView> {
                                   OutlinedButton.icon(
                                     onPressed: () {
                                       AppLog.instance.trace(
-                                        "lib/pages/catalogue_page.dart::_AlbumPageViewState.build.closure#7.closure#5",
+                                        "lib/pages/catalogue_page.dart::_AlbumPageViewState.build.closure#8.closure#5",
                                       );
                                       setState(() {
                                         AppLog.instance.trace(
-                                          "lib/pages/catalogue_page.dart::_AlbumPageViewState.build.closure#7.closure#5.closure#1",
+                                          "lib/pages/catalogue_page.dart::_AlbumPageViewState.build.closure#8.closure#5.closure#1",
                                         );
 
                                         if (_selectionMode) {
@@ -2121,7 +2141,7 @@ class _AlbumPageViewState extends State<AlbumPageView> {
                                     onPressed: canDownload
                                         ? () {
                                             AppLog.instance.trace(
-                                              "lib/pages/catalogue_page.dart::_AlbumPageViewState.build.closure#7.closure#6",
+                                              "lib/pages/catalogue_page.dart::_AlbumPageViewState.build.closure#8.closure#6",
                                             );
                                             _download(all: true);
                                           }
@@ -2150,7 +2170,7 @@ class _AlbumPageViewState extends State<AlbumPageView> {
                                       onPressed: canDownload
                                           ? () {
                                               AppLog.instance.trace(
-                                                "lib/pages/catalogue_page.dart::_AlbumPageViewState.build.closure#7.closure#7",
+                                                "lib/pages/catalogue_page.dart::_AlbumPageViewState.build.closure#8.closure#7",
                                               );
                                               _download();
                                             }
@@ -2160,11 +2180,11 @@ class _AlbumPageViewState extends State<AlbumPageView> {
                                     TextButton(
                                       onPressed: () {
                                         AppLog.instance.trace(
-                                          "lib/pages/catalogue_page.dart::_AlbumPageViewState.build.closure#7.closure#8",
+                                          "lib/pages/catalogue_page.dart::_AlbumPageViewState.build.closure#8.closure#8",
                                         );
                                         setState(() {
                                           AppLog.instance.trace(
-                                            "lib/pages/catalogue_page.dart::_AlbumPageViewState.build.closure#7.closure#8.closure#1",
+                                            "lib/pages/catalogue_page.dart::_AlbumPageViewState.build.closure#8.closure#8.closure#1",
                                           );
 
                                           for (final track in _visible) {
@@ -2177,7 +2197,7 @@ class _AlbumPageViewState extends State<AlbumPageView> {
                                     TextButton(
                                       onPressed: () {
                                         AppLog.instance.trace(
-                                          "lib/pages/catalogue_page.dart::_AlbumPageViewState.build.closure#7.closure#9",
+                                          "lib/pages/catalogue_page.dart::_AlbumPageViewState.build.closure#8.closure#9",
                                         );
                                         setState(_clearSelection);
                                       },
@@ -2191,11 +2211,32 @@ class _AlbumPageViewState extends State<AlbumPageView> {
                             if (_error != null)
                               Padding(
                                 padding: const EdgeInsets.all(12),
-                                child: Text(
-                                  _error!,
-                                  style: TextStyle(
-                                    color: Theme.of(context).colorScheme.error,
-                                  ),
+                                child: Column(
+                                  children: [
+                                    Text(
+                                      _error!,
+                                      style: TextStyle(
+                                        color: Theme.of(context)
+                                            .colorScheme
+                                            .error,
+                                      ),
+                                    ),
+                                    if (_album == null) ...[
+                                      const SizedBox(height: 8),
+                                      TextButton.icon(
+                                        onPressed: _busy
+                                            ? null
+                                            : () {
+                                                AppLog.instance.trace(
+                                                  "lib/pages/catalogue_page.dart::_AlbumPageViewState.build.closure#8.closure#10",
+                                                );
+                                                _loadPage(_page);
+                                              },
+                                        icon: const Icon(Icons.refresh_rounded),
+                                        label: const Text('重新加载专辑'),
+                                      ),
+                                    ],
+                                  ],
                                 ),
                               ),
                           ],
@@ -2206,7 +2247,7 @@ class _AlbumPageViewState extends State<AlbumPageView> {
                         itemCount: _visible.length,
                         itemBuilder: (_, index) {
                           AppLog.instance.trace(
-                            "lib/pages/catalogue_page.dart::_AlbumPageViewState.build.closure#7.closure#10",
+                            "lib/pages/catalogue_page.dart::_AlbumPageViewState.build.closure#8.closure#11",
                           );
 
                           final track = _visible[index];
@@ -2220,11 +2261,11 @@ class _AlbumPageViewState extends State<AlbumPageView> {
                                         ? null
                                         : (value) {
                                             AppLog.instance.trace(
-                                              "lib/pages/catalogue_page.dart::_AlbumPageViewState.build.closure#7.closure#10.closure#1",
+                                              "lib/pages/catalogue_page.dart::_AlbumPageViewState.build.closure#8.closure#11.closure#1",
                                             );
                                             setState(() {
                                               AppLog.instance.trace(
-                                                "lib/pages/catalogue_page.dart::_AlbumPageViewState.build.closure#7.closure#10.closure#1.closure#1",
+                                                "lib/pages/catalogue_page.dart::_AlbumPageViewState.build.closure#8.closure#11.closure#1.closure#1",
                                               );
                                               _select(track, value == true);
                                             });
@@ -2248,11 +2289,11 @@ class _AlbumPageViewState extends State<AlbumPageView> {
                             trailing: _menu(track),
                             onLongPress: () {
                               AppLog.instance.trace(
-                                "lib/pages/catalogue_page.dart::_AlbumPageViewState.build.closure#7.closure#10.closure#2",
+                                "lib/pages/catalogue_page.dart::_AlbumPageViewState.build.closure#8.closure#11.closure#2",
                               );
                               setState(() {
                                 AppLog.instance.trace(
-                                  "lib/pages/catalogue_page.dart::_AlbumPageViewState.build.closure#7.closure#10.closure#2.closure#1",
+                                  "lib/pages/catalogue_page.dart::_AlbumPageViewState.build.closure#8.closure#11.closure#2.closure#1",
                                 );
 
                                 _selectionMode = true;
@@ -2264,11 +2305,11 @@ class _AlbumPageViewState extends State<AlbumPageView> {
                                       ? null
                                       : () {
                                           AppLog.instance.trace(
-                                            "lib/pages/catalogue_page.dart::_AlbumPageViewState.build.closure#7.closure#10.closure#3",
+                                            "lib/pages/catalogue_page.dart::_AlbumPageViewState.build.closure#8.closure#11.closure#3",
                                           );
                                           setState(() {
                                             AppLog.instance.trace(
-                                              "lib/pages/catalogue_page.dart::_AlbumPageViewState.build.closure#7.closure#10.closure#3.closure#1",
+                                              "lib/pages/catalogue_page.dart::_AlbumPageViewState.build.closure#8.closure#11.closure#3.closure#1",
                                             );
                                             _select(
                                               track,
@@ -2278,13 +2319,13 @@ class _AlbumPageViewState extends State<AlbumPageView> {
                                         }
                                 : () {
                                     AppLog.instance.trace(
-                                      "lib/pages/catalogue_page.dart::_AlbumPageViewState.build.closure#7.closure#10.closure#4",
+                                      "lib/pages/catalogue_page.dart::_AlbumPageViewState.build.closure#8.closure#11.closure#4",
                                     );
                                     unawaited(
                                       AppLog.instance.runWithErrorScope(
                                         () async {
                                           AppLog.instance.trace(
-                                            "lib/pages/catalogue_page.dart::_AlbumPageViewState.build.closure#7.closure#10.closure#4.closure#1",
+                                            "lib/pages/catalogue_page.dart::_AlbumPageViewState.build.closure#8.closure#11.closure#4.closure#1",
                                           );
 
                                           try {
@@ -2298,7 +2339,7 @@ class _AlbumPageViewState extends State<AlbumPageView> {
                                             if (mounted)
                                               setState(() {
                                                 AppLog.instance.trace(
-                                                  "lib/pages/catalogue_page.dart::_AlbumPageViewState.build.closure#7.closure#10.closure#4.closure#1.closure#1",
+                                                  "lib/pages/catalogue_page.dart::_AlbumPageViewState.build.closure#8.closure#11.closure#4.closure#1.closure#1",
                                                 );
                                                 _error = _safeError(error);
                                               });
@@ -2310,18 +2351,19 @@ class _AlbumPageViewState extends State<AlbumPageView> {
                           );
                         },
                       ),
-                      SliverToBoxAdapter(
-                        child: _Paging(
-                          page: _page,
-                          total: _total,
-                          pageSize: _pageSize,
-                          busy: _busy,
-                          onPage: _loadPage,
+                      if (_album != null)
+                        SliverToBoxAdapter(
+                          child: _Paging(
+                            page: _page,
+                            total: _total,
+                            pageSize: _pageSize,
+                            busy: _busy,
+                            onPage: _loadPage,
+                          ),
                         ),
-                      ),
                     ].map((sliver) {
                       AppLog.instance.trace(
-                        "lib/pages/catalogue_page.dart::_AlbumPageViewState.build.closure#7.closure#11",
+                        "lib/pages/catalogue_page.dart::_AlbumPageViewState.build.closure#8.closure#12",
                       );
                       return SliverPadding(padding: padding, sliver: sliver);
                     }).toList(),

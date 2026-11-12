@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:path/path.dart' as p;
 
 import '../common/widgets/adaptive_text.dart';
+import '../common/widgets/app_header.dart';
 import '../models/xmly_models.dart';
 import '../services/app_runtime.dart';
 import '../services/app_log.dart';
@@ -635,10 +636,12 @@ class AlbumTagsPage extends StatefulWidget {
     required this.runtime,
     required this.albumId,
     required this.albumTitle,
+    this.embedded = false,
     super.key,
   });
   final AppRuntime runtime;
   final String albumId, albumTitle;
+  final bool embedded;
 
   @override
   State<AlbumTagsPage> createState() {
@@ -808,7 +811,9 @@ class _AlbumTagsPageState extends State<AlbumTagsPage> {
     return PopScope(
       canPop: !_saving,
       child: Scaffold(
-        appBar: AppBar(title: AdaptiveText(widget.albumTitle)),
+        appBar: widget.embedded
+            ? null
+            : AppHeader(title: AdaptiveText(widget.albumTitle)),
         body: Form(
           key: _form,
           child: Center(

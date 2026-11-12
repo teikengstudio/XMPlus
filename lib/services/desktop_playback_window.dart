@@ -65,8 +65,8 @@ class DesktopPlaybackWindow {
           try {
             await _normalWindow();
             saved.bounds = await windowManager.getBounds();
-            await windowManager.setMinimumSize(const Size(320, 180));
-            await windowManager.setSize(const Size(420, 220));
+            await windowManager.setMinimumSize(const Size(320, 128));
+            await windowManager.setSize(const Size(420, 140));
             await windowManager.setAlwaysOnTop(true);
             await windowManager.show();
           } catch (failure, stack) {

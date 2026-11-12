@@ -1,0 +1,4 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="XMPlus 声波">
+  <rect x="16" y="16" width="480" height="480" rx="128" fill="#FFFFFF"/>
+  <path d="M104 256h28c21 0 20-32 42-32 16 0 18 16 24 39s6 39 22 39 19-24 25-55 7-55 23-55 18 24 24 51 8 47 24 47 18-20 24-35 7-15 15-15 15 16 35 16h18" fill="none" stroke="#111111" stroke-width="26" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

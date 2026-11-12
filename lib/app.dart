@@ -24,6 +24,7 @@ import 'pages/window_close_preferences.dart';
 import 'services/app_runtime.dart';
 import 'services/app_log.dart';
 import 'services/desktop_playback_window.dart';
+import 'services/desktop_tray.dart';
 import 'storage/app_storage.dart';
 
 class MyApp extends StatefulWidget {
@@ -47,6 +48,38 @@ class _MyAppState extends State<MyApp> with WindowListener {
   final _sentryRoutes = SentryNavigatorObserver();
   final _windowActions = Lock();
   final _playbackWindow = DesktopPlaybackWindow();
+  late final _tray = DesktopTray(
+    onRestore: () {
+      AppLog.instance.trace("lib/app.dart::_MyAppState._tray.closure#1");
+      return _switchWindow(restore: true);
+    },
+    onMini: () {
+      AppLog.instance.trace("lib/app.dart::_MyAppState._tray.closure#2");
+      return _switchWindow();
+    },
+    onPlayPause: () {
+      AppLog.instance.trace("lib/app.dart::_MyAppState._tray.closure#3");
+      return _trayPlayback(() {
+        AppLog.instance.trace(
+          "lib/app.dart::_MyAppState._tray.closure#3.closure#1",
+        );
+
+        final player = widget.runtime.player;
+        return player.playing || player.loading
+            ? player.pause()
+            : player.resume();
+      });
+    },
+    onNext: () {
+      AppLog.instance.trace("lib/app.dart::_MyAppState._tray.closure#4");
+      return _trayPlayback(widget.runtime.player.next);
+    },
+    onExit: () {
+      AppLog.instance.trace("lib/app.dart::_MyAppState._tray.closure#5");
+      return onCloseRequested(explicitExit: true);
+    },
+  );
+  bool _trayPlaybackBusy = false;
   Route<void>? _miniRoute;
   Route<dynamic>? _closeDialog;
   Future<void>? _closeWork;
@@ -72,6 +105,57 @@ class _MyAppState extends State<MyApp> with WindowListener {
       windowManager.addListener(this);
       unawaited(windowManager.setPreventClose(true));
     }
+    if (Platform.isWindows) {
+      _tray.ensureReady();
+      widget.runtime.addListener(_updateTray);
+      _updateTray();
+    }
+  }
+
+  void _updateTray() {
+    AppLog.instance.trace("lib/app.dart::_MyAppState._updateTray");
+    final player = widget.runtime.player;
+    _tray.update(
+      title: player.current?.title ?? '',
+      playing: player.playing,
+      loading: player.loading,
+      enabled:
+          player.current != null &&
+          !widget.runtime.closing &&
+          !_trayPlaybackBusy,
+    );
+  }
+
+  Future<void> _trayPlayback(Future<void> Function() action) {
+    AppLog.instance.trace("lib/app.dart::_MyAppState._trayPlayback");
+    return AppLog.instance.runWithErrorScope(() async {
+      AppLog.instance.trace(
+        "lib/app.dart::_MyAppState._trayPlayback.closure#1",
+      );
+
+      if (_trayPlaybackBusy || widget.runtime.closing || !mounted) return;
+      _trayPlaybackBusy = true;
+      _updateTray();
+      try {
+        await action();
+      } catch (error, stack) {
+        if (!AppLog.instance.errorWasRecorded(error)) {
+          AppLog.instance.write(
+            AppLogLevel.error,
+            'window',
+            'Tray playback operation failed',
+            error: error,
+            stackTrace: stack,
+            promptUser: true,
+          );
+        }
+        await _revealWindow();
+        _showWindowError('播放操作未完成，请重试');
+      } finally {
+        _trayPlaybackBusy = false;
+        widget.runtime.changed();
+      }
+    });
   }
 
   @override
@@ -79,6 +163,12 @@ class _MyAppState extends State<MyApp> with WindowListener {
     AppLog.instance.trace("lib/app.dart::_MyAppState.onWindowClose");
 
     await onCloseRequested();
+  }
+
+  @override
+  void onWindowMinimize() {
+    AppLog.instance.trace("lib/app.dart::_MyAppState.onWindowMinimize");
+    if (Platform.isWindows && _miniRoute != null) unawaited(_sendToTray());
   }
 
   Future<void> onCloseRequested({bool explicitExit = false}) {
@@ -120,6 +210,7 @@ class _MyAppState extends State<MyApp> with WindowListener {
   Future<T?> _askClose<T>(Widget dialog) async {
     AppLog.instance.trace("lib/app.dart::_MyAppState._askClose");
 
+    await _restoreMainWindow();
     final context = _navigator.currentContext;
     if (context == null) return null;
     final route = DialogRoute<T>(
@@ -154,7 +245,7 @@ class _MyAppState extends State<MyApp> with WindowListener {
       try {
         if (Platform.isWindows && !_exitPending) {
           if (_miniRoute != null) {
-            await windowManager.minimize();
+            await _hideToTray();
             if (!_exitPending) return;
           } else {
             var action = WindowCloseAction.read(widget.runtime);
@@ -193,6 +284,10 @@ class _MyAppState extends State<MyApp> with WindowListener {
             }
             if (!_exitPending && action == WindowCloseAction.mini) {
               await _enterMini();
+              if (!_exitPending) return;
+            }
+            if (!_exitPending && action == WindowCloseAction.tray) {
+              await _hideToTray();
               if (!_exitPending) return;
             }
           }
@@ -241,6 +336,7 @@ class _MyAppState extends State<MyApp> with WindowListener {
           if (confirmed != true && !widget.runtime.scheduledExit) return;
         }
         if (await widget.runtime.close()) {
+          if (Platform.isWindows) _tray.dispose();
           AppLog.instance.write(AppLogLevel.info, 'lifecycle', '应用退出');
           await AppLog.instance.close();
           if (Platform.isAndroid) {
@@ -302,6 +398,68 @@ class _MyAppState extends State<MyApp> with WindowListener {
       await windowManager.show();
       await windowManager.focus();
     }
+  }
+
+  Future<void> _hideToTray() async {
+    AppLog.instance.trace("lib/app.dart::_MyAppState._hideToTray");
+    if (!_tray.ensureReady()) throw StateError('系统托盘暂不可用');
+    _updateTray();
+    try {
+      await windowManager.hide();
+    } catch (_) {
+      await _revealWindow();
+      rethrow;
+    }
+  }
+
+  Future<void> _sendToTray() {
+    AppLog.instance.trace("lib/app.dart::_MyAppState._sendToTray");
+    return AppLog.instance.runWithErrorScope(() {
+      AppLog.instance.trace("lib/app.dart::_MyAppState._sendToTray.closure#1");
+
+      return _windowActions.synchronized(() async {
+        AppLog.instance.trace(
+          "lib/app.dart::_MyAppState._sendToTray.closure#1.closure#1",
+        );
+
+        if (!mounted || widget.runtime.closing) return;
+        try {
+          await _hideToTray();
+        } catch (error, stack) {
+          if (!AppLog.instance.errorWasRecorded(error)) {
+            AppLog.instance.write(
+              AppLogLevel.error,
+              'window',
+              'Hiding playback window to tray failed',
+              error: error,
+              stackTrace: stack,
+              promptUser: true,
+            );
+          }
+          await _revealWindow();
+          _showWindowError('暂时无法收起到托盘，请重试');
+        }
+      });
+    });
+  }
+
+  Future<void> _restoreMainWindow() async {
+    AppLog.instance.trace("lib/app.dart::_MyAppState._restoreMainWindow");
+    if (Platform.isWindows) {
+      await _playbackWindow.restore();
+      final route = _miniRoute;
+      if (route != null) {
+        _navigator.currentState?.removeRoute(route);
+        if (mounted)
+          setState(() {
+            AppLog.instance.trace(
+              "lib/app.dart::_MyAppState._restoreMainWindow.closure#1",
+            );
+            _miniRoute = null;
+          });
+      }
+    }
+    await _revealWindow();
   }
 
   void _showWindowError(String message) {
@@ -388,20 +546,10 @@ class _MyAppState extends State<MyApp> with WindowListener {
         if (!mounted || widget.runtime.closing) return;
         try {
           if (restore) {
-            await _playbackWindow.restore();
-            final route = _miniRoute;
-            if (route != null) {
-              _navigator.currentState?.removeRoute(route);
-              if (mounted)
-                setState(() {
-                  AppLog.instance.trace(
-                    "lib/app.dart::_MyAppState._switchWindow.closure#1.closure#1.closure#1",
-                  );
-                  _miniRoute = null;
-                });
-            }
+            await _restoreMainWindow();
           } else {
             await _enterMini();
+            await _revealWindow();
           }
         } catch (error, stack) {
           if (!AppLog.instance.errorWasRecorded(error)) {
@@ -430,6 +578,10 @@ class _MyAppState extends State<MyApp> with WindowListener {
     }
     widget.runtime.confirmDownload = null;
     widget.runtime.requestExit = null;
+    if (Platform.isWindows) {
+      widget.runtime.removeListener(_updateTray);
+      _tray.dispose();
+    }
     _appearance.dispose();
     _playerRoutes.dispose();
     _promptRoutes.dispose();
@@ -517,8 +669,7 @@ class _MyAppState extends State<MyApp> with WindowListener {
                             children: [
                               Expanded(child: child!),
                               if (_miniRoute == null &&
-                                  _playerRoutes.current?.settings.name !=
-                                      PlayerPanel.routeName)
+                                  !_playerRoutes.playerExpanded)
                                 SafeArea(
                                   top: false,
                                   child: ExcludeFocus(
@@ -568,6 +719,14 @@ class _MyAppState extends State<MyApp> with WindowListener {
                       unawaited(_switchWindow());
                     }
                   : null,
+              onTray: Platform.isWindows
+                  ? () {
+                      AppLog.instance.trace(
+                        "lib/app.dart::_MyAppState.build.closure#1.closure#4",
+                      );
+                      unawaited(_sendToTray());
+                    }
+                  : null,
             ),
           ),
         );
@@ -577,8 +736,21 @@ class _MyAppState extends State<MyApp> with WindowListener {
 }
 
 class _PlayerRouteObserver extends NavigatorObserver with ChangeNotifier {
+  final _routes = <Route<dynamic>>[];
   Route<dynamic>? current;
   bool _disposed = false;
+
+  bool get playerExpanded {
+    AppLog.instance.trace(
+      "lib/app.dart::_PlayerRouteObserver.playerExpanded.get",
+    );
+
+    for (final route in _routes.reversed) {
+      if (route is PageRoute)
+        return route.settings.name == PlayerPanel.routeName;
+    }
+    return false;
+  }
 
   void _changed(Route<dynamic>? route) {
     AppLog.instance.trace("lib/app.dart::_PlayerRouteObserver._changed");
@@ -597,6 +769,7 @@ class _PlayerRouteObserver extends NavigatorObserver with ChangeNotifier {
   void didPush(Route<dynamic> route, Route<dynamic>? previousRoute) {
     AppLog.instance.trace("lib/app.dart::_PlayerRouteObserver.didPush");
 
+    _routes.add(route);
     _changed(route);
   }
 
@@ -604,6 +777,7 @@ class _PlayerRouteObserver extends NavigatorObserver with ChangeNotifier {
   void didPop(Route<dynamic> route, Route<dynamic>? previousRoute) {
     AppLog.instance.trace("lib/app.dart::_PlayerRouteObserver.didPop");
 
+    _routes.remove(route);
     _changed(previousRoute);
   }
 
@@ -611,14 +785,25 @@ class _PlayerRouteObserver extends NavigatorObserver with ChangeNotifier {
   void didReplace({Route<dynamic>? newRoute, Route<dynamic>? oldRoute}) {
     AppLog.instance.trace("lib/app.dart::_PlayerRouteObserver.didReplace");
 
-    if (identical(current, oldRoute)) _changed(newRoute);
+    final index = oldRoute == null ? -1 : _routes.indexOf(oldRoute);
+    if (index >= 0) {
+      if (newRoute == null) {
+        _routes.removeAt(index);
+      } else {
+        _routes[index] = newRoute;
+      }
+    } else if (newRoute != null) {
+      _routes.add(newRoute);
+    }
+    _changed(identical(current, oldRoute) ? newRoute : current);
   }
 
   @override
   void didRemove(Route<dynamic> route, Route<dynamic>? previousRoute) {
     AppLog.instance.trace("lib/app.dart::_PlayerRouteObserver.didRemove");
 
-    if (identical(current, route)) _changed(previousRoute);
+    _routes.remove(route);
+    _changed(identical(current, route) ? previousRoute : current);
   }
 
   @override
