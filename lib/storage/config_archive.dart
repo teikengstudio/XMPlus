@@ -266,7 +266,7 @@ class ConfigArchive {
       if (account != null) '现有未确认扣时和已确认收据不会删除',
       if (account?['downloads'] != null ||
           (payload['library.json'] as Map?)?['downloads'] != null)
-        '恢复下载记录及整专辑分页进度，任务保持暂停并需重新确认',
+        '恢复下载记录及整专辑分页进度，未完成任务保持暂停并需重新确认',
       if (account != null && !sameOrigin) '其他资料目录的下载收据仅作历史，不抵扣新下载',
       if ((payload['setting.json'] as Map?)?.containsKey('autoDownloads') ==
           true)
@@ -323,7 +323,9 @@ class ConfigArchive {
         : library;
     final downloads = downloadData?['downloads'] as List?;
     for (final task in downloads ?? const []) {
-      final wasProcessing = (task as Map)['state'] == 'processing';
+      final originalState = (task as Map)['state'];
+      if (originalState == 'cancelled') continue;
+      final wasProcessing = originalState == 'processing';
       task['state'] = 'paused';
       task['userConfirmed'] = false;
       task['needsConfirmation'] = true;
@@ -334,7 +336,11 @@ class ConfigArchive {
     }
     final albumJobs = downloadData?['downloadAlbums'] as List?;
     for (final job in albumJobs ?? const []) {
-      (job as Map)['state'] = 'paused';
+      final originalState = (job as Map)['state'];
+      if (originalState == 'completed' || originalState == 'cancelled') {
+        continue;
+      }
+      job['state'] = 'paused';
       job['error'] = null;
     }
     final queue =

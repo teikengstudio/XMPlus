@@ -272,7 +272,7 @@ class _AccountPageState extends State<AccountPage> {
     if (!await _confirm(
           context,
           '移除此账号',
-          '移除账号 $uid 的登录信息？已有扣时记录会保留。移除主账号时会自动选取剩余账号作为主账号。',
+          '移除账号 $uid 的登录信息？已有扣时记录会保留。移除主账号时会优先选取剩余可用账号作为主账号。',
           action: '移除',
         ) ||
         !mounted)
@@ -337,14 +337,24 @@ class _AccountPageState extends State<AccountPage> {
             AdaptiveText('设备 $hint'),
             const SizedBox(height: 8),
             if (missing) ...[
-              const Text('安全凭据缺失，请重新导入原账号。已有资料、下载和扣时记录均已保留。'),
+              const Text('安全凭据缺失，可重新导入原账号或移除登录记录。已有资料、下载和扣时记录均已保留。'),
               const SizedBox(height: 8),
-              OutlinedButton.icon(
-                onPressed: _busy
-                    ? null
-                    : () => _openImport(recoveryIdentity: identity),
-                icon: const Icon(Icons.key),
-                label: const Text('恢复此账号登录'),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  OutlinedButton.icon(
+                    onPressed: _busy
+                        ? null
+                        : () => _openImport(recoveryIdentity: identity),
+                    icon: const Icon(Icons.key),
+                    label: const Text('恢复此账号登录'),
+                  ),
+                  TextButton(
+                    onPressed: _busy ? null : () => _remove(identity, uid),
+                    child: const Text('移除'),
+                  ),
+                ],
               ),
             ] else ...[
               Text(

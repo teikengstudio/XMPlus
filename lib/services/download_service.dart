@@ -1503,6 +1503,9 @@ class DownloadService {
       // before taking the final snapshot so late worker updates cannot undo it.
       await Future.wait(workers.map((worker) => worker.done));
       await _updates.synchronized(() async {
+        // A failed load leaves persisted tasks authoritative. Check under the
+        // load lock so shutdown cannot replace them with an empty snapshot.
+        if (!_loaded) return;
         final next = Map<String, DownloadTask>.from(_tasks);
         final paused = tasks.where((item) => item.active).toList();
         for (final item in paused) {

@@ -548,7 +548,8 @@ class AccountService {
   });
 
   Future<void> remove(String identity) => _accounts.synchronized(() async {
-    clientFor(identity);
+    _ensureLoaded();
+    if (!_missingCredentials.contains(identity)) clientFor(identity);
     try {
       await _prepareChange();
       await storage.transaction((state) {
@@ -566,15 +567,18 @@ class AccountService {
             )
             .toList();
         if (state['primaryAccountId'] == identity) {
-          state['primaryAccountId'] = remaining.isEmpty
-              ? null
-              : remaining.first;
+          state['primaryAccountId'] =
+              remaining
+                  .where((id) => _clients[id]?.accountAvailable == true)
+                  .firstOrNull ??
+              remaining.firstOrNull;
         }
         if (state['activeAccountId'] == identity) {
           state['activeAccountId'] = state['primaryAccountId'];
         }
       });
       final removed = _clients.remove(identity);
+      _missingCredentials.remove(identity);
       if (removed != null) {
         removed.close();
         await removed.clearUrlCache();

@@ -739,13 +739,12 @@ class PlayerService {
     final identity = client.cacheIdentity;
     final listener = accounts.activeClient;
     final revision = _seekRevision;
-    final expectedGeneration = generation;
     bool sameSource() =>
         !_closed && epoch == _epoch && identical(source, _source);
+    // Editing other queue entries does not replace this source or its progress.
     bool active() =>
         sameSource() &&
         request == _request &&
-        expectedGeneration == generation &&
         current?.id == track.id &&
         revision == _seekRevision &&
         !accounts.admissionPaused &&

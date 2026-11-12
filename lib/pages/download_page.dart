@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:path/path.dart' as p;
@@ -453,9 +454,9 @@ class _DownloadPageState extends State<DownloadPage> {
   }
 
   Future<void> _run(Future<void> Function() operation) async {
+    if (mounted) setState(() => _error = null);
     try {
       await operation();
-      if (mounted) setState(() => _error = null);
     } on XmlyException catch (error) {
       if (mounted) setState(() => _error = error.message);
     } catch (_) {
@@ -1167,137 +1168,167 @@ class _DownloadPageState extends State<DownloadPage> {
             ].join(' ').toLowerCase();
             return tokens.every(text.contains);
           }).toList();
-    return Column(
-      children: [
-        Padding(
-          padding: EdgeInsets.fromLTRB(
-            compact ? 8 : 16,
-            12,
-            compact ? 8 : 16,
-            8,
-          ),
-          child: TextField(
-            key: const ValueKey('downloadLibrarySearch'),
-            controller: _downloadQuery,
-            decoration: InputDecoration(
-              labelText: '搜索已下载',
-              hintText: '专辑、单集标题或集号',
-              prefixIcon: const Icon(Icons.search),
-              suffixIcon: ValueListenableBuilder<TextEditingValue>(
-                valueListenable: _downloadQuery,
-                builder: (context, value, _) => value.text.isEmpty
-                    ? const SizedBox.shrink()
-                    : IconButton(
-                        tooltip: '清除本地搜索',
-                        icon: const Icon(Icons.clear),
-                        onPressed: () {
-                          _downloadQuery.clear();
-                          _searchDownloads('', immediately: true);
-                        },
+    final visible = query.isEmpty ? completed : matches;
+    return LayoutBuilder(
+      builder: (context, constraints) => Column(
+        children: [
+          ConstrainedBox(
+            constraints: BoxConstraints(
+              maxHeight: math.max(0, constraints.maxHeight - 96),
+            ),
+            child: SingleChildScrollView(
+              primary: false,
+              child: Column(
+                children: [
+                  Padding(
+                    padding: EdgeInsets.fromLTRB(
+                      compact ? 8 : 16,
+                      12,
+                      compact ? 8 : 16,
+                      8,
+                    ),
+                    child: TextField(
+                      key: const ValueKey('downloadLibrarySearch'),
+                      controller: _downloadQuery,
+                      decoration: InputDecoration(
+                        labelText: '搜索已下载',
+                        hintText: '专辑、单集标题或集号',
+                        prefixIcon: const Icon(Icons.search),
+                        suffixIcon: ValueListenableBuilder<TextEditingValue>(
+                          valueListenable: _downloadQuery,
+                          builder: (context, value, _) => value.text.isEmpty
+                              ? const SizedBox.shrink()
+                              : IconButton(
+                                  tooltip: '清除本地搜索',
+                                  icon: const Icon(Icons.clear),
+                                  onPressed: () {
+                                    _downloadQuery.clear();
+                                    _searchDownloads('', immediately: true);
+                                  },
+                                ),
+                        ),
                       ),
-              ),
-            ),
-            textInputAction: TextInputAction.search,
-            onChanged: _searchDownloads,
-            onSubmitted: (text) => _searchDownloads(text, immediately: true),
-          ),
-        ),
-        Wrap(
-          spacing: 8,
-          runSpacing: 8,
-          crossAxisAlignment: WrapCrossAlignment.center,
-          children: [
-            OutlinedButton.icon(
-              onPressed:
-                  _refreshingAvailability || _deletingAudio || completed.isEmpty
-                  ? null
-                  : () => _run(_recheckAvailability),
-              icon: _refreshingAvailability
-                  ? const SizedBox.square(
-                      dimension: 18,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  : const Icon(Icons.refresh),
-              label: Text(_refreshingAvailability ? '正在检查' : '刷新本地文件'),
-            ),
-            if (!_selectingDownloads)
-              OutlinedButton.icon(
-                onPressed: _deletingAudio || completed.isEmpty
-                    ? null
-                    : () => setState(() => _selectingDownloads = true),
-                icon: const Icon(Icons.checklist),
-                label: const Text('多选音频'),
-              )
-            else ...[
-              Text('已选 ${_selectedDownloads.length} 条'),
-              TextButton(
-                onPressed: _deletingAudio
-                    ? null
-                    : () => _selectAudio(completed),
-                child: const Text('全选／取消全选'),
-              ),
-              FilledButton.icon(
-                onPressed: _deletingAudio || _selectedDownloads.isEmpty
-                    ? null
-                    : () => _run(_deleteSelectedAudio),
-                icon: const Icon(Icons.delete_outline),
-                label: const Text('删除所选音频'),
-              ),
-              TextButton(
-                onPressed: _deletingAudio
-                    ? null
-                    : () => setState(() {
-                        _selectingDownloads = false;
-                        _selectedDownloads.clear();
-                      }),
-                child: const Text('取消多选'),
-              ),
-            ],
-          ],
-        ),
-        if (_deletingAudio) ...[
-          LinearProgressIndicator(
-            value: _deletionTotal == 0 ? null : _deletionDone / _deletionTotal,
-          ),
-          Text(
-            _deletionTotal == 0
-                ? '正在准备删除'
-                : '正在处理 $_deletionDone / $_deletionTotal 个路径',
-          ),
-        ],
-        if (query.isNotEmpty)
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-            child: Text(
-              '本地下载记录：匹配 ${matches.length} / 共 ${completed.length} 条',
-            ),
-          ),
-        if (query.isNotEmpty && _error != null)
-          Padding(
-            padding: const EdgeInsets.all(8),
-            child: Text(
-              _error!,
-              style: TextStyle(color: Theme.of(context).colorScheme.error),
-            ),
-          ),
-        Expanded(
-          child: query.isEmpty
-              ? _albumList(completed, downloaded: true)
-              : matches.isEmpty
-              ? const Center(child: Text('未找到匹配的本地下载记录'))
-              : Scrollbar(
-                  child: ListView.builder(
-                    key: ValueKey('downloadSearch:$query'),
-                    itemCount: matches.length,
-                    itemBuilder: (context, index) => _downloadedTrack(
-                      matches[index],
-                      compact,
-                      searchResult: true,
+                      textInputAction: TextInputAction.search,
+                      onChanged: _searchDownloads,
+                      onSubmitted: (text) =>
+                          _searchDownloads(text, immediately: true),
                     ),
                   ),
-                ),
-        ),
-      ],
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    children: [
+                      OutlinedButton.icon(
+                        onPressed:
+                            _refreshingAvailability ||
+                                _deletingAudio ||
+                                completed.isEmpty
+                            ? null
+                            : () => _run(_recheckAvailability),
+                        icon: _refreshingAvailability
+                            ? const SizedBox.square(
+                                dimension: 18,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                ),
+                              )
+                            : const Icon(Icons.refresh),
+                        label: Text(
+                          _refreshingAvailability ? '正在检查' : '刷新本地文件',
+                        ),
+                      ),
+                      if (!_selectingDownloads)
+                        OutlinedButton.icon(
+                          onPressed: _deletingAudio || visible.isEmpty
+                              ? null
+                              : () =>
+                                    setState(() => _selectingDownloads = true),
+                          icon: const Icon(Icons.checklist),
+                          label: const Text('多选音频'),
+                        )
+                      else ...[
+                        Text('已选 ${_selectedDownloads.length} 条'),
+                        TextButton(
+                          onPressed: _deletingAudio || visible.isEmpty
+                              ? null
+                              : () => _selectAudio(visible),
+                          child: Text(
+                            query.isEmpty ? '全选／取消全选' : '搜索结果全选／取消全选',
+                          ),
+                        ),
+                        FilledButton.icon(
+                          onPressed:
+                              _deletingAudio || _selectedDownloads.isEmpty
+                              ? null
+                              : () => _run(_deleteSelectedAudio),
+                          icon: const Icon(Icons.delete_outline),
+                          label: const Text('删除所选音频'),
+                        ),
+                        TextButton(
+                          onPressed: _deletingAudio
+                              ? null
+                              : () => setState(() {
+                                  _selectingDownloads = false;
+                                  _selectedDownloads.clear();
+                                }),
+                          child: const Text('取消多选'),
+                        ),
+                      ],
+                    ],
+                  ),
+                  if (_deletingAudio) ...[
+                    LinearProgressIndicator(
+                      value: _deletionTotal == 0
+                          ? null
+                          : _deletionDone / _deletionTotal,
+                    ),
+                    Text(
+                      _deletionTotal == 0
+                          ? '正在准备删除'
+                          : '正在处理 $_deletionDone / $_deletionTotal 个路径',
+                    ),
+                  ],
+                  if (query.isNotEmpty)
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+                      child: Text(
+                        '本地下载记录：匹配 ${matches.length} / 共 ${completed.length} 条',
+                      ),
+                    ),
+                  if (query.isNotEmpty && _error != null)
+                    Padding(
+                      padding: const EdgeInsets.all(8),
+                      child: Text(
+                        _error!,
+                        style: TextStyle(
+                          color: Theme.of(context).colorScheme.error,
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ),
+          Expanded(
+            child: query.isEmpty
+                ? _albumList(completed, downloaded: true)
+                : matches.isEmpty
+                ? const Center(child: Text('未找到匹配的本地下载记录'))
+                : Scrollbar(
+                    child: ListView.builder(
+                      key: ValueKey('downloadSearch:$query'),
+                      itemCount: matches.length,
+                      itemBuilder: (context, index) => _downloadedTrack(
+                        matches[index],
+                        compact,
+                        searchResult: true,
+                      ),
+                    ),
+                  ),
+          ),
+        ],
+      ),
     );
   }
 

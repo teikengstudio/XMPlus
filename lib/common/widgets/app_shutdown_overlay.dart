@@ -3,7 +3,7 @@ import 'package:flutter/services.dart';
 
 import '../../services/app_runtime.dart';
 
-/// Keeps existing routes mounted while a failed early save can still recover.
+/// Keeps routes mounted while exit or backup recovery temporarily blocks input.
 class AppShutdownOverlay extends StatelessWidget {
   const AppShutdownOverlay({
     required this.runtime,
@@ -23,8 +23,12 @@ class AppShutdownOverlay extends StatelessWidget {
     listenable: runtime,
     child: child,
     builder: (context, child) {
-      final blocked = runtime.closing;
+      final recovering =
+          !runtime.closing &&
+          (runtime.restoringBackup || runtime.restoreNeedsReload);
+      final blocked = runtime.closing || recovering;
       final error = windowError ?? runtime.lifecycleError;
+      final busy = recovering ? runtime.restoringBackup : error == null;
       return Stack(
         fit: StackFit.expand,
         children: [
@@ -54,19 +58,38 @@ class AppShutdownOverlay extends StatelessWidget {
                           mainAxisSize: MainAxisSize.min,
                           children: [
                             Text(
-                              error == null ? '正在退出…' : '退出尚未完成',
+                              recovering
+                                  ? (busy ? '正在恢复备份…' : '备份加载尚未完成')
+                                  : (busy ? '正在退出…' : '退出尚未完成'),
                               style: Theme.of(context).textTheme.titleLarge,
                             ),
                             const SizedBox(height: 16),
-                            if (error == null)
+                            if (busy)
                               const CircularProgressIndicator()
                             else ...[
-                              Text(error, textAlign: TextAlign.center),
+                              Text(
+                                error ?? '备份已保存，请重试加载或退出后重新打开应用。',
+                                textAlign: TextAlign.center,
+                              ),
                               const SizedBox(height: 16),
                               FilledButton(
-                                onPressed: onRetry,
-                                child: const Text('重试退出'),
+                                onPressed: recovering
+                                    ? () async {
+                                        try {
+                                          await runtime.reloadAfterRestore();
+                                        } catch (_) {
+                                          // Runtime keeps the error and retry
+                                          // state even if the page was closed.
+                                        }
+                                      }
+                                    : onRetry,
+                                child: Text(recovering ? '重试加载' : '重试退出'),
                               ),
+                              if (recovering)
+                                TextButton(
+                                  onPressed: onRetry,
+                                  child: const Text('退出应用'),
+                                ),
                             ],
                           ],
                         ),

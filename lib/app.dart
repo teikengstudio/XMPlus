@@ -91,12 +91,19 @@ class _MyAppState extends State<MyApp> with WindowListener {
       enabled:
           player.current != null &&
           !widget.runtime.closing &&
+          !widget.runtime.restoringBackup &&
+          !widget.runtime.restoreNeedsReload &&
           !_trayPlaybackBusy,
     );
   }
 
   Future<void> _trayPlayback(Future<void> Function() action) async {
-    if (_trayPlaybackBusy || widget.runtime.closing || !mounted) return;
+    if (_trayPlaybackBusy ||
+        widget.runtime.closing ||
+        widget.runtime.restoringBackup ||
+        widget.runtime.restoreNeedsReload ||
+        !mounted)
+      return;
     _trayPlaybackBusy = true;
     _updateTray();
     try {
@@ -124,7 +131,9 @@ class _MyAppState extends State<MyApp> with WindowListener {
     if (!mounted) return Future.value();
     if (explicitExit ||
         widget.runtime.scheduledExit ||
-        widget.runtime.exitOnly) {
+        widget.runtime.exitOnly ||
+        widget.runtime.restoringBackup ||
+        widget.runtime.restoreNeedsReload) {
       _exitPending = true;
       // A timer can fire while a close dialog is waiting for user input.
       // Dismiss only our dialog; an explicit exit still confirms downloads.
@@ -197,6 +206,8 @@ class _MyAppState extends State<MyApp> with WindowListener {
       }
       if (!widget.runtime.exitOnly &&
           !widget.runtime.scheduledExit &&
+          !widget.runtime.restoringBackup &&
+          !widget.runtime.restoreNeedsReload &&
           widget.runtime.downloads.tasks.any((task) => task.active)) {
         final confirmed = await _askClose<bool>(
           Builder(
