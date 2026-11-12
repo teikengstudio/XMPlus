@@ -154,7 +154,7 @@ jobs:
           SENTRY_RELEASE: ${{ steps.version.outputs.release }}
           SENTRY_DIST: ${{ steps.version.outputs.dist }}
         run: >-
-          dart run sentry_dart_plugin
+          dart --disable-dart-dev --packages=.dart_tool/package_config.json tool/upload_sentry_symbols.dart
           --sentry-define=org="$SENTRY_ORG"
           --sentry-define=project="$SENTRY_PROJECT"
           --sentry-define=symbols_path=build

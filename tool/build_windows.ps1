@@ -566,7 +566,7 @@ try {
     if ($UploadSentrySymbols) {
         $env:SENTRY_RELEASE = "xmplus@$PackageVersion"
         $env:SENTRY_DIST = $PackageVersion.Split('+')[1]
-        $symbolArguments = @('run', 'sentry_dart_plugin', '--sentry-define=symbols_path=build/windows',
+        $symbolArguments = @('--disable-dart-dev', '--packages=.dart_tool/package_config.json', 'tool/upload_sentry_symbols.dart', '--sentry-define=symbols_path=build/windows',
             "--sentry-define=release=$env:SENTRY_RELEASE", "--sentry-define=dist=$env:SENTRY_DIST",
             '--sentry-define=commits=false')
         foreach ($name in @('SENTRY_ORG', 'SENTRY_PROJECT')) {
