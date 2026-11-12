@@ -45,7 +45,7 @@ jobs:
       - name: Resolve locked dependencies
         run: flutter pub get --enforce-lockfile
       - name: Check method trace coverage
-        run: dart run tool/check_method_trace.dart
+        run: dart --disable-dart-dev --packages=.dart_tool/package_config.json tool/check_method_trace.dart
       - name: Restore source-built native media executables
         uses: actions/download-artifact@v7
         with:
