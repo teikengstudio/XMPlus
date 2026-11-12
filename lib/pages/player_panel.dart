@@ -9,6 +9,7 @@ import '../api/xmly_client.dart';
 import '../api/xmly_experience.dart';
 import '../common/widgets/adaptive_text.dart';
 import '../common/widgets/app_header.dart';
+import '../common/widgets/app_tab_button.dart';
 import '../common/widgets/confirmation_dialog.dart';
 import '../common/widgets/logged_network_image.dart';
 import '../common/widgets/local_panel.dart';
@@ -1877,12 +1878,25 @@ class _PlayerPanelState extends State<PlayerPanel>
             top: false,
             child: Column(
               children: [
-                TabBar(
-                  controller: _tabs,
-                  tabs: const [
-                    Tab(text: '播放', height: 48),
-                    Tab(text: '文稿', height: 48),
-                    Tab(text: '评论', height: 48),
+                AppTabStrip(
+                  key: const ValueKey('playerContentTabs'),
+                  children: [
+                    for (final (index, label) in const [
+                      (0, '播放'),
+                      (1, '文稿'),
+                      (2, '评论'),
+                    ])
+                      AppTabButton(
+                        key: ValueKey(index),
+                        label: label,
+                        selected: _selectedPage == index,
+                        onPressed: () {
+                          AppLog.instance.trace(
+                            'lib/pages/player_panel.dart::_PlayerPanelState.build.contentTab',
+                          );
+                          _tabs.animateTo(index);
+                        },
+                      ),
                   ],
                 ),
                 Expanded(

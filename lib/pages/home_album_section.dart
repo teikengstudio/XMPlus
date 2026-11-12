@@ -152,7 +152,11 @@ class _HomeAlbumCard extends StatelessWidget {
       album.title,
       maxLines: 2,
       overflow: TextOverflow.ellipsis,
-      style: theme.textTheme.titleMedium?.copyWith(fontSize: 16, height: 1.4),
+      style: theme.textTheme.titleMedium?.copyWith(
+        fontSize: 16,
+        fontWeight: FontWeight.w600,
+        height: 1.4,
+      ),
     );
     final artist = Text(
       album.artist,
@@ -180,6 +184,9 @@ class _HomeAlbumCard extends StatelessWidget {
         clipBehavior: Clip.antiAlias,
         child: InkWell(
           onTap: onTap,
+          hoverColor: colors.primary.withValues(alpha: .045),
+          focusColor: colors.primary.withValues(alpha: .09),
+          highlightColor: colors.primary.withValues(alpha: .07),
           child: Padding(
             padding: EdgeInsets.all(ranking ? 8 : 4),
             child: ranking
@@ -229,36 +236,12 @@ class _HomeAlbumCard extends StatelessWidget {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       if (showCover) ...[
-                        Stack(
-                          children: [
-                            ClipRRect(
-                              borderRadius: BorderRadius.circular(12),
-                              child: CoverImage(
-                                uri: album.coverUrl,
-                                size: coverSize,
-                              ),
-                            ),
-                            if (stats?.score != null)
-                              Positioned(
-                                right: 8,
-                                bottom: 8,
-                                child: DecoratedBox(
-                                  decoration: BoxDecoration(
-                                    color: colors.surface.withValues(
-                                      alpha: .94,
-                                    ),
-                                    borderRadius: BorderRadius.circular(8),
-                                  ),
-                                  child: Padding(
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 8,
-                                      vertical: 4,
-                                    ),
-                                    child: _score(context),
-                                  ),
-                                ),
-                              ),
-                          ],
+                        ClipRRect(
+                          borderRadius: BorderRadius.circular(12),
+                          child: CoverImage(
+                            uri: album.coverUrl,
+                            size: coverSize,
+                          ),
                         ),
                         const SizedBox(height: 6),
                       ],
@@ -266,14 +249,24 @@ class _HomeAlbumCard extends StatelessWidget {
                       const SizedBox(height: 4),
                       artist,
                       const SizedBox(height: 4),
-                      Text(
-                        details.join(' · '),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: theme.textTheme.bodySmall?.copyWith(
-                          height: 1.4,
-                          color: colors.onSurfaceVariant,
-                        ),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              details.join(' · '),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: theme.textTheme.bodySmall?.copyWith(
+                                height: 1.4,
+                                color: colors.onSurfaceVariant,
+                              ),
+                            ),
+                          ),
+                          if (stats?.score != null) ...[
+                            const SizedBox(width: 8),
+                            _score(context),
+                          ],
+                        ],
                       ),
                     ],
                   ),
@@ -287,12 +280,28 @@ class _HomeAlbumCard extends StatelessWidget {
     AppLog.instance.trace(
       "lib/pages/home_album_section.dart::_HomeAlbumCard._score",
     );
-    return Text(
-      '${stats!.score!.toStringAsFixed(1)} 分',
-      style: Theme.of(context).textTheme.labelMedium?.copyWith(
-        height: 1.4,
-        color: Theme.of(context).colorScheme.primary,
-        fontWeight: FontWeight.w600,
+    return Semantics(
+      label: '评分 ${stats!.score!.toStringAsFixed(1)} 分',
+      child: ExcludeSemantics(
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              Icons.star_rounded,
+              size: 14,
+              color: Theme.of(context).colorScheme.primary,
+            ),
+            const SizedBox(width: 3),
+            Text(
+              stats!.score!.toStringAsFixed(1),
+              style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                height: 1.4,
+                color: Theme.of(context).colorScheme.primary,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

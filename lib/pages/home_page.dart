@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import '../api/xmly_experience.dart';
 import '../common/widgets/adaptive_text.dart';
 import '../common/widgets/app_header.dart';
+import '../common/widgets/app_tab_button.dart';
 import '../common/widgets/content_cross_fade.dart';
 import '../common/widgets/logged_network_image.dart';
 import '../models/xmly_models.dart';
@@ -454,42 +455,24 @@ class _HomePageState extends State<HomePage> {
                       if (_channels.isNotEmpty)
                         Padding(
                           padding: const EdgeInsets.only(top: 16, bottom: 4),
-                          child: SizedBox(
-                            height:
-                                36 + MediaQuery.textScalerOf(context).scale(16),
-                            child: ListView.separated(
-                              scrollDirection: Axis.horizontal,
-                              itemCount: _channels.length,
-                              separatorBuilder: (_, _) {
-                                AppLog.instance.trace(
-                                  "lib/pages/home_page.dart::_HomePageState.build.closure#1.closure#1",
-                                );
-                                return const SizedBox(width: 8);
-                              },
-                              itemBuilder: (_, index) {
-                                AppLog.instance.trace(
-                                  "lib/pages/home_page.dart::_HomePageState.build.closure#1.closure#2",
-                                );
-
-                                final channel = _channels[index];
-                                return Center(
+                          child: AppTabStrip(
+                            key: const ValueKey('homeCategoryTabs'),
+                            children: [
+                              for (final channel in _channels)
+                                AppTabButton(
                                   key: ValueKey(channel.pageId),
-                                  child: _categoryChip(
-                                    title: channel.title,
-                                    selected: channel.pageId == _pageId,
-                                    onSelected: (_) {
-                                      AppLog.instance.trace(
-                                        "lib/pages/home_page.dart::_HomePageState.build.closure#1.closure#2.closure#1",
-                                      );
-
-                                      if (channel.pageId != _pageId) {
-                                        _loadHome(channel.pageId);
-                                      }
-                                    },
-                                  ),
-                                );
-                              },
-                            ),
+                                  label: channel.title,
+                                  selected: channel.pageId == _pageId,
+                                  onPressed: () {
+                                    AppLog.instance.trace(
+                                      "lib/pages/home_page.dart::_HomePageState.build.closure#1.closure#1",
+                                    );
+                                    if (channel.pageId != _pageId) {
+                                      _loadHome(channel.pageId);
+                                    }
+                                  },
+                                ),
+                            ],
                           ),
                         ),
                       AnimatedSize(
@@ -505,23 +488,24 @@ class _HomePageState extends State<HomePage> {
                                   child: ExcludeSemantics(
                                     excluding: !tabsCurrent,
                                     child: Padding(
+                                      key: ValueKey(_tabsPageId),
                                       padding: const EdgeInsets.symmetric(
                                         vertical: 4,
                                       ),
-                                      child: Wrap(
-                                        spacing: 8,
-                                        runSpacing: 4,
+                                      child: AppTabStrip(
+                                        key: const ValueKey(
+                                          'homeSubcategoryTabs',
+                                        ),
                                         children: [
                                           for (final tab in _tabs)
-                                            _categoryChip(
+                                            AppTabButton(
                                               key: ValueKey(tab.tabId),
-                                              title: tab.title,
+                                              label: tab.title,
                                               selected: tab.tabId == _tabId,
-                                              onSelected: (_) {
+                                              onPressed: () {
                                                 AppLog.instance.trace(
                                                   "lib/pages/home_page.dart::_HomePageState.build.closure#1.closure#3",
                                                 );
-
                                                 if (tabsCurrent &&
                                                     tab.tabId != _tabId) {
                                                   _loadHome(
@@ -653,44 +637,6 @@ class _HomePageState extends State<HomePage> {
           ],
         );
       },
-    );
-  }
-
-  Widget _categoryChip({
-    Key? key,
-    required String title,
-    required bool selected,
-    required ValueChanged<bool>? onSelected,
-  }) {
-    AppLog.instance.trace(
-      "lib/pages/home_page.dart::_HomePageState._categoryChip",
-    );
-
-    final colors = Theme.of(context).colorScheme;
-    return ConstrainedBox(
-      key: key,
-      constraints: const BoxConstraints(maxWidth: 220),
-      child: ChoiceChip(
-        label: Text(title, maxLines: 1, overflow: TextOverflow.ellipsis),
-        labelStyle: TextStyle(
-          fontWeight: FontWeight.w500,
-          color: selected ? colors.onPrimaryContainer : colors.onSurfaceVariant,
-        ),
-        labelPadding: const EdgeInsets.symmetric(horizontal: 12),
-        backgroundColor: colors.surface,
-        selectedColor: colors.primaryContainer,
-        side: BorderSide.none,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        selected: selected,
-        showCheckmark: false,
-        chipAnimationStyle: ChipAnimationStyle(
-          selectAnimation: AnimationStyle(
-            duration: _motionDuration,
-            reverseDuration: _motionDuration,
-          ),
-        ),
-        onSelected: onSelected,
-      ),
     );
   }
 }
