@@ -46,6 +46,13 @@ class AudioCache {
   int? _partialBlock;
   int _partialBytes = 0;
   String? _etag, _modified;
+  String? get _rangeValidator {
+    final etag = _etag;
+    // A modification date must not override an explicitly weak entity tag.
+    if (etag != null) return etag.startsWith('W/') ? null : etag;
+    return _modified;
+  }
+
   String _format = '';
   final Stopwatch _speedClock = Stopwatch()..start();
   int _speedBytes = 0;
@@ -443,7 +450,11 @@ class AudioCache {
                   ? min(attempt, 4)
                   : max(0, min(transportRetries - 1, 4))),
         );
-        final retryAfter = rateLimited ? error.retryAfter : null;
+        final retryAfter = rateLimited
+            ? error.retryAfter
+            : error is _AudioTransportFailure
+            ? error.retryAfter
+            : null;
         var delay = retryAfter != null && retryAfter > backoff
             ? retryAfter
             : backoff;
@@ -559,17 +570,15 @@ class AudioCache {
         method: 'GET',
         url: uri.toString(),
       );
+      final validator = _validated && _blocks.isNotEmpty
+          ? _rangeValidator
+          : null;
       diagnostic.requestHeaders = {
         HttpHeaders.userAgentHeader: 'XMPlus/1.0',
         HttpHeaders.acceptHeader: 'audio/*, application/octet-stream',
         HttpHeaders.acceptEncodingHeader: 'identity',
         HttpHeaders.rangeHeader: 'bytes=$start-$end',
-        if (_validated &&
-            _blocks.isNotEmpty &&
-            (_etag != null || _modified != null))
-          HttpHeaders.ifRangeHeader: _etag != null && !_etag!.startsWith('W/')
-              ? _etag
-              : _modified,
+        if (validator != null) HttpHeaders.ifRangeHeader: validator,
       };
       _diagnostic = diagnostic;
       final request = await _whileActive(
@@ -588,13 +597,8 @@ class AudioCache {
       );
       request.headers.set(HttpHeaders.acceptEncodingHeader, 'identity');
       request.headers.set(HttpHeaders.rangeHeader, 'bytes=$start-$end');
-      if (_validated && _blocks.isNotEmpty) {
-        final validator = _etag != null && !_etag!.startsWith('W/')
-            ? _etag
-            : _modified;
-        if (validator != null)
-          request.headers.set(HttpHeaders.ifRangeHeader, validator);
-      }
+      if (validator != null)
+        request.headers.set(HttpHeaders.ifRangeHeader, validator);
       request.headers.forEach((name, values) {
         diagnostic.requestHeaders[name] = List<String>.of(values);
       });
@@ -615,10 +619,13 @@ class AudioCache {
           HttpException('HTTP ${response.statusCode}', uri: uri),
         );
       }
-      if (response.statusCode >= 500 && response.statusCode <= 599) {
+      if (retryableStatus(response.statusCode) && response.statusCode != 429) {
         throw _AudioTransportFailure(
           HttpException('HTTP ${response.statusCode}', uri: uri),
           StackTrace.current,
+          retryAfter: serverRetryAfter(
+            response.headers.value(HttpHeaders.retryAfterHeader),
+          ),
         );
       }
       if ([301, 302, 303, 307, 308].contains(response.statusCode)) {
@@ -862,10 +869,10 @@ class AudioCache {
         final oldHash = _blocks[0];
         if (oldHash != null && oldHash != sha256.convert(data).toString())
           await _reset();
-        // Without a server validator, verify every retained block before
+        // Without a strong validator, verify every retained block before
         // releasing readers. Matching block zero alone cannot prove that a
         // previously cached later range still belongs to the same audio.
-        if (!_validated && _etag == null && _modified == null) {
+        if (!_validated && _rangeValidator == null) {
           final retained = _blocks.keys.where((index) => index != 0).toList();
           for (final retainedIndex in retained) {
             await _fetchWithRetry(retainedIndex, epoch, verifyOnly: true);
@@ -1229,7 +1236,8 @@ class AudioCache {
 class _AudioTransportFailure {
   final Object error;
   final StackTrace stack;
-  const _AudioTransportFailure(this.error, this.stack);
+  final Duration? retryAfter;
+  const _AudioTransportFailure(this.error, this.stack, {this.retryAfter});
 }
 
 /// Loopback-only, capability-token HTTP facade. No URL ever exposes a disk path.
