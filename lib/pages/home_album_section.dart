@@ -31,7 +31,7 @@ class HomeAlbumSection extends StatelessWidget {
       slivers: [
         SliverToBoxAdapter(
           child: Padding(
-            padding: const EdgeInsets.only(top: 28, bottom: 16),
+            padding: const EdgeInsets.only(top: 16, bottom: 8),
             child: Text(
               section.isRanking ? '排行榜 · ${section.title}' : section.title,
               style: theme.textTheme.titleLarge?.copyWith(
@@ -48,15 +48,15 @@ class HomeAlbumSection extends StatelessWidget {
             );
 
             final width = constraints.crossAxisExtent;
-            final gap = width >= 840 ? 24.0 : 16.0;
+            final gap = width >= 840 ? 12.0 : 10.0;
             final scale = math.max(1.0, scaler.scale(16) / 16);
             final minimumWidth = section.isRanking
-                ? 320.0
+                ? 280.0
                 : width >= 720
-                ? 220.0
+                ? 180.0
                 : width >= 480
-                ? 160.0
-                : 132.0;
+                ? 148.0
+                : 124.0;
             final availableColumns = math.max(
               1,
               ((width + gap) / (minimumWidth * scale + gap)).floor(),
@@ -66,24 +66,24 @@ class HomeAlbumSection extends StatelessWidget {
                 : availableColumns;
             final cardWidth = (width - gap * (columns - 1)) / columns;
             final coverSize = section.isRanking
-                ? (width * .06).clamp(64.0, 80.0)
-                : cardWidth - 16;
+                ? (width * .05).clamp(56.0, 64.0)
+                : cardWidth - 8;
             final titleHeight = scaler.scale(16) * 1.4 * 2;
             final extent = section.isRanking
                 ? math.max(
-                    coverSize + 24,
-                    titleHeight + scaler.scale(12) * 1.4 + 34,
+                    coverSize + 16,
+                    titleHeight + scaler.scale(12) * 1.4 + 20,
                   )
-                : (showCover ? cardWidth - 16 + 12 : 0) +
+                : (showCover ? coverSize + 6 : 0) +
                       titleHeight +
                       scaler.scale(14) * 1.4 +
                       scaler.scale(12) * 1.4 +
-                      30;
+                      16;
             return SliverGrid.builder(
               gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
                 crossAxisCount: columns,
                 crossAxisSpacing: gap,
-                mainAxisSpacing: section.isRanking ? 12 : 20,
+                mainAxisSpacing: 8,
                 mainAxisExtent: extent,
               ),
               itemCount: section.albums.length,
@@ -181,7 +181,7 @@ class _HomeAlbumCard extends StatelessWidget {
         child: InkWell(
           onTap: onTap,
           child: Padding(
-            padding: EdgeInsets.all(ranking ? 12 : 8),
+            padding: EdgeInsets.all(ranking ? 8 : 4),
             child: ranking
                 ? Row(
                     children: [
@@ -202,7 +202,7 @@ class _HomeAlbumCard extends StatelessWidget {
                       ),
                       if (showCover) ...[
                         CoverImage(uri: album.coverUrl, size: coverSize),
-                        const SizedBox(width: 12),
+                        const SizedBox(width: 8),
                       ],
                       Expanded(
                         child: Column(
@@ -210,7 +210,7 @@ class _HomeAlbumCard extends StatelessWidget {
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             title,
-                            const SizedBox(height: 6),
+                            const SizedBox(height: 4),
                             Row(
                               children: [
                                 Expanded(child: artist),
@@ -260,12 +260,12 @@ class _HomeAlbumCard extends StatelessWidget {
                               ),
                           ],
                         ),
-                        const SizedBox(height: 12),
+                        const SizedBox(height: 6),
                       ],
                       SizedBox(height: titleHeight, child: title),
                       const SizedBox(height: 4),
                       artist,
-                      const SizedBox(height: 8),
+                      const SizedBox(height: 4),
                       Text(
                         details.join(' · '),
                         maxLines: 1,

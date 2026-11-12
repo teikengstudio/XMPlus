@@ -958,7 +958,8 @@ class AccountService {
             data: {'identity': identity},
           );
         }
-        clientFor(identity);
+        _ensureLoaded();
+        if (!_missingCredentials.contains(identity)) clientFor(identity);
         try {
           await _prepareChange();
           await storage.transaction((state) {
@@ -980,9 +981,14 @@ class AccountService {
                   (accounts[id] as Map)['credentialRef'] is String;
             }).toList();
             if (state['primaryAccountId'] == identity) {
-              state['primaryAccountId'] = remaining.isEmpty
-                  ? null
-                  : remaining.first;
+              state['primaryAccountId'] =
+                  remaining.where((id) {
+                    AppLog.instance.trace(
+                      "lib/services/account_service.dart::AccountService.remove.closure#1.closure#1.closure#1.closure#2",
+                    );
+                    return _clients[id]?.accountAvailable == true;
+                  }).firstOrNull ??
+                  remaining.firstOrNull;
             }
             if (state['activeAccountId'] == identity) {
               state['activeAccountId'] = state['primaryAccountId'];
@@ -995,6 +1001,7 @@ class AccountService {
             data: {'identity': identity, 'primaryIdentity': primaryAccountId},
           );
           final removed = _clients.remove(identity);
+          _missingCredentials.remove(identity);
           if (removed != null) {
             removed.close();
             await removed.clearUrlCache();

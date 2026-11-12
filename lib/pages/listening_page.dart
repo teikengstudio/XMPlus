@@ -1119,10 +1119,13 @@ class _ListeningPageState extends State<ListeningPage>
         : null;
     return ListTile(
       contentPadding: EdgeInsets.symmetric(
-        horizontal: compact ? 8 : 16,
-        vertical: 6,
+        horizontal: compact ? 8 : 12,
+        vertical: 2,
       ),
-      leading: compact ? null : CoverImage(uri: track.coverUrl, size: 56),
+      minTileHeight: 64,
+      minVerticalPadding: 4,
+      horizontalTitleGap: 12,
+      leading: compact ? null : CoverImage(uri: track.coverUrl, size: 48),
       title: AdaptiveText(track.title.isEmpty ? track.id : track.title),
       subtitle: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -1266,7 +1269,7 @@ class _ListeningPageState extends State<ListeningPage>
               final row = rows[index];
               return row is String
                   ? Padding(
-                      padding: const EdgeInsets.fromLTRB(16, 20, 16, 8),
+                      padding: const EdgeInsets.fromLTRB(12, 12, 12, 4),
                       child: AdaptiveText(
                         row,
                         style: Theme.of(context).textTheme.titleMedium,
@@ -1289,19 +1292,24 @@ class _ListeningPageState extends State<ListeningPage>
     final epoch = _accountEpoch, key = _currentKey;
     final identity = _runtime.player.libraryIdentity;
     return SizedBox(
-      height: compact ? 48 : 98 + MediaQuery.textScalerOf(context).scale(16),
+      height: compact
+          ? (MediaQuery.textScalerOf(context).scale(16) * 1.5 + 8).clamp(
+              48.0,
+              double.infinity,
+            )
+          : 68 + MediaQuery.textScalerOf(context).scale(16) * 1.5,
       child: ListView.separated(
         scrollDirection: Axis.horizontal,
         padding: EdgeInsets.symmetric(
-          horizontal: compact ? 8 : 16,
-          vertical: compact ? 0 : 8,
+          horizontal: compact ? 8 : 12,
+          vertical: compact ? 0 : 4,
         ),
         itemCount: _subscriptions.length,
         separatorBuilder: (_, _) {
           AppLog.instance.trace(
             "lib/pages/listening_page.dart::_ListeningPageState._subscriptionStrip.closure#1",
           );
-          return const SizedBox(width: 12);
+          return const SizedBox(width: 8);
         },
         itemBuilder: (_, index) {
           AppLog.instance.trace(
@@ -1310,7 +1318,7 @@ class _ListeningPageState extends State<ListeningPage>
 
           final item = _subscriptions[index];
           return SizedBox(
-            width: 82,
+            width: 72,
             child: InkWell(
               onTap: () {
                 AppLog.instance.trace(
@@ -1322,7 +1330,7 @@ class _ListeningPageState extends State<ListeningPage>
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  if (!compact) CoverImage(uri: item.album.coverUrl, size: 70),
+                  if (!compact) CoverImage(uri: item.album.coverUrl, size: 56),
                   if (!compact) const SizedBox(height: 4),
                   AdaptiveText(item.album.title),
                 ],
@@ -1382,11 +1390,6 @@ class _ListeningPageState extends State<ListeningPage>
       },
       headers: [
         if (_subscriptions.isNotEmpty) _subscriptionStrip(),
-        if (_updates.isNotEmpty)
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-            child: Text('当前 API 返回的最近 ${_updates.length} 条更新'),
-          ),
         _sectionState(0, () {
           AppLog.instance.trace(
             "lib/pages/listening_page.dart::_ListeningPageState._updatesTab.closure#4",
@@ -1452,9 +1455,16 @@ class _ListeningPageState extends State<ListeningPage>
           "lib/pages/listening_page.dart::_ListeningPageState._subscriptionsTab.closure#3",
         );
         return ListTile(
+          contentPadding: const EdgeInsets.symmetric(
+            horizontal: 12,
+            vertical: 2,
+          ),
+          minTileHeight: 64,
+          minVerticalPadding: 4,
+          horizontalTitleGap: 12,
           leading: MediaQuery.sizeOf(context).width < 320
               ? null
-              : CoverImage(uri: row.album.coverUrl, size: 56),
+              : CoverImage(uri: row.album.coverUrl, size: 48),
           title: AdaptiveText(row.album.title),
           subtitle: AdaptiveText(row.latestTitle),
           trailing: PopupMenuButton<String>(

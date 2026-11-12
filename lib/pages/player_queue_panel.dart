@@ -75,7 +75,7 @@ class _PlayerQueuePanelState extends State<PlayerQueuePanel> {
   late final _position = _positions[widget.runtime.player] ??= _QueuePosition();
   ScrollController? _scroll;
   List<Track> _tracks = const [];
-  double _rowExtent = 76;
+  double _rowExtent = 64;
   bool _busy = false;
   bool _confirmClear = false;
   String? _error;
@@ -88,7 +88,10 @@ class _PlayerQueuePanelState extends State<PlayerQueuePanel> {
 
     super.didChangeDependencies();
     final scaler = MediaQuery.textScalerOf(context);
-    _rowExtent = math.max(76, scaler.scale(16) + scaler.scale(14) + 36);
+    _rowExtent = math.max(
+      64,
+      scaler.scale(16) * 1.5 + scaler.scale(14) * 1.5 + 12,
+    );
     if (_scroll != null) return;
     _tracks = widget.runtime.player.queue;
     final anchor = _tracks.indexWhere((track) {
@@ -419,15 +422,19 @@ class _PlayerQueuePanelState extends State<PlayerQueuePanel> {
                                       .colorScheme
                                       .surfaceContainerHigh,
                                   minTileHeight: _rowExtent,
-                                  minLeadingWidth: 32,
-                                  horizontalTitleGap: 12,
+                                  contentPadding: const EdgeInsets.symmetric(
+                                    horizontal: 12,
+                                  ),
+                                  minVerticalPadding: 4,
+                                  minLeadingWidth: 48,
+                                  horizontalTitleGap: 8,
                                   leading: ReorderableDragStartListener(
                                     index: index,
                                     enabled: !_busy,
                                     child: Tooltip(
                                       message: '拖动调整顺序',
                                       child: SizedBox(
-                                        width: 32,
+                                        width: 48,
                                         height: 48,
                                         child: Icon(
                                           index == player.cursor

@@ -105,6 +105,15 @@ class UpdatePage {
   final int? nextTimeline;
 }
 
+class AlbumIntroductionData {
+  const AlbumIntroductionData({
+    required this.richText,
+    required this.recommendations,
+  });
+  final String richText;
+  final HomeSection recommendations;
+}
+
 /// Lite client surfaces and explicit official subscription/favorite mutations.
 /// No audio admission, billing, history writes, or credential-bearing caches.
 class XmlyExperience {
@@ -118,6 +127,48 @@ class XmlyExperience {
   static final _subscriptionMembership = Expando<Future<Set<String>>>(
     'subscriptionMembership',
   );
+
+  Future<AlbumIntroductionData> albumIntroduction(String albumId) async {
+    AppLog.instance.trace(
+      'lib/api/xmly_experience.dart::XmlyExperience.albumIntroduction',
+    );
+    final number = xmlyIdentifier(albumId);
+    final response = await client.request(
+      'GET',
+      XmlyClient.mobile,
+      '/fmobile-album/album/rec/detail/ts-$_stamp',
+      query: {'albumId': number, 'supportWebp': 'true'},
+      account: false,
+    );
+    final data = xmlyMap(response['data']);
+    final detail = xmlyMap(data['detail']);
+    final album = xmlyMap(data['album']);
+    if (xmlyIdentifier('${album['albumId'] ?? ''}') != number ||
+        (detail['albumId'] != null &&
+            xmlyIdentifier('${detail['albumId']}') != number)) {
+      throw const XmlyException('id_mismatch', '专辑简介与当前专辑不匹配');
+    }
+    // intro/shortIntro/shortIntroRich are server-truncated previews.
+    final rich = detail['introRich'] ?? album['introRich'];
+    if (rich is! String) {
+      throw const XmlyException('invalid_introduction', '完整专辑简介格式无效，请重试');
+    }
+    final recommendations = <Album>[];
+    final seen = <String>{number};
+    for (final row in _list(data['recAlbums'], maximum: 100)) {
+      final recommendation = Album.fromApi(xmlyMap(row));
+      if (seen.add(recommendation.id)) recommendations.add(recommendation);
+    }
+    return AlbumIntroductionData(
+      richText: rich,
+      recommendations: HomeSection(
+        title: _text(data['recAlbumsPanelTitle']).isEmpty
+            ? '相关推荐'
+            : _text(data['recAlbumsPanelTitle']),
+        albums: recommendations,
+      ),
+    );
+  }
 
   void invalidateLibrary() {
     AppLog.instance.trace(

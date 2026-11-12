@@ -165,7 +165,6 @@ class XmlyClient {
           const {
             '/revision/search',
             '/revision/track/simple',
-            '/revision/comment/queryComments',
             '/revision/comment/queryReplies',
           }.contains(path);
     if (origin == collector)
@@ -181,14 +180,17 @@ class XmlyClient {
     if (origin != mobile) return false;
     if (method == 'POST')
       return const [
-        '/fmobile-track/fmobile/track/v2/baseInfo',
-        '/lite-mobile/audi/func/v1/config',
-        '/lite-mobile/audi/func/v1/report',
-        '/lite-mobile/like/v1/like',
-        '/lite-mobile/like/v1/dislike',
-        '/subscribe/album/subscribe/delete',
-        '/subscribe/album-subscribe/and/ask-anchor-info',
-      ].contains(path);
+            '/fmobile-track/fmobile/track/v2/baseInfo',
+            '/lite-mobile/audi/func/v1/config',
+            '/lite-mobile/audi/func/v1/report',
+            '/lite-mobile/like/v1/like',
+            '/lite-mobile/like/v1/dislike',
+            '/subscribe/album/subscribe/delete',
+            '/subscribe/album-subscribe/and/ask-anchor-info',
+            '/comment-mobile/like',
+            '/comment-mobile/v1/create',
+          ].contains(path) ||
+          RegExp(r'^/mobile/comment/delete/[0-9]+$').hasMatch(path);
     return method == 'GET' &&
         (const [
               '/mobile/v1/album/track/v2',
@@ -196,6 +198,11 @@ class XmlyClient {
             ].contains(path) ||
             RegExp(r'^/mobile/track/[1-9][0-9]{0,18}$').hasMatch(path) ||
             RegExp(r'^/fmobile-album/album/track/ts-[0-9]+$').hasMatch(path) ||
+            RegExp(r'^/fmobile-album/album/rec/detail/ts-[0-9]+$')
+                .hasMatch(path) ||
+            RegExp(r'^/comment-mobile/v1/track/comment/[0-9]+$')
+                .hasMatch(path) ||
+            RegExp(r'^/fmobile-user/homePage/ts-[0-9]+$').hasMatch(path) ||
             RegExp(r'^/lite-mobile/index/v1/(?:subPages|modules)/[0-9]+$')
                 .hasMatch(path) ||
             RegExp(r'^/fsubscribe-web/subscribe/comprehensive/rank/[0-9]+$')

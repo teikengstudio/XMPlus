@@ -4,9 +4,12 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../api/xmly_client.dart';
+import '../api/xmly_profile.dart';
 import '../api/xmly_login.dart';
 import '../common/widgets/adaptive_text.dart';
 import '../common/widgets/confirmation_dialog.dart';
+import '../common/widgets/logged_network_image.dart';
 import '../api/xmly_rewards.dart';
 import '../models/xmly_models.dart';
 import '../services/account_service.dart';
@@ -155,6 +158,9 @@ class _AccountPageState extends State<AccountPage> {
   bool _busy = false;
   String? _error;
   late String _viewKey;
+  final _profiles = <String, PublicProfile>{};
+  final _profileClients = <String, XmlyClient>{};
+  final _profileRequests = <String, XmlyClient>{};
 
   bool get _autoClaim {
     AppLog.instance.trace(
@@ -193,6 +199,7 @@ class _AccountPageState extends State<AccountPage> {
     super.initState();
     _viewKey = _accountViewKey();
     widget.updates?.addListener(_changed);
+    _refreshProfiles();
   }
 
   @override
@@ -206,6 +213,13 @@ class _AccountPageState extends State<AccountPage> {
       oldWidget.updates?.removeListener(_changed);
       widget.updates?.addListener(_changed);
     }
+    if (oldWidget.accounts != widget.accounts ||
+        oldWidget.storage != widget.storage) {
+      _profiles.clear();
+      _profileClients.clear();
+      _profileRequests.clear();
+    }
+    _refreshProfiles();
     _viewKey = _accountViewKey();
   }
 
@@ -215,6 +229,7 @@ class _AccountPageState extends State<AccountPage> {
     );
 
     if (!mounted) return;
+    _refreshProfiles();
     final key = _accountViewKey();
     if (key != _viewKey)
       setState(() {
@@ -223,6 +238,96 @@ class _AccountPageState extends State<AccountPage> {
         );
         _viewKey = key;
       });
+  }
+
+  void _refreshProfiles({String? identity}) {
+    AppLog.instance.trace(
+      'lib/pages/account_page.dart::_AccountPageState._refreshProfiles',
+    );
+    if (!mounted) return;
+    final accounts = widget.accounts;
+    final ids = accounts.accountIds;
+    final visibleIds = {...ids, ...accounts.missingCredentialAccountIds};
+    _profiles.removeWhere((id, _) {
+      AppLog.instance.trace(
+        'lib/pages/account_page.dart::_AccountPageState._refreshProfiles.closure#1',
+      );
+      return !visibleIds.contains(id);
+    });
+    _profileClients.removeWhere((id, _) {
+      AppLog.instance.trace(
+        'lib/pages/account_page.dart::_AccountPageState._refreshProfiles.closure#2',
+      );
+      return !ids.contains(id);
+    });
+    _profileRequests.removeWhere((id, _) {
+      AppLog.instance.trace(
+        'lib/pages/account_page.dart::_AccountPageState._refreshProfiles.closure#3',
+      );
+      return !ids.contains(id);
+    });
+    final records = widget.storage.state['accounts'] as Map;
+    for (final id in ids) {
+      final record = records[id];
+      final uid = record is Map ? record['uid'] : null;
+      if (uid is! String) continue;
+      final client = accounts.clientFor(id);
+      if (identical(_profileClients[id], client) &&
+          (id != identity || identical(_profileRequests[id], client))) {
+        continue;
+      }
+      _profileClients[id] = client;
+      _profileRequests[id] = client;
+      unawaited(_loadProfile(id, uid, client, accounts));
+    }
+  }
+
+  Future<void> _loadProfile(
+    String identity,
+    String uid,
+    XmlyClient client,
+    AccountService accounts,
+  ) async {
+    AppLog.instance.trace(
+      'lib/pages/account_page.dart::_AccountPageState._loadProfile',
+    );
+    try {
+      final profile = await XmlyProfile(client).load(uid);
+      if (!mounted ||
+          widget.accounts != accounts ||
+          !identical(_profileRequests[identity], client)) {
+        return;
+      }
+      final record = (widget.storage.state['accounts'] as Map)[identity];
+      if (record is! Map || record['uid'] != profile.uid) return;
+      setState(() {
+        AppLog.instance.trace(
+          'lib/pages/account_page.dart::_AccountPageState._loadProfile.closure#1',
+        );
+        final previous = _profiles[identity];
+        _profiles[identity] = PublicProfile(
+          uid: profile.uid,
+          nickname: profile.nickname ?? previous?.nickname,
+          avatarUrl: profile.avatarUrl ?? previous?.avatarUrl,
+        );
+      });
+    } catch (error, stack) {
+      if (!AppLog.instance.errorWasRecorded(error)) {
+        AppLog.instance.write(
+          AppLogLevel.warning,
+          'account',
+          'Optional public account profile unavailable',
+          data: {'uid': uid},
+          error: error,
+          stackTrace: stack,
+          promptUser: false,
+        );
+      }
+    } finally {
+      if (identical(_profileRequests[identity], client)) {
+        _profileRequests.remove(identity);
+      }
+    }
   }
 
   @override
@@ -256,6 +361,7 @@ class _AccountPageState extends State<AccountPage> {
       });
       try {
         await action();
+        _refreshProfiles();
         widget.onChanged?.call();
       } catch (error, stack) {
         _recordAccountError(error, stack);
@@ -297,6 +403,7 @@ class _AccountPageState extends State<AccountPage> {
       },
     );
     if (!mounted || changed != true) return;
+    _refreshProfiles();
     widget.onChanged?.call();
     setState(() {
       AppLog.instance.trace(
@@ -326,6 +433,7 @@ class _AccountPageState extends State<AccountPage> {
       },
     );
     if (!mounted || changed != true) return;
+    _refreshProfiles();
     widget.onChanged?.call();
     setState(() {
       AppLog.instance.trace(
@@ -366,6 +474,7 @@ class _AccountPageState extends State<AccountPage> {
         return client.queryQuota();
       });
       await _storeQuota(identity, quota);
+      _refreshProfiles(identity: identity);
     });
   }
 
@@ -483,7 +592,7 @@ class _AccountPageState extends State<AccountPage> {
     if (!await _confirm(
           context,
           '移除此账号',
-          '移除账号 $uid 的登录信息？已有扣时记录会保留。移除主账号时会自动选取剩余账号作为主账号。',
+          '移除账号 $uid 的登录信息？已有扣时记录会保留。移除主账号时会优先选取剩余可用账号作为主账号。',
           action: '移除',
         ) ||
         !mounted)
@@ -535,6 +644,7 @@ class _AccountPageState extends State<AccountPage> {
     }
     final remaining = verified?.remainingSeconds;
     final checked = verified?.checkedAt.toLocal();
+    final avatar = _profiles[identity]?.avatarUrl;
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(16),
@@ -543,6 +653,29 @@ class _AccountPageState extends State<AccountPage> {
           children: [
             Row(
               children: [
+                Padding(
+                  padding: const EdgeInsets.only(right: 12),
+                  child: ClipOval(
+                    child: SizedBox.square(
+                      dimension: 40,
+                      child: avatar == null
+                          ? const Icon(Icons.account_circle_outlined, size: 40)
+                          : Image(
+                              image: LoggedNetworkImage(avatar.toString()),
+                              fit: BoxFit.cover,
+                              errorBuilder: (context, error, stack) {
+                                AppLog.instance.trace(
+                                  'lib/pages/account_page.dart::_AccountPageState._account.closure#1',
+                                );
+                                return const Icon(
+                                  Icons.account_circle_outlined,
+                                  size: 40,
+                                );
+                              },
+                            ),
+                    ),
+                  ),
+                ),
                 Expanded(
                   child: AdaptiveText(
                     '账号 $uid',
@@ -564,19 +697,36 @@ class _AccountPageState extends State<AccountPage> {
             AdaptiveText('设备 $hint'),
             const SizedBox(height: 8),
             if (missing) ...[
-              const Text('安全凭据缺失，请重新导入原账号。已有资料、下载和扣时记录均已保留。'),
+              const Text('安全凭据缺失，可重新导入原账号或移除登录记录。已有资料、下载和扣时记录均已保留。'),
               const SizedBox(height: 8),
-              OutlinedButton.icon(
-                onPressed: _busy
-                    ? null
-                    : () {
-                        AppLog.instance.trace(
-                          "lib/pages/account_page.dart::_AccountPageState._account.closure#1",
-                        );
-                        _openImport(recoveryIdentity: identity);
-                      },
-                icon: const Icon(Icons.key),
-                label: const Text('恢复此账号登录'),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  OutlinedButton.icon(
+                    onPressed: _busy
+                        ? null
+                        : () {
+                            AppLog.instance.trace(
+                              "lib/pages/account_page.dart::_AccountPageState._account.closure#1",
+                            );
+                            _openImport(recoveryIdentity: identity);
+                          },
+                    icon: const Icon(Icons.key),
+                    label: const Text('恢复此账号登录'),
+                  ),
+                  TextButton(
+                    onPressed: _busy
+                        ? null
+                        : () {
+                            AppLog.instance.trace(
+                              "lib/pages/account_page.dart::_AccountPageState._account.closure#2",
+                            );
+                            _remove(identity, uid);
+                          },
+                    child: const Text('移除'),
+                  ),
+                ],
               ),
             ] else ...[
               Text(

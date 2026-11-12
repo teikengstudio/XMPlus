@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:math' as math;
 
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -18,7 +19,6 @@ import 'catalogue_page.dart';
 import 'manuscript_reader.dart';
 import 'playback_settings_page.dart';
 import 'playback_speed_control.dart';
-import 'player_content_layout.dart';
 import 'player_queue_panel.dart';
 import 'playback_volume_control.dart';
 import 'track_comments_panel.dart';
@@ -83,7 +83,6 @@ class PlayerPanel extends StatefulWidget {
   const PlayerPanel({
     required this.runtime,
     this.expanded = false,
-    this.initialQueue = false,
     this.miniWindow = false,
     this.onExpand,
     this.navigatorKey,
@@ -92,7 +91,6 @@ class PlayerPanel extends StatefulWidget {
   static const routeName = '/player';
   final AppRuntime runtime;
   final bool expanded;
-  final bool initialQueue;
   final bool miniWindow;
   final VoidCallback? onExpand;
   final GlobalKey<NavigatorState>? navigatorKey;
@@ -106,7 +104,17 @@ class PlayerPanel extends StatefulWidget {
   }
 }
 
-class _PlayerPanelState extends State<PlayerPanel> {
+class _PlayerPanelState extends State<PlayerPanel>
+    with SingleTickerProviderStateMixin {
+  late final TabController _tabs;
+  PageController _pages = PageController(keepPage: false);
+  final _retiredPages = <PageController>{};
+  int _paneCount = 1, _secondaryPage = 1;
+  int? _pendingPaneCount;
+  bool _pageSwipe = false;
+  bool _changingPaneLayout = false;
+  final _visitedPages = <int>{0};
+  int _selectedPage = 0;
   final _keyboardFocus = FocusNode(
     debugLabel: 'Player shortcuts',
     skipTraversal: true,
@@ -118,15 +126,13 @@ class _PlayerPanelState extends State<PlayerPanel> {
   XmlyClient? _favoriteClient;
   String? _favoriteKey, _favoriteTrackId, _favoriteError;
   bool? _favorite;
+  int? _favoriteCount;
   bool _favoriteBusy = false, _favoriteMutating = false;
   int _favoriteRequest = 0, _libraryRevision = -1;
   XmlyClient? _manuscriptClient;
   String? _manuscriptKey, _manuscriptTrackId, _manuscript, _manuscriptError;
   bool _manuscriptLoading = false;
-  bool _showManuscript = false;
-  bool _showComments = false;
-  bool _showQueue = false;
-  bool _manuscriptDisplayChosen = false, _manuscriptLoaded = false;
+  bool _manuscriptLoaded = false;
   int _manuscriptRequest = 0;
   Completer<void>? _manuscriptCancelled;
   AppRuntime get _runtime {
@@ -150,35 +156,10 @@ class _PlayerPanelState extends State<PlayerPanel> {
     );
 
     super.initState();
-    _showQueue = widget.initialQueue;
+    _tabs = TabController(length: 3, vsync: this)..addListener(_pageChanged);
     _runtime.addListener(_favoriteContextChanged);
     _runtime.addListener(_manuscriptContextChanged);
     if (widget.expanded) unawaited(_refreshFavorite());
-  }
-
-  void _useDefaultManuscriptLayout() {
-    AppLog.instance.trace(
-      "lib/pages/player_panel.dart::_PlayerPanelState._useDefaultManuscriptLayout",
-    );
-
-    if (widget.expanded &&
-        !_manuscriptDisplayChosen &&
-        MediaQuery.sizeOf(context).width >= 920) {
-      _showManuscript = true;
-      _manuscriptDisplayChosen = true;
-    }
-  }
-
-  @override
-  void didChangeDependencies() {
-    AppLog.instance.trace(
-      "lib/pages/player_panel.dart::_PlayerPanelState.didChangeDependencies",
-    );
-
-    super.didChangeDependencies();
-    final wasVisible = _showManuscript;
-    _useDefaultManuscriptLayout();
-    if (!wasVisible && _showManuscript) unawaited(_refreshManuscript());
   }
 
   @override
@@ -202,7 +183,6 @@ class _PlayerPanelState extends State<PlayerPanel> {
     }
     if (oldWidget.runtime != _runtime ||
         oldWidget.expanded != widget.expanded) {
-      _useDefaultManuscriptLayout();
       unawaited(_refreshManuscript());
     }
   }
@@ -219,6 +199,12 @@ class _PlayerPanelState extends State<PlayerPanel> {
     _manuscriptCancelled?.complete();
     _manuscriptCancelled = null;
     _favoriteRequest++;
+    _pages.dispose();
+    for (final controller in _retiredPages) {
+      controller.dispose();
+    }
+    _retiredPages.clear();
+    _tabs.dispose();
     _keyboardFocus.dispose();
     super.dispose();
   }
@@ -257,6 +243,9 @@ class _PlayerPanelState extends State<PlayerPanel> {
         keyboard.isAltPressed ||
         keyboard.isMetaPressed ||
         keyboard.isShiftPressed) {
+      return KeyEventResult.ignored;
+    }
+    if (widget.expanded && _selectedPage != 0) {
       return KeyEventResult.ignored;
     }
     final player = _runtime.player;
@@ -324,7 +313,6 @@ class _PlayerPanelState extends State<PlayerPanel> {
       final trackId = _runtime.player.current?.id;
       if (!force &&
           widget.expanded &&
-          _showManuscript &&
           identical(client, _manuscriptClient) &&
           key == _manuscriptKey &&
           trackId == _manuscriptTrackId &&
@@ -346,7 +334,7 @@ class _PlayerPanelState extends State<PlayerPanel> {
         _manuscriptError = null;
         _manuscriptLoaded = false;
         _manuscriptLoading =
-            widget.expanded && _showManuscript && trackId != null;
+            widget.expanded && _manuscriptVisible && trackId != null;
       });
       if (!_manuscriptLoading) return;
       final cancelled = _manuscriptCancelled = Completer<void>();
@@ -356,7 +344,6 @@ class _PlayerPanelState extends State<PlayerPanel> {
         );
         return mounted &&
             widget.expanded &&
-            _showManuscript &&
             request == _manuscriptRequest &&
             identical(client, _runtime.client) &&
             key == _runtime.client.cacheIdentity &&
@@ -410,74 +397,147 @@ class _PlayerPanelState extends State<PlayerPanel> {
     });
   }
 
-  void _toggleManuscript() {
+  void _pageChanged() {
     AppLog.instance.trace(
-      "lib/pages/player_panel.dart::_PlayerPanelState._toggleManuscript",
+      'lib/pages/player_panel.dart::_PlayerPanelState._pageChanged',
     );
-
-    _manuscriptDisplayChosen = true;
+    if (_selectedPage == _tabs.index) return;
     setState(() {
       AppLog.instance.trace(
-        "lib/pages/player_panel.dart::_PlayerPanelState._toggleManuscript.closure#1",
+        'lib/pages/player_panel.dart::_PlayerPanelState._pageChanged.closure#1',
       );
-
-      _showManuscript = _showComments || _showQueue || !_showManuscript;
-      _showComments = false;
-      _showQueue = false;
+      _selectedPage = _tabs.index;
+      if (_selectedPage != 0) _secondaryPage = _selectedPage;
+      _visitedPages.add(_selectedPage);
     });
-    if (_showManuscript) {
-      unawaited(_refreshManuscript());
-    } else {
-      _manuscriptRequest++;
-      _manuscriptCancelled?.complete();
-      _manuscriptCancelled = null;
-      _manuscriptLoading = false;
+    if (_paneCount == 1 && !_pageSwipe && _pages.hasClients) {
+      unawaited(
+        _pages.animateToPage(
+          _selectedPage,
+          duration: MediaQuery.disableAnimationsOf(context)
+              ? Duration.zero
+              : const Duration(milliseconds: 250),
+          curve: Curves.easeOutCubic,
+        ),
+      );
     }
+    if (_manuscriptVisible) unawaited(_refreshManuscript());
   }
 
-  void _toggleComments() {
+  bool get _manuscriptVisible {
     AppLog.instance.trace(
-      "lib/pages/player_panel.dart::_PlayerPanelState._toggleComments",
+      'lib/pages/player_panel.dart::_PlayerPanelState._manuscriptVisible.get',
     );
-    setState(() {
-      AppLog.instance.trace(
-        "lib/pages/player_panel.dart::_PlayerPanelState._toggleComments.closure#1",
-      );
+    return _paneCount == 3 ||
+        (_paneCount == 2 ? _secondaryPage == 1 : _selectedPage == 1);
+  }
 
-      _showComments = !_showComments;
-      _showQueue = false;
+  void _configurePanes(int count) {
+    AppLog.instance.trace(
+      'lib/pages/player_panel.dart::_PlayerPanelState._configurePanes',
+    );
+    if (count == _paneCount) {
+      _pendingPaneCount = null;
+      return;
+    }
+    if (count == _pendingPaneCount) return;
+    _pendingPaneCount = count;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      AppLog.instance.trace(
+        'lib/pages/player_panel.dart::_PlayerPanelState._configurePanes.closure#1',
+      );
+      if (!mounted || _pendingPaneCount != count) return;
+      _pendingPaneCount = null;
+      final oldPages = _pages;
+      _changingPaneLayout = true;
+      setState(() {
+        AppLog.instance.trace(
+          'lib/pages/player_panel.dart::_PlayerPanelState._configurePanes.closure#1.closure#1',
+        );
+        _paneCount = count;
+        _pages = PageController(
+          keepPage: false,
+          viewportFraction: 1 / count,
+          initialPage: count == 1 ? _selectedPage : 0,
+        );
+        if (count >= 2) _visitedPages.add(_secondaryPage);
+        if (count == 3) _visitedPages.addAll(const [1, 2]);
+      });
+      final installedPages = _pages;
+      _retiredPages.add(oldPages);
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        AppLog.instance.trace(
+          'lib/pages/player_panel.dart::_PlayerPanelState._configurePanes.closure#1.closure#2',
+        );
+        if (mounted && identical(_pages, installedPages)) {
+          if (installedPages.hasClients) {
+            installedPages.jumpToPage(count == 1 ? _selectedPage : 0);
+          }
+          _changingPaneLayout = false;
+        }
+        if (_retiredPages.remove(oldPages)) oldPages.dispose();
+      });
+      if (_manuscriptVisible) unawaited(_refreshManuscript());
     });
   }
 
-  void _closeSideContent() {
+  void _pageSwiped(int index) {
     AppLog.instance.trace(
-      "lib/pages/player_panel.dart::_PlayerPanelState._closeSideContent",
+      'lib/pages/player_panel.dart::_PlayerPanelState._pageSwiped',
     );
-
-    setState(() {
-      AppLog.instance.trace(
-        "lib/pages/player_panel.dart::_PlayerPanelState._closeSideContent.closure#1",
-      );
-
-      _showComments = false;
-      _showQueue = false;
-      _showManuscript = false;
-      _manuscriptDisplayChosen = true;
-      _manuscriptLoading = false;
-    });
-    _manuscriptRequest++;
-    _manuscriptCancelled?.complete();
-    _manuscriptCancelled = null;
+    if (_paneCount != 1 || _changingPaneLayout || _tabs.indexIsChanging) return;
+    _pageSwipe = true;
+    _tabs.index = index;
+    _pageSwipe = false;
   }
 
-  Widget _manuscriptContent() {
+  Widget _manuscriptPage(Track? track) {
     AppLog.instance.trace(
-      "lib/pages/player_panel.dart::_PlayerPanelState._manuscriptContent",
+      'lib/pages/player_panel.dart::_PlayerPanelState._manuscriptPage',
     );
-    return ManuscriptReader(
-      key: ValueKey((_manuscriptClient, _manuscriptKey, _manuscriptTrackId)),
-      manuscript: _manuscript!,
-      showTitle: false,
+    if (track == null) return const Center(child: Text('尚未选择声音'));
+    if (_manuscriptLoading) {
+      return const Center(child: CircularProgressIndicator());
+    }
+    if (_manuscriptError != null) {
+      return Center(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(_manuscriptError!, textAlign: TextAlign.center),
+              TextButton.icon(
+                onPressed: () {
+                  AppLog.instance.trace(
+                    'lib/pages/player_panel.dart::_PlayerPanelState._manuscriptPage.closure#1',
+                  );
+                  unawaited(_refreshManuscript(force: true));
+                },
+                icon: const Icon(Icons.refresh),
+                label: const Text('重试文稿'),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+    if (_manuscript == null) {
+      return const Center(child: Text('此声音暂无文稿'));
+    }
+    return Center(
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 900),
+        child: ManuscriptReader(
+          key: ValueKey((
+            _manuscriptClient,
+            _manuscriptKey,
+            _manuscriptTrackId,
+          )),
+          manuscript: _manuscript!,
+          showTitle: false,
+        ),
+      ),
     );
   }
 
@@ -537,6 +597,7 @@ class _PlayerPanelState extends State<PlayerPanel> {
         );
 
         _favorite = null;
+        _favoriteCount = null;
         _favoriteError = null;
         _favoriteBusy = track != null && client.accountAvailable;
         _favoriteMutating = false;
@@ -652,6 +713,7 @@ class _PlayerPanelState extends State<PlayerPanel> {
           );
 
           _favorite = null;
+          _favoriteCount = null;
           _favoriteError = error is XmlyException
               ? error.message
               : '收藏操作未完成，请重试';
@@ -894,7 +956,7 @@ class _PlayerPanelState extends State<PlayerPanel> {
     });
   }
 
-  void _expand({bool queue = false}) {
+  void _expand() {
     AppLog.instance.trace(
       "lib/pages/player_panel.dart::_PlayerPanelState._expand",
     );
@@ -905,11 +967,7 @@ class _PlayerPanelState extends State<PlayerPanel> {
           AppLog.instance.trace(
             "lib/pages/player_panel.dart::_PlayerPanelState._expand.closure#1",
           );
-          return PlayerPanel(
-            runtime: _runtime,
-            expanded: true,
-            initialQueue: queue,
-          );
+          return PlayerPanel(runtime: _runtime, expanded: true);
         },
       ),
     );
@@ -958,18 +1016,21 @@ class _PlayerPanelState extends State<PlayerPanel> {
     AppLog.instance.trace(
       "lib/pages/player_panel.dart::_PlayerPanelState._queue",
     );
-    if (!widget.expanded) {
-      _expand(queue: true);
-      return;
-    }
-    setState(() {
-      AppLog.instance.trace(
-        "lib/pages/player_panel.dart::_PlayerPanelState._queue.closure#1",
-      );
-
-      _showQueue = !_showQueue;
-      _showComments = false;
-    });
+    showLocalPanel<void>(
+      context: _navigator.context,
+      title: '播放列表',
+      width: 560,
+      height: 760,
+      builder: (_) {
+        AppLog.instance.trace(
+          'lib/pages/player_panel.dart::_PlayerPanelState._queue.closure#1',
+        );
+        return PlayerQueuePanel(
+          key: ValueKey(_runtime.player),
+          runtime: _runtime,
+        );
+      },
+    );
   }
 
   Widget _cover(String? url, double size, {bool small = false}) {
@@ -1081,15 +1142,6 @@ class _PlayerPanelState extends State<PlayerPanel> {
               };
         final coverUrl = track?.coverUrl?.toString();
         final compact = MediaQuery.sizeOf(context).width < 400;
-        final queueVisible = _showQueue;
-        final commentsVisible = !queueVisible && _showComments && track != null;
-        final manuscriptVisible =
-            !queueVisible &&
-            !commentsVisible &&
-            _showManuscript &&
-            _manuscript != null;
-        final sideContentVisible =
-            queueVisible || commentsVisible || manuscriptVisible;
         final widePlayer = MediaQuery.sizeOf(context).width >= 920;
         Widget seekSlider({bool dock = false}) {
           AppLog.instance.trace(
@@ -1274,7 +1326,7 @@ class _PlayerPanelState extends State<PlayerPanel> {
                                 ),
                               ),
                               const SizedBox(width: 8),
-                              dockPlay(size: 42),
+                              dockPlay(size: 48),
                               queueButton,
                             ],
                           ),
@@ -1599,7 +1651,29 @@ class _PlayerPanelState extends State<PlayerPanel> {
           spacing: 24,
           crossAxisAlignment: WrapCrossAlignment.center,
           children: [
-            _favoriteControl(track),
+            Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                _favoriteControl(track),
+                Tooltip(
+                  message: _favoriteCount == null
+                      ? '收藏总数暂不可用'
+                      : '收藏总数 $_favoriteCount',
+                  child: Semantics(
+                    label: _favoriteCount == null
+                        ? '收藏总数暂不可用'
+                        : '收藏总数 $_favoriteCount',
+                    excludeSemantics: true,
+                    child: Text(
+                      _favoriteCount == null ? '收藏 —' : '收藏 $_favoriteCount',
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: colors.onSurfaceVariant,
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
             TextButton.icon(
               onPressed: track == null || _busy || _cancelling
                   ? null
@@ -1627,6 +1701,23 @@ class _PlayerPanelState extends State<PlayerPanel> {
                     },
               icon: const Icon(Icons.bookmark_add_outlined, size: 20),
               label: const Text('书签'),
+            ),
+            TextButton.icon(
+              onPressed: track == null || _busy || _cancelling
+                  ? null
+                  : () {
+                      AppLog.instance.trace(
+                        'lib/pages/player_panel.dart::_PlayerPanelState.build.replay',
+                      );
+                      _act(player.replay);
+                    },
+              icon: const Icon(Icons.restart_alt_rounded, size: 20),
+              label: const Text('重听'),
+            ),
+            TextButton.icon(
+              onPressed: _queue,
+              icon: const Icon(Icons.queue_music_rounded, size: 20),
+              label: const Text('播放列表'),
             ),
           ],
         );
@@ -1660,13 +1751,12 @@ class _PlayerPanelState extends State<PlayerPanel> {
             alignment: WrapAlignment.spaceBetween,
             crossAxisAlignment: WrapCrossAlignment.center,
             children: [
-              if (!compact)
-                _button(
-                  _keyHint('后退 ${settings.seekBackwardSeconds} 秒', '←'),
-                  Icons.replay_rounded,
-                  track == null ? null : player.seekBackward,
-                  size: 24,
-                ),
+              _button(
+                _keyHint('后退 ${settings.seekBackwardSeconds} 秒', '←'),
+                Icons.replay_rounded,
+                track == null ? null : player.seekBackward,
+                size: 24,
+              ),
               _button(
                 '上一集',
                 Icons.skip_previous_rounded,
@@ -1723,144 +1813,18 @@ class _PlayerPanelState extends State<PlayerPanel> {
                 track == null ? null : player.next,
                 size: 34,
               ),
-              if (!compact)
-                _button(
-                  _keyHint('前进 ${settings.seekForwardSeconds} 秒', '→'),
-                  Icons.forward_rounded,
-                  track == null ? null : player.seekForward,
-                  size: 24,
-                ),
+              _button(
+                _keyHint('前进 ${settings.seekForwardSeconds} 秒', '→'),
+                Icons.forward_rounded,
+                track == null ? null : player.seekForward,
+                size: 24,
+              ),
             ],
           ),
-        );
-        Widget sideLinks({bool tabs = false}) {
-          AppLog.instance.trace(
-            "lib/pages/player_panel.dart::_PlayerPanelState.build.closure#1.sideLinks",
-          );
-
-          Widget link({
-            required String key,
-            required String label,
-            required IconData icon,
-            required bool selected,
-            required VoidCallback? onPressed,
-          }) {
-            AppLog.instance.trace(
-              "lib/pages/player_panel.dart::_PlayerPanelState.build.closure#1.sideLinks.link",
-            );
-            return Semantics(
-              selected: selected,
-              child: TextButton.icon(
-                key: ValueKey(key),
-                onPressed: tabs && selected
-                    ? () {
-                        AppLog.instance.trace(
-                          "lib/pages/player_panel.dart::_PlayerPanelState.build.closure#1.sideLinks.link.closure#1",
-                        );
-                      }
-                    : onPressed,
-                style: TextButton.styleFrom(
-                  foregroundColor: tabs && !selected
-                      ? colors.onSurfaceVariant
-                      : null,
-                  backgroundColor: tabs && selected
-                      ? colors.surfaceContainerHighest
-                      : Colors.transparent,
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 14,
-                    vertical: 12,
-                  ),
-                ),
-                icon: Icon(icon, size: 18),
-                label: Text(label),
-              ),
-            );
-          }
-
-          return Wrap(
-            alignment: WrapAlignment.center,
-            spacing: tabs ? 4 : 12,
-            crossAxisAlignment: WrapCrossAlignment.center,
-            children: [
-              link(
-                key: 'toggleComments',
-                label: '评论',
-                icon: Icons.chat_bubble_outline_rounded,
-                selected: commentsVisible,
-                onPressed: track == null ? null : _toggleComments,
-              ),
-              if (track != null && (!_manuscriptLoaded || _manuscript != null))
-                Tooltip(
-                  message: _manuscriptError ?? '查看当前声音的官方文稿',
-                  child: link(
-                    key: 'toggleManuscript',
-                    label: _manuscriptLoading
-                        ? '读取文稿…'
-                        : _manuscriptError != null
-                        ? '重试文稿'
-                        : '文稿',
-                    icon: Icons.article_outlined,
-                    selected: manuscriptVisible,
-                    onPressed: _manuscriptLoading
-                        ? null
-                        : _manuscriptError != null
-                        ? () {
-                            AppLog.instance.trace(
-                              "lib/pages/player_panel.dart::_PlayerPanelState.build.closure#1.sideLinks.closure#1",
-                            );
-                            _refreshManuscript(force: true);
-                          }
-                        : _toggleManuscript,
-                  ),
-                ),
-              link(
-                key: 'toggleQueue',
-                label: '播放列表',
-                icon: Icons.queue_music_rounded,
-                selected: queueVisible,
-                onPressed: _queue,
-              ),
-            ],
-          );
-        }
-
-        final sideHeader = Row(
-          children: [
-            const SizedBox(width: 40),
-            Expanded(child: sideLinks(tabs: true)),
-            IconButton(
-              tooltip: queueVisible
-                  ? '收起播放列表'
-                  : commentsVisible
-                  ? '收起评论'
-                  : '收起文稿',
-              onPressed: _closeSideContent,
-              icon: const Icon(Icons.close_rounded, size: 20),
-            ),
-          ],
         );
         final footer = Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            if (widePlayer)
-              ExcludeFocus(
-                excluding: sideContentVisible,
-                child: ExcludeSemantics(
-                  excluding: sideContentVisible,
-                  child: IgnorePointer(
-                    ignoring: sideContentVisible,
-                    child: AnimatedOpacity(
-                      opacity: sideContentVisible ? 0 : 1,
-                      duration: MediaQuery.disableAnimationsOf(context)
-                          ? Duration.zero
-                          : const Duration(milliseconds: 180),
-                      child: sideLinks(),
-                    ),
-                  ),
-                ),
-              )
-            else if (!sideContentVisible)
-              sideLinks(),
             if (sleep != null)
               TextButton(
                 onPressed: () {
@@ -1902,332 +1866,212 @@ class _PlayerPanelState extends State<PlayerPanel> {
             title: const Text('正在收听'),
             centerTitle: true,
             actions: [
-              PopupMenuButton<String>(
-                tooltip: '更多播放操作',
-                offset: const Offset(0, 12),
-                icon: const Icon(Icons.more_horiz),
-                onSelected: (value) {
-                  AppLog.instance.trace(
-                    "lib/pages/player_panel.dart::_PlayerPanelState.build.closure#1.closure#8",
-                  );
-
-                  switch (value) {
-                    case 'settings':
-                      _settings();
-                    case 'comments':
-                      if (track != null) _toggleComments();
-                    case 'album':
-                      if (track != null) _openAlbum(track.albumId);
-                    case 'replay':
-                      _act(player.replay);
-                    case 'local':
-                      _act(player.switchToLocal);
-                    case 'backward':
-                      _act(player.seekBackward);
-                    case 'forward':
-                      _act(player.seekForward);
-                  }
-                },
-                itemBuilder: (_) {
-                  AppLog.instance.trace(
-                    "lib/pages/player_panel.dart::_PlayerPanelState.build.closure#1.closure#9",
-                  );
-                  return [
-                    const PopupMenuItem(value: 'settings', child: Text('播放设置')),
-                    if (track != null)
-                      PopupMenuItem(
-                        value: 'comments',
-                        child: Text(commentsVisible ? '收起评论' : '查看评论'),
-                      ),
-                    if (track?.albumId.isNotEmpty == true)
-                      const PopupMenuItem(value: 'album', child: Text('查看专辑')),
-                    PopupMenuItem(
-                      value: 'replay',
-                      enabled: track != null && !_busy,
-                      child: const Text('从头重听'),
-                    ),
-                    if (compact) ...[
-                      PopupMenuItem(
-                        value: 'backward',
-                        enabled: track != null && !_busy,
-                        child: Text(
-                          _keyHint('后退 ${settings.seekBackwardSeconds} 秒', '←'),
-                        ),
-                      ),
-                      PopupMenuItem(
-                        value: 'forward',
-                        enabled: track != null && !_busy,
-                        child: Text(
-                          _keyHint('前进 ${settings.seekForwardSeconds} 秒', '→'),
-                        ),
-                      ),
-                    ],
-                    if (track != null &&
-                        player.sourceKind != 'local' &&
-                        _runtime.downloads.tasks.any((task) {
-                          AppLog.instance.trace(
-                            "lib/pages/player_panel.dart::_PlayerPanelState.build.closure#1.closure#9.closure#1",
-                          );
-                          return task.track.id == track.id &&
-                              task.state.name == 'completed';
-                        }))
-                      PopupMenuItem(
-                        value: 'local',
-                        enabled: !_busy,
-                        child: const Text('切换本地文件'),
-                      ),
-                  ];
-                },
+              IconButton(
+                tooltip: '播放设置',
+                onPressed: _settings,
+                icon: const Icon(Icons.settings_outlined),
               ),
             ],
           ),
           body: SafeArea(
             top: false,
-            child: LayoutBuilder(
-              builder: (context, constraints) {
-                AppLog.instance.trace(
-                  "lib/pages/player_panel.dart::_PlayerPanelState.build.closure#1.closure#10",
-                );
-
-                // ponytail: reserve the control stack; very short/error states scroll.
-                final textHeight = MediaQuery.textScalerOf(context).scale(56);
-                final coverHeight =
-                    constraints.maxHeight -
-                    450 -
-                    textHeight -
-                    (sleep == null ? 0 : 48);
-                final coverSize = math.min(
-                  280.0,
-                  math.min(
-                    constraints.maxWidth - 64,
-                    math.max(120.0, coverHeight),
-                  ),
-                );
-                final details = Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    controls,
-                    progress,
-                    contentActions,
-                    const SizedBox(height: 4),
-                    quickControls,
-                    footer,
+            child: Column(
+              children: [
+                TabBar(
+                  controller: _tabs,
+                  tabs: const [
+                    Tab(text: '播放', height: 48),
+                    Tab(text: '文稿', height: 48),
+                    Tab(text: '评论', height: 48),
                   ],
-                );
-                final section = queueVisible
-                    ? 'queue'
-                    : commentsVisible
-                    ? 'comments'
-                    : manuscriptVisible
-                    ? 'manuscript'
-                    : null;
-                final Widget? content = queueVisible
-                    ? PlayerQueuePanel(
-                        key: ValueKey(_runtime.player),
-                        runtime: _runtime,
-                      )
-                    : commentsVisible
-                    ? TrackCommentsPanel(runtime: _runtime, track: track)
-                    : manuscriptVisible
-                    ? _manuscriptContent()
-                    : null;
-
-                if (constraints.maxWidth >= 920) {
-                  final roomy = ((constraints.maxWidth - 1280) / 1080).clamp(
-                    0.0,
-                    1.0,
-                  );
-                  final stageWidth = math.min(1760.0, constraints.maxWidth);
-                  final playerWidth = 400 + 120 * roomy;
-                  final sideWidth = 560 + 160 * roomy;
-                  final extraTextHeight =
-                      math.max(
-                        0.0,
-                        MediaQuery.textScalerOf(context).scale(240) - 240,
-                      ) *
-                      roomy;
-                  final sideHeight = math.min(
-                    640 + 400 * roomy,
-                    math.max(0.0, constraints.maxHeight - 64),
-                  );
-                  final availableCoverHeight =
-                      constraints.maxHeight -
-                      523 -
-                      extraTextHeight -
-                      (sleep == null ? 0 : 48) -
-                      (message == null ? 0 : 56);
-                  final sideCoverSize = math.min(
-                    260 + 100 * roomy,
-                    math.min(
-                      (stageWidth - 32) * 10 / 21 - 48,
-                      math.max(140.0, availableCoverHeight),
-                    ),
-                  );
-                  return Center(
-                    child: SizedBox(
-                      width: stageWidth,
-                      child: PlayerContentLayout(
-                        key: const ValueKey('playerWideLayout'),
-                        sideOpen: sideContentVisible,
-                        player: SingleChildScrollView(
-                          key: const ValueKey('playerControlsScroll'),
-                          primary: false,
-                          child: ConstrainedBox(
-                            constraints: BoxConstraints(
-                              minHeight: constraints.maxHeight,
-                            ),
-                            child: Center(
-                              child: Padding(
-                                padding: const EdgeInsets.all(24),
+                ),
+                Expanded(
+                  child: LayoutBuilder(
+                    builder: (context, constraints) {
+                      AppLog.instance.trace(
+                        'lib/pages/player_panel.dart::_PlayerPanelState.build.responsivePanes',
+                      );
+                      final minPaneWidth = math.max(
+                        460.0,
+                        MediaQuery.textScalerOf(context).scale(340),
+                      );
+                      _configurePanes(
+                        (constraints.maxWidth / minPaneWidth).floor().clamp(
+                          1,
+                          3,
+                        ),
+                      );
+                      final order = _paneCount == 2 && _secondaryPage == 2
+                          ? const [0, 2, 1]
+                          : const [0, 1, 2];
+                      final contents = <Widget>[
+                        LayoutBuilder(
+                          builder: (context, constraints) {
+                            AppLog.instance.trace(
+                              'lib/pages/player_panel.dart::_PlayerPanelState.build.playbackPage',
+                            );
+                            final textHeight = MediaQuery.textScalerOf(context)
+                                .scale(56);
+                            final coverSize = math.min(
+                              widePlayer ? 260.0 : 280.0,
+                              math.min(
+                                constraints.maxWidth - 64,
+                                math.max(
+                                  120.0,
+                                  constraints.maxHeight -
+                                      480 -
+                                      textHeight -
+                                      (sleep == null ? 0 : 48),
+                                ),
+                              ),
+                            );
+                            return SingleChildScrollView(
+                              key: const PageStorageKey('playerPlayback'),
+                              primary: false,
+                              child: Center(
                                 child: ConstrainedBox(
                                   constraints: BoxConstraints(
-                                    maxWidth: playerWidth,
+                                    maxWidth: widePlayer ? 560 : 680,
+                                    minHeight: constraints.maxHeight,
                                   ),
-                                  child: Column(
-                                    mainAxisSize: MainAxisSize.min,
-                                    children: [
-                                      metadata,
-                                      const SizedBox(height: 16),
-                                      KeyedSubtree(
-                                        key: const ValueKey('playerCover'),
-                                        child: _cover(coverUrl, sideCoverSize),
-                                      ),
-                                      controls,
-                                      progress,
-                                      const SizedBox(height: 16),
-                                      contentActions,
-                                      const SizedBox(height: 4),
-                                      quickControls,
-                                      footer,
-                                    ],
+                                  child: Padding(
+                                    padding: EdgeInsets.all(compact ? 8 : 16),
+                                    child: Column(
+                                      mainAxisAlignment:
+                                          MainAxisAlignment.spaceEvenly,
+                                      children: [
+                                        metadata,
+                                        const SizedBox(height: 8),
+                                        if (!compact) ...[
+                                          _cover(coverUrl, coverSize),
+                                          const SizedBox(height: 8),
+                                        ],
+                                        controls,
+                                        progress,
+                                        contentActions,
+                                        quickControls,
+                                        footer,
+                                      ],
+                                    ),
                                   ),
                                 ),
                               ),
-                            ),
-                          ),
+                            );
+                          },
                         ),
-                        side: Padding(
-                          padding: const EdgeInsets.all(24),
-                          child: Center(
-                            child: ConstrainedBox(
-                              constraints: BoxConstraints(maxWidth: sideWidth),
-                              child: SizedBox(
-                                height: sideHeight,
-                                child: PlayerSideContent(
-                                  key: ValueKey(_runtime),
-                                  section: section,
-                                  header: sideHeader,
-                                  content: content,
-                                ),
+                        !_visitedPages.contains(1)
+                            ? const Center(child: CircularProgressIndicator())
+                            : _manuscriptPage(track),
+                        !_visitedPages.contains(2)
+                            ? const Center(child: CircularProgressIndicator())
+                            : track == null
+                            ? const Center(child: Text('尚未选择声音'))
+                            : TrackCommentsPanel(
+                                key: ValueKey((_runtime, track.id)),
+                                runtime: _runtime,
+                                track: track,
                               ),
-                            ),
+                      ];
+                      return PrimaryScrollController.none(
+                        child: ScrollConfiguration(
+                          behavior: ScrollConfiguration.of(context).copyWith(
+                            dragDevices: {
+                              ...ScrollConfiguration.of(context).dragDevices,
+                              PointerDeviceKind.mouse,
+                            },
                           ),
-                        ),
-                      ),
-                    ),
-                  );
-                }
-
-                if (content != null) {
-                  return Column(
-                    key: ValueKey('${section}NarrowLayout'),
-                    children: [
-                      Expanded(
-                        child: Padding(
-                          padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
-                          child: Column(
-                            children: [
-                              sideHeader,
-                              const SizedBox(height: 8),
-                              Expanded(child: content),
-                            ],
-                          ),
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-                      ConstrainedBox(
-                        constraints: BoxConstraints(
-                          maxHeight: math.min(280, constraints.maxHeight * .45),
-                        ),
-                        child: SingleChildScrollView(
-                          primary: false,
-                          child: Padding(
-                            padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
-                            child: Column(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Row(
-                                  children: [
-                                    _cover(coverUrl, 44, small: true),
-                                    const SizedBox(width: 12),
-                                    Expanded(child: AdaptiveText(title)),
-                                    IconButton(
-                                      tooltip: playLabel,
-                                      onPressed: play,
-                                      icon: Icon(
-                                        canPause
-                                            ? Icons.pause_rounded
-                                            : Icons.play_arrow_rounded,
-                                        size: 32,
-                                      ),
-                                    ),
-                                    _button(
-                                      '下一集',
-                                      Icons.skip_next_rounded,
-                                      player.next,
-                                    ),
-                                  ],
+                          child: PageView.builder(
+                            controller: _pages,
+                            padEnds: false,
+                            physics: _paneCount == 1
+                                ? null
+                                : const NeverScrollableScrollPhysics(),
+                            onPageChanged: _pageSwiped,
+                            itemCount: 3,
+                            findChildIndexCallback: (key) {
+                              AppLog.instance.trace(
+                                'lib/pages/player_panel.dart::_PlayerPanelState.build.paneIndex',
+                              );
+                              return order.indexOf(
+                                (key as ValueKey<int>).value,
+                              );
+                            },
+                            itemBuilder: (context, index) {
+                              AppLog.instance.trace(
+                                'lib/pages/player_panel.dart::_PlayerPanelState.build.pane',
+                              );
+                              final page = order[index];
+                              return _PlayerPage(
+                                key: ValueKey(page),
+                                visible:
+                                    _paneCount == 3 ||
+                                    (_paneCount == 2
+                                        ? page == 0 || page == _secondaryPage
+                                        : page == _selectedPage),
+                                child: DecoratedBox(
+                                  decoration: BoxDecoration(
+                                    border: _paneCount == 1
+                                        ? null
+                                        : Border(
+                                            right: BorderSide(
+                                              color: colors.outlineVariant,
+                                            ),
+                                          ),
+                                  ),
+                                  child: contents[page],
                                 ),
-                                progress,
-                                contentActions,
-                                quickControls,
-                                footer,
-                              ],
-                            ),
+                              );
+                            },
                           ),
                         ),
-                      ),
-                    ],
-                  );
-                }
-                return SingleChildScrollView(
-                  key: const ValueKey('playerCenteredLayout'),
-                  child: Center(
-                    child: ConstrainedBox(
-                      constraints: BoxConstraints(
-                        maxWidth: 680,
-                        minHeight: constraints.maxHeight,
-                      ),
-                      child: Padding(
-                        padding: EdgeInsets.fromLTRB(
-                          compact ? 8 : 24,
-                          compact ? 8 : 20,
-                          compact ? 8 : 24,
-                          compact ? 8 : 24,
-                        ),
-                        child: Column(
-                          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                          children: [
-                            metadata,
-                            SizedBox(height: compact ? 4 : 16),
-                            if (!compact) ...[
-                              _cover(coverUrl, coverSize),
-                              const SizedBox(height: 8),
-                            ],
-                            details,
-                          ],
-                        ),
-                      ),
-                    ),
+                      );
+                    },
                   ),
-                );
-              },
+                ),
+              ],
             ),
           ),
         );
         return _withKeyboard(page);
       },
     );
+  }
+}
+
+class _PlayerPage extends StatefulWidget {
+  const _PlayerPage({required this.child, required this.visible, super.key});
+
+  final Widget child;
+  final bool visible;
+
+  @override
+  State<_PlayerPage> createState() {
+    AppLog.instance.trace(
+      'lib/pages/player_panel.dart::_PlayerPage.createState',
+    );
+    return _PlayerPageState();
+  }
+}
+
+class _PlayerPageState extends State<_PlayerPage>
+    with AutomaticKeepAliveClientMixin {
+  Widget? _retainedChild;
+  @override
+  bool get wantKeepAlive {
+    AppLog.instance.trace(
+      'lib/pages/player_panel.dart::_PlayerPageState.wantKeepAlive.get',
+    );
+    return true;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    AppLog.instance.trace(
+      'lib/pages/player_panel.dart::_PlayerPageState.build',
+    );
+    super.build(context);
+    if (widget.visible) _retainedChild = widget.child;
+    return _retainedChild ?? widget.child;
   }
 }
 

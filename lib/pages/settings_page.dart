@@ -113,17 +113,8 @@ class _SettingsPageState extends State<SettingsPage> {
         updates: widget.runtime,
       ),
       _SettingsSection.backup => BackupPage(
-        storage: widget.runtime.storage,
-        accounts: widget.runtime.accounts,
-        secrets: widget.runtime.secrets,
-        onChanged: () async {
-          AppLog.instance.trace(
-            "lib/pages/settings_page.dart::_SettingsPageState._detail.closure#1",
-          );
-
-          widget.appearance.reload();
-          await widget.runtime.reloadAfterRestore();
-        },
+        runtime: widget.runtime,
+        onChanged: widget.appearance.reload,
       ),
       _SettingsSection.appearance => _AppearanceSettings(
         appearance: widget.appearance,

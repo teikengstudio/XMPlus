@@ -397,9 +397,16 @@ class _DiscoveryPageState extends State<DiscoveryPage> {
 
                     final album = result.albums[index];
                     return ListTile(
+                      contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 2,
+                      ),
+                      minTileHeight: 64,
+                      minVerticalPadding: 4,
+                      horizontalTitleGap: 12,
                       leading: MediaQuery.sizeOf(context).width < 320
                           ? null
-                          : CoverImage(uri: album.coverUrl),
+                          : CoverImage(uri: album.coverUrl, size: 48),
                       title: AdaptiveText(album.title),
                       subtitle: AdaptiveText(
                         '${album.artist} · ${album.total} 集',
@@ -424,9 +431,16 @@ class _DiscoveryPageState extends State<DiscoveryPage> {
 
                     final track = result.tracks[index];
                     return ListTile(
+                      contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 2,
+                      ),
+                      minTileHeight: 64,
+                      minVerticalPadding: 4,
+                      horizontalTitleGap: 12,
                       leading: MediaQuery.sizeOf(context).width < 320
                           ? null
-                          : CoverImage(uri: track.coverUrl),
+                          : CoverImage(uri: track.coverUrl, size: 48),
                       title: AdaptiveText(track.title),
                       subtitle: AdaptiveText(
                         '${track.album} · ${_duration(track.duration)}',
@@ -1044,8 +1058,9 @@ class _AlbumPageViewState extends State<AlbumPageView> {
     AppLog.instance.trace(
       "lib/pages/catalogue_page.dart::_AlbumPageViewState._trackExtent.get",
     );
-    return (MediaQuery.textScalerOf(context).scale(16) * 2 + 32).clamp(
-      76.0,
+    final scaler = MediaQuery.textScalerOf(context);
+    return (scaler.scale(16) * 1.5 + scaler.scale(14) * 1.5 + 12).clamp(
+      64.0,
       double.infinity,
     );
   }
@@ -1948,7 +1963,7 @@ class _AlbumPageViewState extends State<AlbumPageView> {
                               ),
                             if (album != null)
                               Padding(
-                                padding: EdgeInsets.all(compact ? 8 : 16),
+                                padding: EdgeInsets.all(compact ? 8 : 12),
                                 child: Row(
                                   crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
@@ -1963,7 +1978,7 @@ class _AlbumPageViewState extends State<AlbumPageView> {
                                             .runtime
                                             .albumCache[widget.albumId]
                                             ?.coverPath,
-                                        size: 88,
+                                        size: 72,
                                         downloaded: widget
                                             .runtime
                                             .downloads
@@ -1993,10 +2008,25 @@ class _AlbumPageViewState extends State<AlbumPageView> {
                                           AdaptiveText(
                                             '${album.artist} · ${album.total} 集',
                                           ),
-                                          if (album.intro.isNotEmpty)
-                                            AlbumIntroduction(
-                                              text: album.intro,
-                                            ),
+                                          AlbumIntroduction(
+                                            text: album.intro,
+                                            client: widget.runtime.anonymous,
+                                            albumId: album.id,
+                                            onOpenAlbum: (recommended) {
+                                              Navigator.of(context).push(
+                                                MaterialPageRoute<void>(
+                                                  builder: (_) => AlbumPageView(
+                                                    runtime: widget.runtime,
+                                                    albumId: recommended.id,
+                                                    onDownload:
+                                                        widget.onDownload,
+                                                    onPlayAlbum:
+                                                        widget.onPlayAlbum,
+                                                  ),
+                                                ),
+                                              );
+                                            },
+                                          ),
                                           if (_cachedView)
                                             const Text('离线缓存（仅显示已观察目录与已下载声音）'),
                                           OutlinedButton.icon(
@@ -2066,14 +2096,6 @@ class _AlbumPageViewState extends State<AlbumPageView> {
                                   ],
                                 ),
                               ),
-                            Padding(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 16,
-                              ),
-                              child: Text(
-                                '${_ascending ? "最早在前" : "最新在前"} · 连播按集数正序',
-                              ),
-                            ),
                             if (_showSearch)
                               Padding(
                                 padding: EdgeInsets.symmetric(
@@ -2253,6 +2275,12 @@ class _AlbumPageViewState extends State<AlbumPageView> {
                           final track = _visible[index];
                           final downloaded = _downloaded.contains(track.id);
                           return ListTile(
+                            contentPadding: const EdgeInsets.symmetric(
+                              horizontal: 12,
+                            ),
+                            minTileHeight: _trackExtent,
+                            minVerticalPadding: 4,
+                            horizontalTitleGap: 12,
                             selected: track.id == widget.initialTrack?.id,
                             leading: _selectionMode
                                 ? Checkbox(
@@ -2274,6 +2302,7 @@ class _AlbumPageViewState extends State<AlbumPageView> {
                                 : (compact
                                       ? null
                                       : CoverImage(
+                                          size: 48,
                                           uri:
                                               track.coverUrl ?? album?.coverUrl,
                                           downloaded: downloaded,

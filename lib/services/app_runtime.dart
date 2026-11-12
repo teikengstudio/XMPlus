@@ -10,6 +10,7 @@ import '../api/xmly_catalogue.dart';
 import '../api/xmly_experience.dart';
 import '../api/xmly_rewards.dart';
 import '../storage/app_storage.dart';
+import '../storage/config_archive.dart';
 import '../storage/credential_store.dart';
 import 'account_service.dart';
 import 'close_sequence.dart';
@@ -192,6 +193,11 @@ class AppRuntime extends ChangeNotifier {
   late final DownloadService downloads;
   late final AutoDownloadService autoDownloads;
   late final PlayerService player;
+  late final ConfigArchive backupArchive = ConfigArchive(
+    storage: storage,
+    accounts: accounts,
+    secrets: secrets,
+  );
   SystemMediaService? _systemMedia;
   AndroidBackgroundService? _androidBackground;
   Future<bool> Function(DownloadBatch)? confirmDownload;
@@ -203,7 +209,10 @@ class AppRuntime extends ChangeNotifier {
   StreamSubscription<void>? _automaticChanges;
   final List<Future<void> Function()> settlementHandlers = [];
   final Map<String, DownloadState> _cachedDownloadStates = {};
-  bool _restoringDownloads = false;
+  Future<void>? _restoreWork;
+  bool _restoreNeedsReload = false;
+  bool get restoreNeedsReload => _restoreNeedsReload;
+  bool get restoringBackup => _restoreWork != null;
   bool closing = false;
   bool _closeRunning = false;
   CloseSequence? _release;
@@ -294,7 +303,10 @@ class AppRuntime extends ChangeNotifier {
           AppLog.instance.trace(
             "lib/services/app_runtime.dart::AppRuntime._loadServices.closure#1",
           );
-          return !closing && !_closed;
+          return !closing &&
+              !_closed &&
+              !restoringBackup &&
+              !restoreNeedsReload;
         },
       );
     }
@@ -403,7 +415,8 @@ class AppRuntime extends ChangeNotifier {
     for (final task in downloads.tasks) {
       final previous = _cachedDownloadStates[task.id];
       _cachedDownloadStates[task.id] = task.state;
-      if (_restoringDownloads ||
+      if (restoringBackup ||
+          restoreNeedsReload ||
           task.track.albumId.isEmpty ||
           downloads.albumJobs.any((job) {
             AppLog.instance.trace(
@@ -622,6 +635,8 @@ class AppRuntime extends ChangeNotifier {
     );
     return !closing &&
         !_closed &&
+        !restoringBackup &&
+        !restoreNeedsReload &&
         (storage.state['settings'] as Map)['autoClaim'] == true;
   }
 
@@ -706,6 +721,8 @@ class AppRuntime extends ChangeNotifier {
 
     if (closing ||
         _closed ||
+        restoringBackup ||
+        restoreNeedsReload ||
         accounts.admissionPaused ||
         !accounts.accountIds.contains(identity)) {
       throw const XmlyException('missing_account', '请先登录原账号');
@@ -732,9 +749,79 @@ class AppRuntime extends ChangeNotifier {
       "lib/services/app_runtime.dart::AppRuntime.cancelDownload",
     );
 
-    await player.stopTaskReference(id);
-    await downloads.cancel(id);
-    await pipeline.pauseTask(id);
+    await cancelDownloads([id]);
+  }
+
+  Future<void> cancelDownloads(Iterable<String> taskIds) async {
+    AppLog.instance.trace(
+      'lib/services/app_runtime.dart::AppRuntime.cancelDownloads',
+    );
+    _requireDownloadActions();
+    autoDownloads.invalidatePending();
+    final ids = taskIds.toSet();
+    for (final id in ids) {
+      await player.stopTaskReference(id);
+    }
+    _requireDownloadActions();
+    await downloads.cancelMany(ids);
+    for (final id in ids) {
+      await pipeline.pauseTask(id);
+    }
+  }
+
+  Future<void> cancelAllDownloads() async {
+    AppLog.instance.trace(
+      'lib/services/app_runtime.dart::AppRuntime.cancelAllDownloads',
+    );
+    _requireDownloadActions();
+    autoDownloads.invalidatePending();
+    final ids = [
+      for (final task in downloads.tasks)
+        if (task.state != DownloadState.completed) task.id,
+    ];
+    for (final id in ids) {
+      await player.stopTaskReference(id);
+    }
+    _requireDownloadActions();
+    await downloads.cancelAll();
+    for (final id in ids) {
+      await pipeline.pauseTask(id);
+    }
+  }
+
+  Future<void> cancelAlbumDownloads(String id) async {
+    AppLog.instance.trace(
+      'lib/services/app_runtime.dart::AppRuntime.cancelAlbumDownloads',
+    );
+    _requireDownloadActions();
+    autoDownloads.invalidatePending();
+    final job = downloads.albumJobs.firstWhere((job) {
+      AppLog.instance.trace(
+        'lib/services/app_runtime.dart::AppRuntime.cancelAlbumDownloads.closure#1',
+      );
+      return job.id == id;
+    });
+    final ids = [
+      for (final taskId in job.taskIds)
+        if (downloads.task(taskId).state != DownloadState.completed) taskId,
+    ];
+    for (final taskId in ids) {
+      await player.stopTaskReference(taskId);
+    }
+    _requireDownloadActions();
+    await downloads.cancelAlbum(id);
+    for (final taskId in ids) {
+      await pipeline.pauseTask(taskId);
+    }
+  }
+
+  void _requireDownloadActions() {
+    AppLog.instance.trace(
+      'lib/services/app_runtime.dart::AppRuntime._requireDownloadActions',
+    );
+    if (closing || _closed || restoringBackup || restoreNeedsReload) {
+      throw const XmlyException('task_busy', '请先完成备份恢复或重新打开应用');
+    }
   }
 
   Future<void> pauseAllDownloads() async {
@@ -775,35 +862,83 @@ class AppRuntime extends ChangeNotifier {
     await downloads.relocate(id, directory);
   }
 
+  Future<void> restoreBackup(
+    ArchiveImport draft, {
+    Map<String, String> relocatedRoots = const {},
+  }) {
+    AppLog.instance.trace(
+      "lib/services/app_runtime.dart::AppRuntime.restoreBackup",
+    );
+    if (closing || _closed) {
+      return Future.error(StateError('应用正在退出，请重新打开后加载备份'));
+    }
+    if (restoringBackup || restoreNeedsReload) {
+      return Future.error(StateError('请先完成当前备份的恢复'));
+    }
+    return _startRestore(() {
+      AppLog.instance.trace(
+        "lib/services/app_runtime.dart::AppRuntime.restoreBackup.closure#1",
+      );
+      return backupArchive.restore(draft, relocatedRoots: relocatedRoots);
+    });
+  }
+
   Future<void> reloadAfterRestore() {
     AppLog.instance.trace(
       "lib/services/app_runtime.dart::AppRuntime.reloadAfterRestore",
     );
+    if (closing || _closed) {
+      return Future.error(StateError('应用正在退出，请重新打开后加载备份'));
+    }
+    final pending = _restoreWork;
+    if (pending != null) return pending;
+    return _startRestore(null);
+  }
+
+  Future<void> _startRestore(Future<void> Function()? writeBackup) {
+    AppLog.instance.trace(
+      "lib/services/app_runtime.dart::AppRuntime._startRestore",
+    );
+    if (writeBackup == null) _restoreNeedsReload = true;
+    lifecycleError = null;
+    autoDownloads.suspend();
+    _rewardChecks.clear();
+    final future = _restoreBackup(writeBackup);
+    _restoreWork = future;
+    _configureRewards();
+    notifyListeners();
+    return future;
+  }
+
+  Future<void> _restoreBackup(Future<void> Function()? writeBackup) {
+    AppLog.instance.trace(
+      "lib/services/app_runtime.dart::AppRuntime._restoreBackup",
+    );
     return AppLog.instance.runWithErrorScope(() async {
       AppLog.instance.trace(
-        "lib/services/app_runtime.dart::AppRuntime.reloadAfterRestore.closure#1",
+        "lib/services/app_runtime.dart::AppRuntime._restoreBackup.closure#1",
       );
-
-      applyLogSettings(storage.state['settings'] as Map);
-      _restoringDownloads = true;
-      _rewardChecks.clear();
       try {
+        if (writeBackup != null) {
+          await writeBackup();
+          _restoreNeedsReload = true;
+        }
+        applyLogSettings(storage.state['settings'] as Map);
         await downloads.reload();
         _cachedDownloadStates
           ..clear()
           ..addEntries(
             downloads.tasks.map((task) {
               AppLog.instance.trace(
-                "lib/services/app_runtime.dart::AppRuntime.reloadAfterRestore.closure#1.closure#1",
+                "lib/services/app_runtime.dart::AppRuntime._restoreBackup.closure#1.closure#1",
               );
               return MapEntry(task.id, task.state);
             }),
           );
         await ledger.load();
         await player.reload();
+        _restoreNeedsReload = false;
         lifecycleError = null;
-        changed();
-        autoDownloads.resume();
         AppLog.instance.write(
           AppLogLevel.info,
           'runtime',
@@ -811,11 +946,14 @@ class AppRuntime extends ChangeNotifier {
         );
       } catch (error, stack) {
         _recordFailure('Loading restored profile failed', error, stack);
-        lifecycleError = '恢复内容已保存，但任务加载未完成；原资料目录已保留';
-        notifyListeners();
+        if (restoreNeedsReload) {
+          lifecycleError = '备份内容已保存，但加载未完成。请检查资料目录后重试加载，或退出后重新打开应用。';
+        }
         rethrow;
       } finally {
-        _restoringDownloads = false;
+        _restoreWork = null;
+        if (!closing && !restoreNeedsReload) autoDownloads.resume();
+        changed();
       }
     });
   }
@@ -897,7 +1035,8 @@ class AppRuntime extends ChangeNotifier {
       await ledger.captureForRestore();
     } finally {
       // The account mutex still blocks new admissions until restore finishes.
-      if (!closing) autoDownloads.resume();
+      if (!closing && !restoringBackup && !restoreNeedsReload)
+        autoDownloads.resume();
     }
   }
 
@@ -910,7 +1049,8 @@ class AppRuntime extends ChangeNotifier {
         await pause();
       }
     } finally {
-      if (!closing) autoDownloads.resume();
+      if (!closing && !restoringBackup && !restoreNeedsReload)
+        autoDownloads.resume();
     }
   }
 
@@ -1006,6 +1146,12 @@ class AppRuntime extends ChangeNotifier {
       _rewardTimer = null;
       notifyListeners();
       try {
+        try {
+          await _restoreWork;
+        } catch (_) {
+          // A failed reload still permits exit with the committed backup intact.
+        }
+        lifecycleError = null;
         if (_release == null) {
           await quiesce();
           await settle();
@@ -1088,7 +1234,7 @@ class AppRuntime extends ChangeNotifier {
             : '保存或结算未完成，请核对后再退出';
         if (!exitOnly) {
           closing = false;
-          autoDownloads.resume();
+          if (!restoreNeedsReload) autoDownloads.resume();
           _configureRewards();
         }
         notifyListeners();

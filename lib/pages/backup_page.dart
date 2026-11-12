@@ -8,22 +8,14 @@ import '../common/widgets/confirmation_dialog.dart';
 import '../models/xmly_models.dart';
 import '../services/account_service.dart';
 import '../services/app_log.dart';
+import '../services/app_runtime.dart';
 import '../storage/app_storage.dart';
 import '../storage/config_archive.dart';
-import '../storage/credential_store.dart';
 
 class BackupPage extends StatefulWidget {
-  const BackupPage({
-    required this.storage,
-    required this.accounts,
-    required this.secrets,
-    this.onChanged,
-    super.key,
-  });
-  final AppStorage storage;
-  final AccountService accounts;
-  final CredentialStore secrets;
-  final Future<void> Function()? onChanged;
+  const BackupPage({required this.runtime, this.onChanged, super.key});
+  final AppRuntime runtime;
+  final VoidCallback? onChanged;
 
   @override
   State<BackupPage> createState() {
@@ -33,14 +25,15 @@ class BackupPage extends StatefulWidget {
 }
 
 class _BackupPageState extends State<BackupPage> {
-  late final ConfigArchive _archive = ConfigArchive(
-    storage: widget.storage,
-    accounts: widget.accounts,
-    secrets: widget.secrets,
-  );
+  late final ConfigArchive _archive = widget.runtime.backupArchive;
   bool _includeAccount = false;
   bool _busy = false;
+  bool _waitingForReload = false;
   String? _message;
+  String? get _statusMessage =>
+      _waitingForReload && !widget.runtime.restoreNeedsReload
+      ? '备份已恢复，未完成任务保持暂停'
+      : _message;
 
   Future<bool> _confirm(String title, Widget content, String action) {
     AppLog.instance.trace(
@@ -61,12 +54,14 @@ class _BackupPageState extends State<BackupPage> {
         "lib/pages/backup_page.dart::_BackupPageState._run.closure#1",
       );
 
+      if (_busy || !mounted) return;
       setState(() {
         AppLog.instance.trace(
           "lib/pages/backup_page.dart::_BackupPageState._run.closure#1.closure#1",
         );
 
         _busy = true;
+        _waitingForReload = false;
         _message = null;
       });
       try {
@@ -238,28 +233,21 @@ class _BackupPageState extends State<BackupPage> {
         '确认恢复',
       );
       if (!accepted || !mounted) return;
-      await _archive.restore(draft, relocatedRoots: replacements);
       try {
-        await widget.onChanged?.call();
-      } catch (error, stack) {
-        if (!AppLog.instance.errorWasRecorded(error)) {
-          AppLog.instance.write(
-            AppLogLevel.error,
-            'backup',
-            'Reloading restored profile failed',
-            error: error,
-            stackTrace: stack,
-            promptUser: true,
-          );
-        }
+        await widget.runtime.restoreBackup(draft, relocatedRoots: replacements);
+      } catch (_) {
+        if (!widget.runtime.restoreNeedsReload) rethrow;
         if (mounted)
           setState(() {
             AppLog.instance.trace(
               "lib/pages/backup_page.dart::_BackupPageState._import.closure#1.closure#1",
             );
-            _message = '备份已保存，但任务加载未完成；请保留资料目录后重试';
+            _waitingForReload = true;
+            _message = '备份已保存，但加载未完成；请重试加载或退出后重新打开应用';
           });
         return;
+      } finally {
+        widget.onChanged?.call();
       }
       if (mounted)
         setState(() {
@@ -274,6 +262,21 @@ class _BackupPageState extends State<BackupPage> {
   @override
   Widget build(BuildContext context) {
     AppLog.instance.trace("lib/pages/backup_page.dart::_BackupPageState.build");
+    return ListenableBuilder(
+      listenable: widget.runtime,
+      builder: (context, _) {
+        AppLog.instance.trace(
+          "lib/pages/backup_page.dart::_BackupPageState.build.closure#1",
+        );
+        return _content(context);
+      },
+    );
+  }
+
+  Widget _content(BuildContext context) {
+    AppLog.instance.trace(
+      "lib/pages/backup_page.dart::_BackupPageState._content",
+    );
     return Center(
       child: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 720),
@@ -334,10 +337,13 @@ class _BackupPageState extends State<BackupPage> {
                 padding: EdgeInsets.symmetric(vertical: 16),
                 child: LinearProgressIndicator(),
               ),
-            if (_message != null)
+            if (_statusMessage != null)
               Padding(
                 padding: const EdgeInsets.only(top: 16),
-                child: Semantics(liveRegion: true, child: Text(_message!)),
+                child: Semantics(
+                  liveRegion: true,
+                  child: Text(_statusMessage!),
+                ),
               ),
           ],
         ),

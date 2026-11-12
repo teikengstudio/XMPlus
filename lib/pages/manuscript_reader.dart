@@ -3,6 +3,8 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 
+import 'package:flutter/foundation.dart' show Factory;
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
@@ -377,6 +379,14 @@ class _ManuscriptReaderState extends State<ManuscriptReader> {
                   InAppWebView(
                     key: ValueKey(_attempt),
                     webViewEnvironment: _environment,
+                    gestureRecognizers: {
+                      Factory<OneSequenceGestureRecognizer>(() {
+                        AppLog.instance.trace(
+                          'lib/pages/manuscript_reader.dart::_ManuscriptReaderState.build.verticalGesture',
+                        );
+                        return VerticalDragGestureRecognizer();
+                      }),
+                    },
                     initialSettings: InAppWebViewSettings(
                       incognito: true,
                       cacheEnabled: false,

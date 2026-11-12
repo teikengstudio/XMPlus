@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:path/path.dart' as p;
@@ -581,6 +582,22 @@ class _DownloadPageState extends State<DownloadPage> {
   final _expandedAlbums = <String>{};
   final _selectedDownloads = <String>{};
   bool _selectingDownloads = false, _deletingAudio = false;
+  bool _removingTasks = false;
+  final _selectedTasks = <String>{};
+  bool _selectingTasks = false;
+  String _taskFilter = '';
+
+  bool get _downloadActionsBlocked {
+    AppLog.instance.trace(
+      'lib/pages/download_page.dart::_DownloadPageState._downloadActionsBlocked.get',
+    );
+    return _removingTasks ||
+        _deletingAudio ||
+        widget.runtime.closing ||
+        widget.runtime.restoringBackup ||
+        widget.runtime.restoreNeedsReload;
+  }
+
   int _deletionDone = 0, _deletionTotal = 0;
   final _downloadQuery = TextEditingController();
   Timer? _searchDebounce;
@@ -624,6 +641,10 @@ class _DownloadPageState extends State<DownloadPage> {
         "lib/pages/download_page.dart::_DownloadPageState._tasksChanged.closure#1",
       );
 
+      _selectedTasks.retainAll({
+        for (final task in tasks)
+          if (task.state != DownloadState.completed) task.id,
+      });
       if (_selectedDownloads.isNotEmpty) {
         _selectedDownloads.retainAll(
           tasks.where(_canSelectAudio).map((task) {
@@ -661,6 +682,8 @@ class _DownloadPageState extends State<DownloadPage> {
     _available = const {};
     _selectedDownloads.clear();
     _selectingDownloads = false;
+    _selectedTasks.clear();
+    _selectingTasks = false;
     _listen();
   }
 
@@ -761,15 +784,16 @@ class _DownloadPageState extends State<DownloadPage> {
         "lib/pages/download_page.dart::_DownloadPageState._run.closure#1",
       );
 
+      if (_downloadActionsBlocked) return;
+      if (mounted)
+        setState(() {
+          AppLog.instance.trace(
+            "lib/pages/download_page.dart::_DownloadPageState._run.closure#1.closure#1",
+          );
+          _error = null;
+        });
       try {
         await operation();
-        if (mounted)
-          setState(() {
-            AppLog.instance.trace(
-              "lib/pages/download_page.dart::_DownloadPageState._run.closure#1.closure#1",
-            );
-            _error = null;
-          });
       } on XmlyException catch (error, stack) {
         _recordDownloadPageError(error, stack);
         if (mounted)
@@ -799,7 +823,7 @@ class _DownloadPageState extends State<DownloadPage> {
             AppLog.instance.trace(
               "lib/pages/download_page.dart::_DownloadPageState._run.closure#1.closure#3",
             );
-            _error = '操作未完成，任务和文件已保留';
+            _error = '操作未完成，请检查任务列表和文件状态后重试';
           });
       }
     });
@@ -1116,49 +1140,478 @@ class _DownloadPageState extends State<DownloadPage> {
     await widget.runtime.relocateDownload(task.id, directory);
   }
 
-  Future<void> _cancel(DownloadTask task) async {
+  void _selectTasks(Iterable<DownloadTask> tasks) {
     AppLog.instance.trace(
-      "lib/pages/download_page.dart::_DownloadPageState._cancel",
+      'lib/pages/download_page.dart::_DownloadPageState._selectTasks',
     );
+    if (_downloadActionsBlocked) return;
+    final ids = {for (final task in tasks) task.id};
+    if (ids.isEmpty) return;
+    setState(() {
+      AppLog.instance.trace(
+        'lib/pages/download_page.dart::_DownloadPageState._selectTasks.closure#1',
+      );
+      _selectingTasks = true;
+      if (ids.every(_selectedTasks.contains)) {
+        _selectedTasks.removeAll(ids);
+      } else {
+        _selectedTasks.addAll(ids);
+      }
+    });
+  }
 
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (context) {
+  Future<void> _taskBatch(String action) async {
+    AppLog.instance.trace(
+      'lib/pages/download_page.dart::_DownloadPageState._taskBatch',
+    );
+    if (_downloadActionsBlocked) return;
+    final selected = [
+      for (final task in _service.tasks)
+        if (_selectedTasks.contains(task.id) &&
+            task.state != DownloadState.completed)
+          task,
+    ];
+    if (selected.isEmpty) return;
+    if (action == 'delete') {
+      await _confirmTaskRemoval(selectedTasks: selected);
+      return;
+    }
+    setState(() {
+      AppLog.instance.trace(
+        'lib/pages/download_page.dart::_DownloadPageState._taskBatch.closure#1',
+      );
+      _removingTasks = true;
+    });
+    var succeeded = 0;
+    final failures = <String>[];
+    try {
+      for (final task in selected) {
+        if (!mounted ||
+            widget.runtime.closing ||
+            widget.runtime.restoringBackup ||
+            widget.runtime.restoreNeedsReload) {
+          failures.add('操作已停止，请先完成退出或备份恢复');
+          break;
+        }
+        try {
+          final current = _service.task(task.id);
+          if (action == 'pause') {
+            await widget.runtime.pauseDownload(task.id);
+          } else {
+            await _retry(current);
+            final after = _service.task(task.id);
+            if (after.state != DownloadState.completed &&
+                (!after.active ||
+                    after.state == DownloadState.awaitingDebit &&
+                        after.needsConfirmation)) {
+              failures.add('${task.track.title}：未继续，可能已取消确认');
+              continue;
+            }
+          }
+          succeeded++;
+          _selectedTasks.remove(task.id);
+        } catch (error, stack) {
+          _recordDownloadPageError(error, stack);
+          failures.add(
+            '${task.track.title}：${error is XmlyException ? error.message : '操作失败'}',
+          );
+        }
+      }
+      if (mounted)
+        setState(() {
+          AppLog.instance.trace(
+            'lib/pages/download_page.dart::_DownloadPageState._taskBatch.closure#2',
+          );
+          _error =
+              '${action == 'pause' ? '暂停' : '继续'}完成 $succeeded / ${selected.length} 个任务'
+              '${failures.isEmpty ? '' : '；未完成项保留选中：${failures.join('；')}'}';
+        });
+    } finally {
+      if (mounted)
+        setState(() {
+          AppLog.instance.trace(
+            'lib/pages/download_page.dart::_DownloadPageState._taskBatch.closure#3',
+          );
+          _removingTasks = false;
+        });
+    }
+  }
+
+  Widget _taskList(List<DownloadTask> tasks) {
+    AppLog.instance.trace(
+      'lib/pages/download_page.dart::_DownloadPageState._taskList',
+    );
+    final compact = MediaQuery.sizeOf(context).width < 320;
+    final visible = tasks.where((task) {
+      AppLog.instance.trace(
+        'lib/pages/download_page.dart::_DownloadPageState._taskList.matches',
+      );
+      return '${task.track.title} ${task.track.album}'.toLowerCase().contains(
+        _taskFilter,
+      );
+    }).toList();
+    final jobs = _service.albumJobs.where((job) {
+      AppLog.instance.trace(
+        'lib/pages/download_page.dart::_DownloadPageState._taskList.visibleJob',
+      );
+      return job.state != 'completed' &&
+          job.state != 'cancelled' &&
+          (job.title.toLowerCase().contains(_taskFilter) ||
+              _taskFilter.isEmpty);
+    }).toList();
+    final hasUnfinished =
+        tasks.isNotEmpty ||
+        _service.albumJobs.any((job) {
+          AppLog.instance.trace(
+            'lib/pages/download_page.dart::_DownloadPageState._taskList.unfinishedJob',
+          );
+          return job.state != 'completed' && job.state != 'cancelled';
+        });
+    final buttonStyle = OutlinedButton.styleFrom(
+      minimumSize: const Size(48, 48),
+    );
+    final textStyle = TextButton.styleFrom(minimumSize: const Size(48, 48));
+    return LayoutBuilder(
+      builder: (context, constraints) {
         AppLog.instance.trace(
-          "lib/pages/download_page.dart::_DownloadPageState._cancel.closure#1",
+          'lib/pages/download_page.dart::_DownloadPageState._taskList.layout',
         );
-        return AlertDialog(
-          scrollable: true,
-          title: const Text(
-            '取消此任务？',
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-          ),
-          content: const Text('缓存和已扣听时记录会保留，不自动退款。'),
-          actions: [
-            TextButton(
-              onPressed: () {
-                AppLog.instance.trace(
-                  "lib/pages/download_page.dart::_DownloadPageState._cancel.closure#1.closure#1",
-                );
-                Navigator.pop(context, false);
-              },
-              child: const Text('返回'),
+        return Column(
+          children: [
+            ConstrainedBox(
+              constraints: BoxConstraints(
+                maxHeight: math.max(0, constraints.maxHeight - 48),
+              ),
+              child: SingleChildScrollView(
+                primary: false,
+                child: Padding(
+                  padding: EdgeInsets.all(compact ? 8 : 12),
+                  child: Column(
+                    children: [
+                      TextField(
+                        key: const ValueKey('downloadTaskSearch'),
+                        decoration: const InputDecoration(
+                          labelText: '搜索任务',
+                          prefixIcon: Icon(Icons.search),
+                        ),
+                        onChanged: (text) {
+                          AppLog.instance.trace(
+                            'lib/pages/download_page.dart::_DownloadPageState._taskList.filter',
+                          );
+                          setState(() {
+                            AppLog.instance.trace(
+                              'lib/pages/download_page.dart::_DownloadPageState._taskList.filter.closure#1',
+                            );
+                            _taskFilter = text.trim().toLowerCase();
+                          });
+                        },
+                      ),
+                      const SizedBox(height: 8),
+                      SingleChildScrollView(
+                        scrollDirection: Axis.horizontal,
+                        child: Wrap(
+                          spacing: 8,
+                          runSpacing: 4,
+                          crossAxisAlignment: WrapCrossAlignment.center,
+                          children: [
+                            for (final (label, icon, action)
+                                in <
+                                  (String, IconData, Future<void> Function())
+                                >[
+                                  (
+                                    '全部暂停',
+                                    Icons.pause,
+                                    widget.runtime.pauseAllDownloads,
+                                  ),
+                                  ('全部继续', Icons.download, _service.resumeAll),
+                                  (
+                                    '全部取消',
+                                    Icons.cancel_outlined,
+                                    _confirmTaskRemoval,
+                                  ),
+                                ])
+                              OutlinedButton.icon(
+                                style: buttonStyle,
+                                onPressed:
+                                    _downloadActionsBlocked || !hasUnfinished
+                                    ? null
+                                    : () {
+                                        AppLog.instance.trace(
+                                          'lib/pages/download_page.dart::_DownloadPageState._taskList.globalAction',
+                                        );
+                                        _run(action);
+                                      },
+                                icon: Icon(icon),
+                                label: Text(label),
+                              ),
+                            if (!_selectingTasks)
+                              TextButton.icon(
+                                style: textStyle,
+                                onPressed:
+                                    _downloadActionsBlocked || visible.isEmpty
+                                    ? null
+                                    : () {
+                                        AppLog.instance.trace(
+                                          'lib/pages/download_page.dart::_DownloadPageState._taskList.startSelection',
+                                        );
+                                        setState(() {
+                                          AppLog.instance.trace(
+                                            'lib/pages/download_page.dart::_DownloadPageState._taskList.startSelection.closure#1',
+                                          );
+                                          _selectingTasks = true;
+                                        });
+                                      },
+                                icon: const Icon(Icons.checklist),
+                                label: const Text('选择任务'),
+                              )
+                            else ...[
+                              Text('已选 ${_selectedTasks.length} 个任务'),
+                              TextButton(
+                                style: textStyle,
+                                onPressed:
+                                    _downloadActionsBlocked || visible.isEmpty
+                                    ? null
+                                    : () {
+                                        AppLog.instance.trace(
+                                          'lib/pages/download_page.dart::_DownloadPageState._taskList.selectVisible',
+                                        );
+                                        _selectTasks(visible);
+                                      },
+                                child: Text(
+                                  _taskFilter.isEmpty
+                                      ? '全选／取消全选'
+                                      : '搜索结果全选／取消全选',
+                                ),
+                              ),
+                              for (final (action, label) in [
+                                ('pause', '暂停所选'),
+                                ('resume', '继续所选'),
+                                ('delete', '删除所选任务'),
+                              ])
+                                OutlinedButton(
+                                  style: buttonStyle,
+                                  onPressed:
+                                      _downloadActionsBlocked ||
+                                          _selectedTasks.isEmpty
+                                      ? null
+                                      : () {
+                                          AppLog.instance.trace(
+                                            'lib/pages/download_page.dart::_DownloadPageState._taskList.selectedAction',
+                                          );
+                                          _run(() {
+                                            AppLog.instance.trace(
+                                              'lib/pages/download_page.dart::_DownloadPageState._taskList.selectedAction.closure#1',
+                                            );
+                                            return _taskBatch(action);
+                                          });
+                                        },
+                                  child: Text(label),
+                                ),
+                              TextButton(
+                                style: textStyle,
+                                onPressed: _downloadActionsBlocked
+                                    ? null
+                                    : () {
+                                        AppLog.instance.trace(
+                                          'lib/pages/download_page.dart::_DownloadPageState._taskList.endSelection',
+                                        );
+                                        setState(() {
+                                          AppLog.instance.trace(
+                                            'lib/pages/download_page.dart::_DownloadPageState._taskList.endSelection.closure#1',
+                                          );
+                                          _selectingTasks = false;
+                                          _selectedTasks.clear();
+                                        });
+                                      },
+                                child: const Text('取消多选'),
+                              ),
+                            ],
+                          ],
+                        ),
+                      ),
+                      if (_taskFilter.isNotEmpty)
+                        Text('匹配 ${visible.length} / 共 ${tasks.length} 个任务'),
+                      for (final error in [
+                        if (_error != null) _error!,
+                        ..._autoDownloads.errors,
+                      ])
+                        Text(
+                          error,
+                          style: TextStyle(
+                            color: Theme.of(context).colorScheme.error,
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+              ),
             ),
-            FilledButton(
-              onPressed: () {
-                AppLog.instance.trace(
-                  "lib/pages/download_page.dart::_DownloadPageState._cancel.closure#1.closure#2",
-                );
-                Navigator.pop(context, true);
-              },
-              child: const Text('取消任务'),
+            Expanded(
+              child: Scrollbar(
+                child: ListView.builder(
+                  key: const PageStorageKey('compact-download-tasks'),
+                  itemCount: jobs.length + visible.length,
+                  itemBuilder: (context, index) {
+                    AppLog.instance.trace(
+                      'lib/pages/download_page.dart::_DownloadPageState._taskList.row',
+                    );
+                    return index < jobs.length
+                        ? _albumJobCard(jobs[index])
+                        : _taskCard(visible[index - jobs.length], compact);
+                  },
+                ),
+              ),
             ),
           ],
         );
       },
     );
-    if (confirmed == true) await widget.runtime.cancelDownload(task.id);
+  }
+
+  Widget _albumJobCard(DownloadAlbumJob job) {
+    AppLog.instance.trace(
+      'lib/pages/download_page.dart::_DownloadPageState._albumJobCard',
+    );
+    return ExpansionTile(
+      key: PageStorageKey('download-album-job:${job.id}'),
+      minTileHeight: 48,
+      title: Text(job.title, maxLines: 1, overflow: TextOverflow.ellipsis),
+      children: [
+        Text('整专辑 · ${job.state} · 第 ${job.page} 页 / ${job.total} 集'),
+        if (job.error != null)
+          Text(
+            job.error!,
+            style: TextStyle(color: Theme.of(context).colorScheme.error),
+          ),
+        AdaptiveText('账号：${job.accountIdentity}'),
+        AdaptiveText('目录：${job.rootDirectory}'),
+        Wrap(
+          spacing: 8,
+          runSpacing: 4,
+          children: [
+            for (final (label, action) in <(String, Future<void> Function())>[
+              if (job.state == 'running')
+                ('暂停专辑', () => _service.pauseAlbum(job.id)),
+              if (job.state != 'running')
+                ('继续专辑', () => _service.resumeAlbum(job.id)),
+              if (job.state != 'running')
+                ('刷新专辑', () => _service.refreshAlbum(job.id)),
+              ('取消专辑任务', () => _cancelAlbum(job.id)),
+            ])
+              TextButton(
+                style: TextButton.styleFrom(minimumSize: const Size(48, 48)),
+                onPressed: _downloadActionsBlocked ? null : () => _run(action),
+                child: Text(label),
+              ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  Future<void> _cancel(DownloadTask task) {
+    AppLog.instance.trace(
+      'lib/pages/download_page.dart::_DownloadPageState._cancel',
+    );
+    return _confirmTaskRemoval(task: task);
+  }
+
+  Future<void> _confirmTaskRemoval({
+    DownloadTask? task,
+    String? albumId,
+    List<DownloadTask>? selectedTasks,
+  }) async {
+    AppLog.instance.trace(
+      'lib/pages/download_page.dart::_DownloadPageState._confirmTaskRemoval',
+    );
+    if (_downloadActionsBlocked) return;
+    setState(() {
+      AppLog.instance.trace(
+        'lib/pages/download_page.dart::_DownloadPageState._confirmTaskRemoval.closure#1',
+      );
+      _removingTasks = true;
+    });
+    try {
+      final all = task == null && albumId == null && selectedTasks == null;
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (context) {
+          AppLog.instance.trace(
+            'lib/pages/download_page.dart::_DownloadPageState._confirmTaskRemoval.closure#2',
+          );
+          return AlertDialog(
+            scrollable: true,
+            title: Text(
+              task != null
+                  ? '删除此任务？'
+                  : selectedTasks != null
+                  ? '删除选中的 ${selectedTasks.length} 个任务？'
+                  : all
+                  ? '全部取消？'
+                  : '取消整专辑下载？',
+            ),
+            content: Text(
+              task != null
+                  ? '停止并永久删除此任务记录，不能再恢复任务。已下载文件、缓存和扣时记录保留，不自动退款。${task.state == DownloadState.completed ? '此记录也会从“已下载”列表移除，磁盘音频不会删除。' : ''}'
+                  : selectedTasks != null
+                  ? '停止并永久删除选中的任务记录，不能恢复任务。已下载文件、缓存和扣时记录保留，不自动退款。'
+                  : '停止${all ? '所有' : '此专辑的'}后续分页，永久删除${all ? '全部' : '此专辑的'}未完成任务。已完成记录、已下载文件、缓存和扣时记录保留，不自动退款。',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () {
+                  AppLog.instance.trace(
+                    'lib/pages/download_page.dart::_DownloadPageState._confirmTaskRemoval.closure#2.closure#1',
+                  );
+                  Navigator.pop(context, false);
+                },
+                child: const Text('返回'),
+              ),
+              FilledButton(
+                onPressed: () {
+                  AppLog.instance.trace(
+                    'lib/pages/download_page.dart::_DownloadPageState._confirmTaskRemoval.closure#2.closure#2',
+                  );
+                  Navigator.pop(context, true);
+                },
+                child: Text(
+                  task != null || selectedTasks != null
+                      ? '删除任务'
+                      : all
+                      ? '全部取消'
+                      : '取消专辑任务',
+                ),
+              ),
+            ],
+          );
+        },
+      );
+      if (confirmed != true || !mounted) return;
+      if (task != null) {
+        await widget.runtime.cancelDownload(task.id);
+      } else if (selectedTasks != null) {
+        await widget.runtime.cancelDownloads(
+          selectedTasks.map((task) {
+            AppLog.instance.trace(
+              'lib/pages/download_page.dart::_DownloadPageState._confirmTaskRemoval.selectedId',
+            );
+            return task.id;
+          }),
+        );
+      } else if (albumId != null) {
+        await widget.runtime.cancelAlbumDownloads(albumId);
+      } else {
+        await widget.runtime.cancelAllDownloads();
+      }
+    } finally {
+      if (mounted)
+        setState(() {
+          AppLog.instance.trace(
+            'lib/pages/download_page.dart::_DownloadPageState._confirmTaskRemoval.closure#3',
+          );
+          _removingTasks = false;
+        });
+    }
   }
 
   Future<void> _open(DownloadTask task) async {
@@ -1774,7 +2227,7 @@ class _DownloadPageState extends State<DownloadPage> {
             }
           : null,
       trailing: PopupMenuButton<String>(
-        enabled: !_deletingAudio && !_selectingDownloads,
+        enabled: !_downloadActionsBlocked && !_selectingDownloads,
         tooltip: '已下载声音操作',
         onSelected: (action) {
           AppLog.instance.trace(
@@ -1794,6 +2247,8 @@ class _DownloadPageState extends State<DownloadPage> {
                 await _open(task);
               case 'delete':
                 await _delete(task);
+              case 'remove':
+                await _cancel(task);
             }
           }, recoverable: action == 'open');
         },
@@ -1809,50 +2264,18 @@ class _DownloadPageState extends State<DownloadPage> {
             const PopupMenuItem(value: 'open', child: Text('打开目录')),
             if (available)
               const PopupMenuItem(value: 'delete', child: Text('删除音频')),
+            const PopupMenuItem(value: 'remove', child: Text('删除任务')),
           ];
         },
       ),
     );
   }
 
-  Future<void> _cancelAlbum(String id) async {
+  Future<void> _cancelAlbum(String id) {
     AppLog.instance.trace(
-      "lib/pages/download_page.dart::_DownloadPageState._cancelAlbum",
+      'lib/pages/download_page.dart::_DownloadPageState._cancelAlbum',
     );
-
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (context) {
-        AppLog.instance.trace(
-          "lib/pages/download_page.dart::_DownloadPageState._cancelAlbum.closure#1",
-        );
-        return AlertDialog(
-          title: const Text('取消整专辑下载？'),
-          content: const Text('停止后续分页；已创建的任务、缓存和扣时记录保留，不自动退款。'),
-          actions: [
-            TextButton(
-              onPressed: () {
-                AppLog.instance.trace(
-                  "lib/pages/download_page.dart::_DownloadPageState._cancelAlbum.closure#1.closure#1",
-                );
-                Navigator.pop(context, false);
-              },
-              child: const Text('返回'),
-            ),
-            FilledButton(
-              onPressed: () {
-                AppLog.instance.trace(
-                  "lib/pages/download_page.dart::_DownloadPageState._cancelAlbum.closure#1.closure#2",
-                );
-                Navigator.pop(context, true);
-              },
-              child: const Text('取消专辑任务'),
-            ),
-          ],
-        );
-      },
-    );
-    if (confirmed == true) await _service.cancelAlbum(id);
+    return _confirmTaskRemoval(albumId: id);
   }
 
   String _downloadAlbumTitle(DownloadTask task) {
@@ -1930,190 +2353,221 @@ class _DownloadPageState extends State<DownloadPage> {
             ].join(' ').toLowerCase();
             return tokens.every(text.contains);
           }).toList();
-    return Column(
-      children: [
-        Padding(
-          padding: EdgeInsets.fromLTRB(
-            compact ? 8 : 16,
-            12,
-            compact ? 8 : 16,
-            8,
-          ),
-          child: TextField(
-            key: const ValueKey('downloadLibrarySearch'),
-            controller: _downloadQuery,
-            decoration: InputDecoration(
-              labelText: '搜索已下载',
-              hintText: '专辑、单集标题或集号',
-              prefixIcon: const Icon(Icons.search),
-              suffixIcon: ValueListenableBuilder<TextEditingValue>(
-                valueListenable: _downloadQuery,
-                builder: (context, value, _) {
-                  AppLog.instance.trace(
-                    "lib/pages/download_page.dart::_DownloadPageState._downloadedLibrary.closure#3",
-                  );
-                  return value.text.isEmpty
-                      ? const SizedBox.shrink()
-                      : IconButton(
-                          tooltip: '清除本地搜索',
-                          icon: const Icon(Icons.clear),
-                          onPressed: () {
-                            AppLog.instance.trace(
-                              "lib/pages/download_page.dart::_DownloadPageState._downloadedLibrary.closure#3.closure#1",
-                            );
-
-                            _downloadQuery.clear();
-                            _searchDownloads('', immediately: true);
-                          },
-                        );
-                },
-              ),
-            ),
-            textInputAction: TextInputAction.search,
-            onChanged: _searchDownloads,
-            onSubmitted: (text) {
-              AppLog.instance.trace(
-                "lib/pages/download_page.dart::_DownloadPageState._downloadedLibrary.closure#4",
-              );
-              _searchDownloads(text, immediately: true);
-            },
-          ),
-        ),
-        Wrap(
-          spacing: 8,
-          runSpacing: 8,
-          crossAxisAlignment: WrapCrossAlignment.center,
+    final visible = query.isEmpty ? completed : matches;
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        AppLog.instance.trace(
+          "lib/pages/download_page.dart::_DownloadPageState._downloadedLibrary.closure#3",
+        );
+        return Column(
           children: [
-            OutlinedButton.icon(
-              onPressed:
-                  _refreshingAvailability || _deletingAudio || completed.isEmpty
-                  ? null
-                  : () {
-                      AppLog.instance.trace(
-                        "lib/pages/download_page.dart::_DownloadPageState._downloadedLibrary.closure#5",
-                      );
-                      _run(_recheckAvailability);
-                    },
-              icon: _refreshingAvailability
-                  ? const SizedBox.square(
-                      dimension: 18,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  : const Icon(Icons.refresh),
-              label: Text(_refreshingAvailability ? '正在检查' : '刷新本地文件'),
-            ),
-            if (!_selectingDownloads)
-              OutlinedButton.icon(
-                onPressed: _deletingAudio || completed.isEmpty
-                    ? null
-                    : () {
-                        AppLog.instance.trace(
-                          "lib/pages/download_page.dart::_DownloadPageState._downloadedLibrary.closure#6",
-                        );
-                        setState(() {
+            ConstrainedBox(
+              constraints: BoxConstraints(
+                maxHeight: math.max(0, constraints.maxHeight - 96),
+              ),
+              child: SingleChildScrollView(
+                primary: false,
+                child: Column(
+                  children: [
+                    Padding(
+                      padding: EdgeInsets.fromLTRB(
+                        compact ? 8 : 16,
+                        12,
+                        compact ? 8 : 16,
+                        8,
+                      ),
+                      child: TextField(
+                        key: const ValueKey('downloadLibrarySearch'),
+                        controller: _downloadQuery,
+                        decoration: InputDecoration(
+                          labelText: '搜索已下载',
+                          hintText: '专辑、单集标题或集号',
+                          prefixIcon: const Icon(Icons.search),
+                          suffixIcon: ValueListenableBuilder<TextEditingValue>(
+                            valueListenable: _downloadQuery,
+                            builder: (context, value, _) {
+                              AppLog.instance.trace(
+                                "lib/pages/download_page.dart::_DownloadPageState._downloadedLibrary.closure#3.closure#1",
+                              );
+                              return value.text.isEmpty
+                                  ? const SizedBox.shrink()
+                                  : IconButton(
+                                      tooltip: '清除本地搜索',
+                                      icon: const Icon(Icons.clear),
+                                      onPressed: () {
+                                        AppLog.instance.trace(
+                                          "lib/pages/download_page.dart::_DownloadPageState._downloadedLibrary.closure#3.closure#1.closure#1",
+                                        );
+                                        _downloadQuery.clear();
+                                        _searchDownloads('', immediately: true);
+                                      },
+                                    );
+                            },
+                          ),
+                        ),
+                        textInputAction: TextInputAction.search,
+                        onChanged: _searchDownloads,
+                        onSubmitted: (text) {
                           AppLog.instance.trace(
-                            "lib/pages/download_page.dart::_DownloadPageState._downloadedLibrary.closure#6.closure#1",
+                            "lib/pages/download_page.dart::_DownloadPageState._downloadedLibrary.closure#3.closure#2",
                           );
-                          _selectingDownloads = true;
-                        });
-                      },
-                icon: const Icon(Icons.checklist),
-                label: const Text('多选音频'),
-              )
-            else ...[
-              Text('已选 ${_selectedDownloads.length} 条'),
-              TextButton(
-                onPressed: _deletingAudio
-                    ? null
-                    : () {
-                        AppLog.instance.trace(
-                          "lib/pages/download_page.dart::_DownloadPageState._downloadedLibrary.closure#7",
-                        );
-                        _selectAudio(completed);
-                      },
-                child: const Text('全选／取消全选'),
-              ),
-              FilledButton.icon(
-                onPressed: _deletingAudio || _selectedDownloads.isEmpty
-                    ? null
-                    : () {
-                        AppLog.instance.trace(
-                          "lib/pages/download_page.dart::_DownloadPageState._downloadedLibrary.closure#8",
-                        );
-                        _run(_deleteSelectedAudio);
-                      },
-                icon: const Icon(Icons.delete_outline),
-                label: const Text('删除所选音频'),
-              ),
-              TextButton(
-                onPressed: _deletingAudio
-                    ? null
-                    : () {
-                        AppLog.instance.trace(
-                          "lib/pages/download_page.dart::_DownloadPageState._downloadedLibrary.closure#9",
-                        );
-                        setState(() {
-                          AppLog.instance.trace(
-                            "lib/pages/download_page.dart::_DownloadPageState._downloadedLibrary.closure#9.closure#1",
-                          );
-
-                          _selectingDownloads = false;
-                          _selectedDownloads.clear();
-                        });
-                      },
-                child: const Text('取消多选'),
-              ),
-            ],
-          ],
-        ),
-        if (_deletingAudio) ...[
-          LinearProgressIndicator(
-            value: _deletionTotal == 0 ? null : _deletionDone / _deletionTotal,
-          ),
-          Text(
-            _deletionTotal == 0
-                ? '正在准备删除'
-                : '正在处理 $_deletionDone / $_deletionTotal 个路径',
-          ),
-        ],
-        if (query.isNotEmpty)
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-            child: Text(
-              '本地下载记录：匹配 ${matches.length} / 共 ${completed.length} 条',
-            ),
-          ),
-        if (query.isNotEmpty && _error != null)
-          Padding(
-            padding: const EdgeInsets.all(8),
-            child: Text(
-              _error!,
-              style: TextStyle(color: Theme.of(context).colorScheme.error),
-            ),
-          ),
-        Expanded(
-          child: query.isEmpty
-              ? _albumList(completed, downloaded: true)
-              : matches.isEmpty
-              ? const Center(child: Text('未找到匹配的本地下载记录'))
-              : Scrollbar(
-                  child: ListView.builder(
-                    key: ValueKey('downloadSearch:$query'),
-                    itemCount: matches.length,
-                    itemBuilder: (context, index) {
-                      AppLog.instance.trace(
-                        "lib/pages/download_page.dart::_DownloadPageState._downloadedLibrary.closure#10",
-                      );
-                      return _downloadedTrack(
-                        matches[index],
-                        compact,
-                        searchResult: true,
-                      );
-                    },
-                  ),
+                          _searchDownloads(text, immediately: true);
+                        },
+                      ),
+                    ),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      crossAxisAlignment: WrapCrossAlignment.center,
+                      children: [
+                        OutlinedButton.icon(
+                          onPressed:
+                              _refreshingAvailability ||
+                                  _deletingAudio ||
+                                  completed.isEmpty
+                              ? null
+                              : () {
+                                  AppLog.instance.trace(
+                                    "lib/pages/download_page.dart::_DownloadPageState._downloadedLibrary.closure#3.closure#3",
+                                  );
+                                  _run(_recheckAvailability);
+                                },
+                          icon: _refreshingAvailability
+                              ? const SizedBox.square(
+                                  dimension: 18,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                  ),
+                                )
+                              : const Icon(Icons.refresh),
+                          label: Text(
+                            _refreshingAvailability ? '正在检查' : '刷新本地文件',
+                          ),
+                        ),
+                        if (!_selectingDownloads)
+                          OutlinedButton.icon(
+                            onPressed: _deletingAudio || visible.isEmpty
+                                ? null
+                                : () {
+                                    AppLog.instance.trace(
+                                      "lib/pages/download_page.dart::_DownloadPageState._downloadedLibrary.closure#3.closure#4",
+                                    );
+                                    setState(() {
+                                      AppLog.instance.trace(
+                                        "lib/pages/download_page.dart::_DownloadPageState._downloadedLibrary.closure#3.closure#4.closure#1",
+                                      );
+                                      _selectingDownloads = true;
+                                    });
+                                  },
+                            icon: const Icon(Icons.checklist),
+                            label: const Text('多选音频'),
+                          )
+                        else ...[
+                          Text('已选 ${_selectedDownloads.length} 条'),
+                          TextButton(
+                            onPressed: _deletingAudio || visible.isEmpty
+                                ? null
+                                : () {
+                                    AppLog.instance.trace(
+                                      "lib/pages/download_page.dart::_DownloadPageState._downloadedLibrary.closure#3.closure#5",
+                                    );
+                                    _selectAudio(visible);
+                                  },
+                            child: Text(
+                              query.isEmpty ? '全选／取消全选' : '搜索结果全选／取消全选',
+                            ),
+                          ),
+                          FilledButton.icon(
+                            onPressed:
+                                _deletingAudio || _selectedDownloads.isEmpty
+                                ? null
+                                : () {
+                                    AppLog.instance.trace(
+                                      "lib/pages/download_page.dart::_DownloadPageState._downloadedLibrary.closure#3.closure#6",
+                                    );
+                                    _run(_deleteSelectedAudio);
+                                  },
+                            icon: const Icon(Icons.delete_outline),
+                            label: const Text('删除所选音频'),
+                          ),
+                          TextButton(
+                            onPressed: _deletingAudio
+                                ? null
+                                : () {
+                                    AppLog.instance.trace(
+                                      "lib/pages/download_page.dart::_DownloadPageState._downloadedLibrary.closure#3.closure#7",
+                                    );
+                                    setState(() {
+                                      AppLog.instance.trace(
+                                        "lib/pages/download_page.dart::_DownloadPageState._downloadedLibrary.closure#3.closure#7.closure#1",
+                                      );
+                                      _selectingDownloads = false;
+                                      _selectedDownloads.clear();
+                                    });
+                                  },
+                            child: const Text('取消多选'),
+                          ),
+                        ],
+                      ],
+                    ),
+                    if (_deletingAudio) ...[
+                      LinearProgressIndicator(
+                        value: _deletionTotal == 0
+                            ? null
+                            : _deletionDone / _deletionTotal,
+                      ),
+                      Text(
+                        _deletionTotal == 0
+                            ? '正在准备删除'
+                            : '正在处理 $_deletionDone / $_deletionTotal 个路径',
+                      ),
+                    ],
+                    if (query.isNotEmpty)
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+                        child: Text(
+                          '本地下载记录：匹配 ${matches.length} / 共 ${completed.length} 条',
+                        ),
+                      ),
+                    if (query.isNotEmpty && _error != null)
+                      Padding(
+                        padding: const EdgeInsets.all(8),
+                        child: Text(
+                          _error!,
+                          style: TextStyle(
+                            color: Theme.of(context).colorScheme.error,
+                          ),
+                        ),
+                      ),
+                  ],
                 ),
-        ),
-      ],
+              ),
+            ),
+            Expanded(
+              child: query.isEmpty
+                  ? _albumList(completed, downloaded: true)
+                  : matches.isEmpty
+                  ? const Center(child: Text('未找到匹配的本地下载记录'))
+                  : Scrollbar(
+                      child: ListView.builder(
+                        key: ValueKey('downloadSearch:$query'),
+                        itemCount: matches.length,
+                        itemBuilder: (context, index) {
+                          AppLog.instance.trace(
+                            "lib/pages/download_page.dart::_DownloadPageState._downloadedLibrary.closure#3.closure#8",
+                          );
+                          return _downloadedTrack(
+                            matches[index],
+                            compact,
+                            searchResult: true,
+                          );
+                        },
+                      ),
+                    ),
+            ),
+          ],
+        );
+      },
     );
   }
 
@@ -2165,14 +2619,6 @@ class _DownloadPageState extends State<DownloadPage> {
       }
     }
     final albums = groups.entries.toList();
-    final jobs = downloaded
-        ? const <DownloadAlbumJob>[]
-        : _service.albumJobs.where((job) {
-            AppLog.instance.trace(
-              "lib/pages/download_page.dart::_DownloadPageState._albumList.closure#3",
-            );
-            return job.state != 'completed' && job.state != 'cancelled';
-          }).toList();
     return Scrollbar(
       child: ListView.builder(
         key: PageStorageKey(
@@ -2198,123 +2644,7 @@ class _DownloadPageState extends State<DownloadPage> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                if (!downloaded) ...[
-                  Wrap(
-                    alignment: WrapAlignment.center,
-                    spacing: 12,
-                    runSpacing: 8,
-                    children: [
-                      OutlinedButton.icon(
-                        onPressed: () {
-                          AppLog.instance.trace(
-                            "lib/pages/download_page.dart::_DownloadPageState._albumList.closure#4.closure#1",
-                          );
-                          _run(widget.runtime.pauseAllDownloads);
-                        },
-                        icon: const Icon(Icons.pause),
-                        label: const Text('全部暂停'),
-                      ),
-                      OutlinedButton.icon(
-                        onPressed: () {
-                          AppLog.instance.trace(
-                            "lib/pages/download_page.dart::_DownloadPageState._albumList.closure#4.closure#2",
-                          );
-                          _run(_service.resumeAll);
-                        },
-                        icon: const Icon(Icons.download),
-                        label: const Text('全部继续'),
-                      ),
-                    ],
-                  ),
-                  for (final job in jobs)
-                    Card(
-                      child: Padding(
-                        padding: const EdgeInsets.all(12),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            AdaptiveText('${job.title} · 整专辑下载'),
-                            Text('第 ${job.page} 页 · ${job.total} 集'),
-                            if (job.error != null) Text(job.error!),
-                            Wrap(
-                              spacing: 8,
-                              children: [
-                                if (job.state == 'queued' ||
-                                    job.state == 'running')
-                                  TextButton(
-                                    onPressed: () {
-                                      AppLog.instance.trace(
-                                        "lib/pages/download_page.dart::_DownloadPageState._albumList.closure#4.closure#3",
-                                      );
-
-                                      _run(() {
-                                        AppLog.instance.trace(
-                                          "lib/pages/download_page.dart::_DownloadPageState._albumList.closure#4.closure#3.closure#1",
-                                        );
-                                        return _service.pauseAlbum(job.id);
-                                      });
-                                    },
-                                    child: const Text('暂停专辑'),
-                                  )
-                                else
-                                  TextButton(
-                                    onPressed: () {
-                                      AppLog.instance.trace(
-                                        "lib/pages/download_page.dart::_DownloadPageState._albumList.closure#4.closure#4",
-                                      );
-                                      _run(() {
-                                        AppLog.instance.trace(
-                                          "lib/pages/download_page.dart::_DownloadPageState._albumList.closure#4.closure#4.closure#1",
-                                        );
-                                        return _service.resumeAlbum(job.id);
-                                      });
-                                    },
-                                    child: Text(
-                                      job.state == 'failed' ? '重试专辑' : '继续专辑',
-                                    ),
-                                  ),
-                                if (job.state == 'failed' ||
-                                    job.state == 'paused')
-                                  TextButton(
-                                    onPressed: () {
-                                      AppLog.instance.trace(
-                                        "lib/pages/download_page.dart::_DownloadPageState._albumList.closure#4.closure#5",
-                                      );
-                                      _run(() {
-                                        AppLog.instance.trace(
-                                          "lib/pages/download_page.dart::_DownloadPageState._albumList.closure#4.closure#5.closure#1",
-                                        );
-                                        return _service.refreshAlbum(job.id);
-                                      });
-                                    },
-                                    child: const Text('刷新目录并继续'),
-                                  ),
-                                TextButton(
-                                  onPressed: () {
-                                    AppLog.instance.trace(
-                                      "lib/pages/download_page.dart::_DownloadPageState._albumList.closure#4.closure#6",
-                                    );
-
-                                    _run(() {
-                                      AppLog.instance.trace(
-                                        "lib/pages/download_page.dart::_DownloadPageState._albumList.closure#4.closure#6.closure#1",
-                                      );
-                                      return _cancelAlbum(job.id);
-                                    });
-                                  },
-                                  child: const Text('取消专辑任务'),
-                                ),
-                              ],
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                ],
-                for (final error in [
-                  if (_error != null) _error!,
-                  if (!downloaded) ..._autoDownloads.errors,
-                ])
+                for (final error in [if (_error != null) _error!])
                   Padding(
                     padding: const EdgeInsets.only(top: 8),
                     child: Text(
@@ -2324,7 +2654,7 @@ class _DownloadPageState extends State<DownloadPage> {
                       ),
                     ),
                   ),
-                if (albums.isEmpty && (downloaded || jobs.isEmpty))
+                if (albums.isEmpty)
                   Padding(
                     padding: const EdgeInsets.symmetric(vertical: 24),
                     child: Center(
@@ -2374,14 +2704,13 @@ class _DownloadPageState extends State<DownloadPage> {
                   Expanded(
                     child: TabBarView(
                       children: [
-                        _albumList(
+                        _taskList(
                           tasks.where((task) {
                             AppLog.instance.trace(
                               "lib/pages/download_page.dart::_DownloadPageState.build.closure#1.closure#2",
                             );
                             return task.state != DownloadState.completed;
-                          }),
-                          downloaded: false,
+                          }).toList(),
                         ),
                         _downloadedLibrary(completed),
                       ],
@@ -2409,187 +2738,204 @@ class _DownloadPageState extends State<DownloadPage> {
         ? null
         : ((total - task.receivedBytes).clamp(0, total) / task.bytesPerSecond)
               .ceil();
-    return Card(
-      margin: EdgeInsets.symmetric(horizontal: compact ? 8 : 16, vertical: 6),
-      child: Padding(
-        padding: EdgeInsets.all(compact ? 8 : 16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
+    return ExpansionTile(
+      key: PageStorageKey('download-task:${task.id}'),
+      minTileHeight: 48,
+      tilePadding: EdgeInsets.symmetric(horizontal: compact ? 8 : 16),
+      childrenPadding: EdgeInsets.fromLTRB(
+        compact ? 8 : 16,
+        0,
+        compact ? 8 : 16,
+        12,
+      ),
+      leading: _selectingTasks
+          ? Checkbox(
+              value: _selectedTasks.contains(task.id),
+              onChanged: _downloadActionsBlocked
+                  ? null
+                  : (_) {
+                      AppLog.instance.trace(
+                        'lib/pages/download_page.dart::_DownloadPageState._taskCard.selectTask',
+                      );
+                      _selectTasks([task]);
+                    },
+            )
+          : null,
+      title: Text(
+        task.track.title,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+      ),
+      children: [
+        Text(
+          '${task.track.album} · ${_state(task.state)}',
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          textAlign: TextAlign.center,
+        ),
+        AdaptiveText('账号：${task.accountIdentity}'),
+        AdaptiveText('目录：${task.finalPath ?? task.rootDirectory}'),
+        if (task.error != null)
+          Text(
+            task.error!,
+            style: TextStyle(color: Theme.of(context).colorScheme.error),
+          ),
+        if (task.state == DownloadState.downloading ||
+            task.state == DownloadState.processing) ...[
+          const SizedBox(height: 12),
+          LinearProgressIndicator(
+            value: task.state == DownloadState.processing ? null : progress,
+          ),
+        ],
+        const SizedBox(height: 8),
+        AdaptiveText(
+          '${_bytes(task.receivedBytes)} / ${total == null ? "未知" : _bytes(total)} · ${_bytes(task.bytesPerSecond.round())}/s${remaining == null ? "" : " · 剩余 ${remaining}s"}',
+        ),
+        if (task.retryAt != null)
+          AdaptiveText(
+            '下次重试 ${task.retryAt!.toLocal().toString().split(".").first}',
+          ),
+        if (task.actualQuality != null)
+          AdaptiveText('实际音质：${task.actualQuality}'),
+        if (task.warning != null)
+          Text(
+            task.warning!,
+            style: TextStyle(color: Theme.of(context).colorScheme.tertiary),
+          ),
+        Wrap(
+          alignment: WrapAlignment.center,
+          spacing: 8,
+          runSpacing: 8,
           children: [
-            Text(
-              task.track.title,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              textAlign: TextAlign.center,
-              style: Theme.of(context).textTheme.titleMedium,
-            ),
-            Text(
-              '${task.track.album} · ${_state(task.state)}',
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              textAlign: TextAlign.center,
-            ),
-            if (task.error != null)
-              Text(
-                task.error!,
-                style: TextStyle(color: Theme.of(context).colorScheme.error),
+            if (task.state == DownloadState.awaitingDebit &&
+                task.needsConfirmation)
+              TextButton(
+                onPressed: () {
+                  AppLog.instance.trace(
+                    "lib/pages/download_page.dart::_DownloadPageState._taskCard.closure#1",
+                  );
+                  _run(() {
+                    AppLog.instance.trace(
+                      "lib/pages/download_page.dart::_DownloadPageState._taskCard.closure#1.closure#1",
+                    );
+                    return _retry(task);
+                  });
+                },
+                child: const Text('重新获取'),
               ),
-            if (task.state == DownloadState.downloading ||
-                task.state == DownloadState.processing) ...[
-              const SizedBox(height: 12),
-              LinearProgressIndicator(
-                value: task.state == DownloadState.processing ? null : progress,
-              ),
-            ],
-            const SizedBox(height: 8),
-            AdaptiveText(
-              '${_bytes(task.receivedBytes)} / ${total == null ? "未知" : _bytes(total)} · ${_bytes(task.bytesPerSecond.round())}/s${remaining == null ? "" : " · 剩余 ${remaining}s"}',
-            ),
-            if (task.retryAt != null)
-              AdaptiveText(
-                '下次重试 ${task.retryAt!.toLocal().toString().split(".").first}',
-              ),
-            if (task.actualQuality != null)
-              AdaptiveText('实际音质：${task.actualQuality}'),
-            if (task.warning != null)
-              Text(
-                task.warning!,
-                style: TextStyle(color: Theme.of(context).colorScheme.tertiary),
-              ),
-            Wrap(
-              alignment: WrapAlignment.center,
-              spacing: 8,
-              runSpacing: 8,
-              children: [
-                if (task.state == DownloadState.awaitingDebit &&
-                    task.needsConfirmation)
-                  TextButton(
-                    onPressed: () {
-                      AppLog.instance.trace(
-                        "lib/pages/download_page.dart::_DownloadPageState._taskCard.closure#1",
-                      );
-                      _run(() {
-                        AppLog.instance.trace(
-                          "lib/pages/download_page.dart::_DownloadPageState._taskCard.closure#1.closure#1",
-                        );
-                        return _retry(task);
-                      });
-                    },
-                    child: const Text('重新获取'),
-                  ),
-                if (task.active &&
-                    !(task.state == DownloadState.awaitingDebit &&
-                        task.needsConfirmation))
-                  TextButton(
-                    onPressed: () {
-                      AppLog.instance.trace(
-                        "lib/pages/download_page.dart::_DownloadPageState._taskCard.closure#2",
-                      );
+            if (task.active &&
+                !(task.state == DownloadState.awaitingDebit &&
+                    task.needsConfirmation))
+              TextButton(
+                onPressed: () {
+                  AppLog.instance.trace(
+                    "lib/pages/download_page.dart::_DownloadPageState._taskCard.closure#2",
+                  );
 
-                      _run(() {
-                        AppLog.instance.trace(
-                          "lib/pages/download_page.dart::_DownloadPageState._taskCard.closure#2.closure#1",
-                        );
-                        return widget.runtime.pauseDownload(task.id);
-                      });
-                    },
-                    child: const Text('暂停'),
-                  ),
-                if (task.state == DownloadState.paused)
-                  TextButton(
-                    onPressed: () {
-                      AppLog.instance.trace(
-                        "lib/pages/download_page.dart::_DownloadPageState._taskCard.closure#3",
-                      );
-                      _run(() {
-                        AppLog.instance.trace(
-                          "lib/pages/download_page.dart::_DownloadPageState._taskCard.closure#3.closure#1",
-                        );
-                        return _retry(task);
-                      });
-                    },
-                    child: Text(
-                      task.needsConfirmation && !task.processingFailed
-                          ? '重新获取'
-                          : '继续',
-                    ),
-                  ),
-                if (task.state == DownloadState.failed)
-                  TextButton(
-                    onPressed: () {
-                      AppLog.instance.trace(
-                        "lib/pages/download_page.dart::_DownloadPageState._taskCard.closure#4",
-                      );
-                      _run(() {
-                        AppLog.instance.trace(
-                          "lib/pages/download_page.dart::_DownloadPageState._taskCard.closure#4.closure#1",
-                        );
-                        return _retry(task);
-                      });
-                    },
-                    child: Text(
-                      task.needsConfirmation
-                          ? '重新获取'
-                          : task.processingFailed
-                          ? '重试处理'
-                          : '重试',
-                    ),
-                  ),
-                if (task.state == DownloadState.cancelled)
-                  TextButton(
-                    onPressed: () {
-                      AppLog.instance.trace(
-                        "lib/pages/download_page.dart::_DownloadPageState._taskCard.closure#5",
-                      );
-                      _run(() {
-                        AppLog.instance.trace(
-                          "lib/pages/download_page.dart::_DownloadPageState._taskCard.closure#5.closure#1",
-                        );
-                        return _retry(task);
-                      });
-                    },
-                    child: Text(task.processingFailed ? '恢复并重试处理' : '恢复任务'),
-                  ),
-                if (task.processingFailed &&
-                    (task.state == DownloadState.failed ||
-                        task.state == DownloadState.paused ||
-                        task.state == DownloadState.cancelled))
-                  TextButton(
-                    onPressed: () {
-                      AppLog.instance.trace(
-                        "lib/pages/download_page.dart::_DownloadPageState._taskCard.closure#6",
-                      );
-                      _run(() {
-                        AppLog.instance.trace(
-                          "lib/pages/download_page.dart::_DownloadPageState._taskCard.closure#6.closure#1",
-                        );
-                        return _reacquire(task);
-                      });
-                    },
-                    child: const Text('重新获取音频'),
-                  ),
-                if (task.processingFailed &&
-                    (task.state == DownloadState.failed ||
-                        task.state == DownloadState.paused ||
-                        task.state == DownloadState.cancelled))
-                  TextButton(
-                    onPressed: () {
-                      AppLog.instance.trace(
-                        "lib/pages/download_page.dart::_DownloadPageState._taskCard.closure#7",
-                      );
-                      _run(() {
-                        AppLog.instance.trace(
-                          "lib/pages/download_page.dart::_DownloadPageState._taskCard.closure#7.closure#1",
-                        );
-                        return _adjustProcessing(task);
-                      });
-                    },
-                    child: const Text('调整处理'),
-                  ),
-                if (task.state != DownloadState.completed &&
-                    task.state != DownloadState.cancelled)
-                  TextButton(
-                    onPressed: () {
+                  _run(() {
+                    AppLog.instance.trace(
+                      "lib/pages/download_page.dart::_DownloadPageState._taskCard.closure#2.closure#1",
+                    );
+                    return widget.runtime.pauseDownload(task.id);
+                  });
+                },
+                child: const Text('暂停'),
+              ),
+            if (task.state == DownloadState.paused)
+              TextButton(
+                onPressed: () {
+                  AppLog.instance.trace(
+                    "lib/pages/download_page.dart::_DownloadPageState._taskCard.closure#3",
+                  );
+                  _run(() {
+                    AppLog.instance.trace(
+                      "lib/pages/download_page.dart::_DownloadPageState._taskCard.closure#3.closure#1",
+                    );
+                    return _retry(task);
+                  });
+                },
+                child: Text(
+                  task.needsConfirmation && !task.processingFailed
+                      ? '重新获取'
+                      : '继续',
+                ),
+              ),
+            if (task.state == DownloadState.failed)
+              TextButton(
+                onPressed: () {
+                  AppLog.instance.trace(
+                    "lib/pages/download_page.dart::_DownloadPageState._taskCard.closure#4",
+                  );
+                  _run(() {
+                    AppLog.instance.trace(
+                      "lib/pages/download_page.dart::_DownloadPageState._taskCard.closure#4.closure#1",
+                    );
+                    return _retry(task);
+                  });
+                },
+                child: Text(
+                  task.needsConfirmation
+                      ? '重新获取'
+                      : task.processingFailed
+                      ? '重试处理'
+                      : '重试',
+                ),
+              ),
+            if (task.state == DownloadState.cancelled)
+              TextButton(
+                onPressed: () {
+                  AppLog.instance.trace(
+                    "lib/pages/download_page.dart::_DownloadPageState._taskCard.closure#5",
+                  );
+                  _run(() {
+                    AppLog.instance.trace(
+                      "lib/pages/download_page.dart::_DownloadPageState._taskCard.closure#5.closure#1",
+                    );
+                    return _retry(task);
+                  });
+                },
+                child: Text(task.processingFailed ? '恢复并重试处理' : '恢复任务'),
+              ),
+            if (task.processingFailed &&
+                (task.state == DownloadState.failed ||
+                    task.state == DownloadState.paused ||
+                    task.state == DownloadState.cancelled))
+              TextButton(
+                onPressed: () {
+                  AppLog.instance.trace(
+                    "lib/pages/download_page.dart::_DownloadPageState._taskCard.closure#6",
+                  );
+                  _run(() {
+                    AppLog.instance.trace(
+                      "lib/pages/download_page.dart::_DownloadPageState._taskCard.closure#6.closure#1",
+                    );
+                    return _reacquire(task);
+                  });
+                },
+                child: const Text('重新获取音频'),
+              ),
+            if (task.processingFailed &&
+                (task.state == DownloadState.failed ||
+                    task.state == DownloadState.paused ||
+                    task.state == DownloadState.cancelled))
+              TextButton(
+                onPressed: () {
+                  AppLog.instance.trace(
+                    "lib/pages/download_page.dart::_DownloadPageState._taskCard.closure#7",
+                  );
+                  _run(() {
+                    AppLog.instance.trace(
+                      "lib/pages/download_page.dart::_DownloadPageState._taskCard.closure#7.closure#1",
+                    );
+                    return _adjustProcessing(task);
+                  });
+                },
+                child: const Text('调整处理'),
+              ),
+            TextButton(
+              onPressed: _downloadActionsBlocked
+                  ? null
+                  : () {
                       AppLog.instance.trace(
                         "lib/pages/download_page.dart::_DownloadPageState._taskCard.closure#8",
                       );
@@ -2600,57 +2946,55 @@ class _DownloadPageState extends State<DownloadPage> {
                         return _cancel(task);
                       });
                     },
-                    child: const Text('取消'),
-                  ),
-                if (!task.active && task.state != DownloadState.completed)
-                  TextButton(
-                    onPressed: () {
-                      AppLog.instance.trace(
-                        "lib/pages/download_page.dart::_DownloadPageState._taskCard.closure#9",
-                      );
-                      _run(() {
-                        AppLog.instance.trace(
-                          "lib/pages/download_page.dart::_DownloadPageState._taskCard.closure#9.closure#1",
-                        );
-                        return _relocate(task);
-                      });
-                    },
-                    child: const Text('更换目录'),
-                  ),
-                TextButton(
-                  onPressed: () {
-                    AppLog.instance.trace(
-                      "lib/pages/download_page.dart::_DownloadPageState._taskCard.closure#10",
-                    );
-                    _run(() {
-                      AppLog.instance.trace(
-                        "lib/pages/download_page.dart::_DownloadPageState._taskCard.closure#10.closure#1",
-                      );
-                      return _open(task);
-                    }, recoverable: true);
-                  },
-                  child: const Text('打开目录'),
-                ),
-                if (task.finalPath != null)
-                  TextButton(
-                    onPressed: () {
-                      AppLog.instance.trace(
-                        "lib/pages/download_page.dart::_DownloadPageState._taskCard.closure#11",
-                      );
-                      _run(() {
-                        AppLog.instance.trace(
-                          "lib/pages/download_page.dart::_DownloadPageState._taskCard.closure#11.closure#1",
-                        );
-                        return _delete(task);
-                      });
-                    },
-                    child: const Text('删除音频'),
-                  ),
-              ],
+              child: const Text('删除任务'),
             ),
+            if (!task.active && task.state != DownloadState.completed)
+              TextButton(
+                onPressed: () {
+                  AppLog.instance.trace(
+                    "lib/pages/download_page.dart::_DownloadPageState._taskCard.closure#9",
+                  );
+                  _run(() {
+                    AppLog.instance.trace(
+                      "lib/pages/download_page.dart::_DownloadPageState._taskCard.closure#9.closure#1",
+                    );
+                    return _relocate(task);
+                  });
+                },
+                child: const Text('更换目录'),
+              ),
+            TextButton(
+              onPressed: () {
+                AppLog.instance.trace(
+                  "lib/pages/download_page.dart::_DownloadPageState._taskCard.closure#10",
+                );
+                _run(() {
+                  AppLog.instance.trace(
+                    "lib/pages/download_page.dart::_DownloadPageState._taskCard.closure#10.closure#1",
+                  );
+                  return _open(task);
+                }, recoverable: true);
+              },
+              child: const Text('打开目录'),
+            ),
+            if (task.finalPath != null)
+              TextButton(
+                onPressed: () {
+                  AppLog.instance.trace(
+                    "lib/pages/download_page.dart::_DownloadPageState._taskCard.closure#11",
+                  );
+                  _run(() {
+                    AppLog.instance.trace(
+                      "lib/pages/download_page.dart::_DownloadPageState._taskCard.closure#11.closure#1",
+                    );
+                    return _delete(task);
+                  });
+                },
+                child: const Text('删除音频'),
+              ),
           ],
         ),
-      ),
+      ],
     );
   }
 }

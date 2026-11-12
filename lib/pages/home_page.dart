@@ -436,7 +436,7 @@ class _HomePageState extends State<HomePage> {
 
         final horizontal = constraints.maxWidth < 360
             ? 12.0
-            : (constraints.maxWidth * .025).clamp(20.0, 56.0);
+            : (constraints.maxWidth * .02).clamp(12.0, 24.0);
         return Column(
           children: [
             ConstrainedBox(
@@ -446,7 +446,7 @@ class _HomePageState extends State<HomePage> {
               child: SingleChildScrollView(
                 primary: false,
                 child: Padding(
-                  padding: EdgeInsets.fromLTRB(horizontal, 20, horizontal, 0),
+                  padding: EdgeInsets.fromLTRB(horizontal, 12, horizontal, 0),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
@@ -751,7 +751,7 @@ class _HomeFeedState extends State<_HomeFeed> {
                 widget.horizontal,
                 0,
                 widget.horizontal,
-                32,
+                16,
               ),
               sliver: SliverMainAxisGroup(
                 slivers: [

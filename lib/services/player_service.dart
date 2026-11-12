@@ -1332,7 +1332,6 @@ class PlayerService {
     final identity = client.cacheIdentity;
     final listener = accounts.activeClient;
     final revision = _seekRevision;
-    final expectedGeneration = generation;
     bool sameSource() {
       AppLog.instance.trace(
         "lib/services/player_service.dart::PlayerService._restoreCloudProgress.sameSource",
@@ -1340,13 +1339,13 @@ class PlayerService {
       return !_closed && epoch == _epoch && identical(source, _source);
     }
 
+    // Editing other queue entries does not replace this source or its progress.
     bool active() {
       AppLog.instance.trace(
         "lib/services/player_service.dart::PlayerService._restoreCloudProgress.active",
       );
       return sameSource() &&
           request == _request &&
-          expectedGeneration == generation &&
           current?.id == track.id &&
           revision == _seekRevision &&
           !accounts.admissionPaused &&
@@ -2050,40 +2049,6 @@ class PlayerService {
     });
   }
 
-  Future<void> switchToLocal() {
-    AppLog.instance.trace(
-      "lib/services/player_service.dart::PlayerService.switchToLocal",
-    );
-    return _run(() async {
-      AppLog.instance.trace(
-        "lib/services/player_service.dart::PlayerService.switchToLocal.closure#1",
-      );
-
-      if (AppLog.instance.level == AppLogLevel.debug) _command('switchToLocal');
-      final track = current;
-      if (track == null) return;
-      final request = _newRequest(keepStartPosition: true);
-      final task = await _admission(request, () {
-        AppLog.instance.trace(
-          "lib/services/player_service.dart::PlayerService.switchToLocal.closure#1.closure#1",
-        );
-        return _downloaded(track);
-      });
-      if (task == null) throw const XmlyException('file_missing', '请先下载本集');
-      await _commands.synchronized(() {
-        AppLog.instance.trace(
-          "lib/services/player_service.dart::PlayerService.switchToLocal.closure#1.closure#2",
-        );
-        return _openCurrent(
-          request,
-          resumePosition: position,
-          manualReplay: _manualChapterPosition || _startSeekPosition != null,
-          startPlaying: playing,
-          localTaskId: task.id,
-        );
-      });
-    });
-  }
 
   Future<void> seek(double seconds, {int? expectedEpoch}) {
     AppLog.instance.trace(

@@ -323,7 +323,7 @@ class DownloadService {
   final Future<int?> Function(String identity, XmlyClient client)?
   beforeAdmission;
   final Map<String, DownloadAlbumJob> _albums = {};
-  final Set<String> _albumWorkers = {};
+  final Map<String, Future<void>> _albumWorkers = {};
   List<DownloadAlbumJob> get albumJobs {
     AppLog.instance.trace(
       "lib/services/download_service.dart::DownloadService.albumJobs.get",
@@ -346,6 +346,7 @@ class DownloadService {
   final Set<String> _albumRechecks = {};
   final Set<String> _freshResolves = {};
   bool _loaded = false, _closed = false, _suspended = false;
+  int _queueGeneration = 0;
   String? _priority;
 
   Stream<void> get changes {
@@ -440,6 +441,7 @@ class DownloadService {
 
       if (_workers.isNotEmpty)
         throw const XmlyException('task_busy', '请先暂停所有任务');
+      _queueGeneration++;
       _tasks.clear();
       _automaticGuards.clear();
       _albums.clear();
@@ -800,7 +802,7 @@ class DownloadService {
     for (final job in _albums.values.toList()) {
       if (job.state != 'running' ||
           _stoppingAlbums.containsKey(job.id) ||
-          _albumWorkers.contains(job.id) ||
+          _albumWorkers.containsKey(job.id) ||
           job.taskIds.any((id) {
             AppLog.instance.trace(
               "lib/services/download_service.dart::DownloadService._pumpAlbums.closure#1",
@@ -809,7 +811,8 @@ class DownloadService {
                 task(id).active && !task(id).needsConfirmation;
           }))
         continue;
-      _albumWorkers.add(job.id);
+      final done = Completer<void>();
+      _albumWorkers[job.id] = done.future;
       unawaited(
         _advanceAlbum(job).whenComplete(() {
           AppLog.instance.trace(
@@ -817,6 +820,7 @@ class DownloadService {
           );
 
           _albumWorkers.remove(job.id);
+          done.complete();
           _pump();
         }),
       );
@@ -1050,7 +1054,16 @@ class DownloadService {
       job.settings,
       [
         for (final track in tracks)
-          if (!_duplicate(job.accountIdentity, track.id) &&
+          // The committed cursor already handled a manually removed child.
+          // Keep existing records retryable without refilling deleted records.
+          if ((!job.seen.contains(track.id) ||
+                  _tasks.values.any((item) {
+                    AppLog.instance.trace(
+                      'lib/services/download_service.dart::DownloadService._admitAlbumPage.closure#2',
+                    );
+                    return item.track.id == track.id;
+                  })) &&
+              !_duplicate(job.accountIdentity, track.id) &&
               !_tasks.values.any((item) {
                 AppLog.instance.trace(
                   "lib/services/download_service.dart::DownloadService._admitAlbumPage.closure#1",
@@ -1529,6 +1542,8 @@ class DownloadService {
       "lib/services/download_service.dart::DownloadService._enqueue",
     );
 
+    final generation = _queueGeneration;
+
     if (AppLog.instance.level == AppLogLevel.debug) {
       AppLog.instance.write(
         AppLogLevel.debug,
@@ -1580,6 +1595,7 @@ class DownloadService {
         );
 
         _ensureOpen();
+        if (generation != _queueGeneration) throw const DownloadStopped();
         if (allowed != null && !allowed()) throw const DownloadStopped();
         final next = Map<String, DownloadTask>.from(_tasks);
         final admitted = <DownloadTask>[];
@@ -1702,6 +1718,7 @@ class DownloadService {
             "lib/services/download_service.dart::DownloadService._enqueue.persist.closure#1.closure#5",
           );
 
+          if (generation != _queueGeneration) throw const DownloadStopped();
           if (allowed != null && !allowed()) throw const DownloadStopped();
           state['downloads'] = next.values.map((item) {
             AppLog.instance.trace(
@@ -1763,6 +1780,28 @@ class DownloadService {
     return _stop(id, cancel: true);
   }
 
+  Future<void> cancelMany(Iterable<String> ids) {
+    AppLog.instance.trace(
+      'lib/services/download_service.dart::DownloadService.cancelMany',
+    );
+    return _stopTasks(ids.toSet(), cancel: true);
+  }
+
+  /// Removes unfinished records, never downloaded files or debit receipts.
+  Future<void> cancelAll() {
+    AppLog.instance.trace(
+      'lib/services/download_service.dart::DownloadService.cancelAll',
+    );
+    return _stopTasks(
+      [
+        for (final item in _tasks.values)
+          if (item.state != DownloadState.completed) item.id,
+      ],
+      cancel: true,
+      all: true,
+    );
+  }
+
   Future<void> _stop(String id, {required bool cancel}) {
     AppLog.instance.trace(
       "lib/services/download_service.dart::DownloadService._stop",
@@ -1793,6 +1832,7 @@ class DownloadService {
     Iterable<String> ids, {
     required bool cancel,
     String? albumId,
+    bool all = false,
   }) async {
     AppLog.instance.trace(
       "lib/services/download_service.dart::DownloadService._stopTasks",
@@ -1807,6 +1847,7 @@ class DownloadService {
           'taskIds': ids.toList(),
           'cancel': cancel,
           'albumId': albumId,
+          'all': all,
           'tasks': [
             for (final id in ids)
               if (_tasks.containsKey(id)) _debugTaskData(_tasks[id]!),
@@ -1815,6 +1856,11 @@ class DownloadService {
       );
     }
     _ensureOpen();
+    if (all) {
+      _suspended = true;
+      _queueGeneration++;
+    }
+    final generation = _queueGeneration;
     final state = cancel ? DownloadState.cancelled : DownloadState.paused;
     final targets = <String>{};
     void signal(Iterable<String> values) {
@@ -1843,36 +1889,70 @@ class DownloadService {
       }
     }
 
-    if (albumId != null) {
-      final stop = _albumStops[albumId];
+    final stoppedAlbums = <String>{
+      if (albumId != null) albumId,
+      if (cancel)
+        for (final job in _albums.values)
+          if (all && job.state != 'completed' || job.taskIds.any(ids.contains))
+            job.id,
+    };
+    final albumStates = {
+      for (final id in stoppedAlbums) id: _albums[id]!.state,
+    };
+    for (final id in stoppedAlbums) {
+      final stop = _albumStops[id];
       if (stop != null && !stop.isCompleted) stop.complete();
       _stoppingAlbums.update(
-        albumId,
+        id,
         (count) {
           AppLog.instance.trace(
-            "lib/services/download_service.dart::DownloadService._stopTasks.closure#1",
+            'lib/services/download_service.dart::DownloadService._stopTasks.closure#1',
           );
           return count + 1;
         },
         ifAbsent: () {
           AppLog.instance.trace(
-            "lib/services/download_service.dart::DownloadService._stopTasks.closure#2",
+            'lib/services/download_service.dart::DownloadService._stopTasks.closure#2',
           );
           return 1;
         },
       );
-      _albums[albumId]!.state = state.name;
+      _albums[id]!.state = cancel && !all && albumId == null
+          ? 'paused'
+          : state.name;
     }
     // Notify every producer before waiting. Pending album stops also cover a
     // page whose admission is still publishing its newly persisted tasks.
     signal(ids);
+    if (all) {
+      signal([
+        for (final item in _tasks.values)
+          if (item.state != DownloadState.completed) item.id,
+      ]);
+    }
+    // An album admission may itself be waiting for the queue lock. Stop its
+    // generation and drain it before taking that lock, not while holding it.
+    if (cancel) {
+      await Future.wait([
+        for (final id in stoppedAlbums)
+          if (_albumWorkers[id] case final done?) done,
+      ]);
+    }
     await _queueCommands.synchronized(() async {
       AppLog.instance.trace(
         "lib/services/download_service.dart::DownloadService._stopTasks.closure#3",
       );
 
       try {
-        if (albumId != null) signal(_albums[albumId]!.taskIds);
+        _ensureOpen();
+        if (generation != _queueGeneration) throw const DownloadStopped();
+        if (all) {
+          signal([
+            for (final item in _tasks.values)
+              if (item.state != DownloadState.completed) item.id,
+          ]);
+        }
+        if (albumId != null) signal(_albums[albumId]?.taskIds ?? const []);
         await Future.wait([
           for (final id in targets)
             if (_workers[id] case final worker?) worker.done,
@@ -1882,9 +1962,98 @@ class DownloadService {
             "lib/services/download_service.dart::DownloadService._stopTasks.closure#3.closure#1",
           );
 
+          _ensureOpen();
+          if (generation != _queueGeneration) throw const DownloadStopped();
+          if (cancel) {
+            final next = Map<String, DownloadTask>.from(_tasks);
+            for (final id in targets) {
+              final item = next[id];
+              if (item == null ||
+                  (all || albumId != null) &&
+                      item.state == DownloadState.completed)
+                continue;
+              next.remove(id);
+            }
+            final previousAlbums = <String, DownloadAlbumJob>{};
+            for (final id in stoppedAlbums) {
+              final job = _albums[id];
+              if (job == null) continue;
+              previousAlbums[id] = job;
+              if (all || albumId != null) {
+                _albums.remove(id);
+              } else {
+                // Keep the committed cursor/seen list: a removed child must not
+                // cancel its siblings or be refilled by a catalogue recheck.
+                _albums[id] = DownloadAlbumJob.fromJson(job.toJson())
+                  ..state = albumStates[id]!
+                  ..taskIds = [
+                    for (final taskId in job.taskIds)
+                      if (next.containsKey(taskId)) taskId,
+                  ];
+              }
+            }
+            try {
+              await _save(
+                next,
+                removedTasks: [
+                  for (final item in _tasks.values)
+                    if (!next.containsKey(item.id)) item,
+                ],
+                cancelPending: all,
+              );
+            } catch (_) {
+              _albums.addAll(previousAlbums);
+              for (final job in previousAlbums.values) {
+                job.state = 'paused';
+                job.error = '删除任务保存失败，请检查资料目录后重试';
+              }
+              // A failed durable deletion must leave stopped, visible records
+              // so the user can retry; never restart work after a save failure.
+              for (final id in targets) {
+                final item = _tasks[id];
+                if (item != null && item.state != DownloadState.completed) {
+                  _tasks[id] = item.copyWith(
+                    state: DownloadState.paused,
+                    bytesPerSecond: 0,
+                    retryAt: null,
+                    processingFailed:
+                        item.processingFailed ||
+                        item.state == DownloadState.processing,
+                    error: '删除任务保存失败，请检查资料目录后重试',
+                  );
+                }
+              }
+              _notify();
+              rethrow;
+            }
+            for (final id in targets) {
+              if (next.containsKey(id)) continue;
+              _automaticGuards.remove(id);
+              _freshResolves.remove(id);
+              if (_priority == id) _priority = null;
+            }
+            for (final id in stoppedAlbums) {
+              if (all || albumId != null) _albumRechecks.remove(id);
+            }
+            _tasks
+              ..clear()
+              ..addAll(next);
+            AppLog.instance.write(
+              AppLogLevel.info,
+              'download',
+              '任务记录已删除，文件和扣时记录保留',
+              data: {
+                'taskIds': targets.toList(),
+                'albumJobIds': stoppedAlbums.toList(),
+              },
+            );
+            _notify();
+            return;
+          }
           final stopped = <String, DownloadTask>{};
           for (final id in targets) {
-            final item = task(id);
+            final item = _tasks[id];
+            if (item == null) continue;
             if (item.state == DownloadState.completed ||
                 albumId != null && !cancel && !item.active) {
               continue;
@@ -1903,9 +2072,7 @@ class DownloadService {
           try {
             await _save({..._tasks, ...stopped});
           } catch (_) {
-            final message = cancel
-                ? '取消状态保存失败，请检查资料目录后重新打开应用'
-                : '暂停状态保存失败，请检查资料目录后重新打开应用';
+            const message = '暂停状态保存失败，请检查资料目录后重新打开应用';
             stopped.updateAll((id, item) {
               AppLog.instance.trace(
                 "lib/services/download_service.dart::DownloadService._stopTasks.closure#3.closure#1.closure#1",
@@ -1931,7 +2098,7 @@ class DownloadService {
             _stopping[id] = remaining;
           }
         }
-        if (albumId != null) {
+        for (final albumId in stoppedAlbums) {
           final remaining = _stoppingAlbums[albumId]! - 1;
           if (remaining == 0) {
             _stoppingAlbums.remove(albumId);
@@ -2353,6 +2520,9 @@ class DownloadService {
           "lib/services/download_service.dart::DownloadService.pauseAll.closure#1.closure#2",
         );
 
+        // A failed load leaves persisted tasks authoritative. Check under the
+        // load lock so shutdown cannot replace them with an empty snapshot.
+        if (!_loaded) return;
         final next = Map<String, DownloadTask>.from(_tasks);
         final paused = tasks.where((item) {
           AppLog.instance.trace(
@@ -2502,7 +2672,7 @@ class DownloadService {
     );
     _pumpAlbums();
     final stoppedAlbumTasks = {
-      for (final id in _stoppingAlbums.keys) ..._albums[id]!.taskIds,
+      for (final id in _stoppingAlbums.keys) ...?_albums[id]?.taskIds,
     };
     for (final item in tasks.where((item) {
       AppLog.instance.trace(
@@ -3168,7 +3338,11 @@ class DownloadService {
     });
   }
 
-  Future<void> _save(Map<String, DownloadTask> values) {
+  Future<void> _save(
+    Map<String, DownloadTask> values, {
+    List<DownloadTask> removedTasks = const [],
+    bool cancelPending = false,
+  }) {
     AppLog.instance.trace(
       "lib/services/download_service.dart::DownloadService._save",
     );
@@ -3189,6 +3363,37 @@ class DownloadService {
         );
         return job.toJson();
       }).toList();
+      if (removedTasks.isEmpty && !cancelPending) return;
+      final subscriptions = (state['settings'] as Map)['autoDownloads'];
+      if (subscriptions is! Map) return;
+      for (final albums in subscriptions.values) {
+        if (albums is! Map) continue;
+        for (final entry in albums.entries) {
+          final record = entry.value;
+          if (record is! Map || record['enabled'] != true) continue;
+          final pending = record['pending'] as List? ?? const [];
+          final retired = <String>{
+            for (final task in removedTasks)
+              if (task.track.albumId == entry.key) task.track.id,
+            if (cancelPending)
+              for (final item in pending)
+                if (item is Map && item['id'] is String) item['id'] as String,
+          };
+          if (retired.isEmpty) continue;
+          // Reuse the subscription's existing observed baseline, not a task
+          // tombstone: later scans must not recreate manually removed work.
+          record['seen'] = {
+            ...List<String>.from(record['seen'] as List? ?? const []),
+            ...retired,
+          }.toList();
+          record['pending'] = pending.where((item) {
+            AppLog.instance.trace(
+              'lib/services/download_service.dart::DownloadService._save.closure#1.retainedPending',
+            );
+            return item is! Map || !retired.contains(item['id']);
+          }).toList();
+        }
+      }
     });
   }
 
