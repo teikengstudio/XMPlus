@@ -154,7 +154,13 @@ class AccountPage extends StatefulWidget {
 }
 
 class _AccountPageState extends State<AccountPage> {
-  final _login = XmlyLogin();
+  XmlyLogin get _login {
+    AppLog.instance.trace(
+      "lib/pages/account_page.dart::_AccountPageState._login.get",
+    );
+    return widget.accounts.smsLogin;
+  }
+
   bool _busy = false;
   String? _error;
   late String _viewKey;
@@ -337,7 +343,6 @@ class _AccountPageState extends State<AccountPage> {
     );
 
     widget.updates?.removeListener(_changed);
-    _login.close();
     super.dispose();
   }
 
@@ -389,6 +394,7 @@ class _AccountPageState extends State<AccountPage> {
       "lib/pages/account_page.dart::_AccountPageState._openImport",
     );
 
+    final onChanged = widget.onChanged;
     final changed = await showDialog<bool>(
       context: context,
       barrierDismissible: false,
@@ -402,15 +408,17 @@ class _AccountPageState extends State<AccountPage> {
         );
       },
     );
-    if (!mounted || changed != true) return;
-    _refreshProfiles();
-    widget.onChanged?.call();
-    setState(() {
-      AppLog.instance.trace(
-        "lib/pages/account_page.dart::_AccountPageState._openImport.closure#2",
-      );
-      _error = null;
-    });
+    if (changed != true) return;
+    onChanged?.call();
+    if (mounted) {
+      _refreshProfiles();
+      setState(() {
+        AppLog.instance.trace(
+          "lib/pages/account_page.dart::_AccountPageState._openImport.closure#2",
+        );
+        _error = null;
+      });
+    }
   }
 
   Future<void> _openSms() async {
@@ -418,6 +426,7 @@ class _AccountPageState extends State<AccountPage> {
       "lib/pages/account_page.dart::_AccountPageState._openSms",
     );
 
+    final onChanged = widget.onChanged;
     final changed = await showDialog<bool>(
       context: context,
       barrierDismissible: false,
@@ -432,15 +441,17 @@ class _AccountPageState extends State<AccountPage> {
         );
       },
     );
-    if (!mounted || changed != true) return;
-    _refreshProfiles();
-    widget.onChanged?.call();
-    setState(() {
-      AppLog.instance.trace(
-        "lib/pages/account_page.dart::_AccountPageState._openSms.closure#2",
-      );
-      _error = null;
-    });
+    if (changed != true) return;
+    onChanged?.call();
+    if (mounted) {
+      _refreshProfiles();
+      setState(() {
+        AppLog.instance.trace(
+          "lib/pages/account_page.dart::_AccountPageState._openSms.closure#2",
+        );
+        _error = null;
+      });
+    }
   }
 
   Future<void> _storeQuota(String identity, Quota quota) {
