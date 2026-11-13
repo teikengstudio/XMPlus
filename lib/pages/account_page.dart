@@ -87,7 +87,7 @@ class AccountPage extends StatefulWidget {
 }
 
 class _AccountPageState extends State<AccountPage> {
-  final _login = XmlyLogin();
+  XmlyLogin get _login => widget.accounts.smsLogin;
   bool _busy = false;
   String? _error;
   late String _viewKey;
@@ -138,7 +138,6 @@ class _AccountPageState extends State<AccountPage> {
   @override
   void dispose() {
     widget.updates?.removeListener(_changed);
-    _login.close();
     super.dispose();
   }
 
@@ -159,6 +158,7 @@ class _AccountPageState extends State<AccountPage> {
   }
 
   Future<void> _openImport({String? recoveryIdentity}) async {
+    final onChanged = widget.onChanged;
     final changed = await showDialog<bool>(
       context: context,
       barrierDismissible: false,
@@ -167,12 +167,13 @@ class _AccountPageState extends State<AccountPage> {
         recoveryIdentity: recoveryIdentity,
       ),
     );
-    if (!mounted || changed != true) return;
-    widget.onChanged?.call();
-    setState(() => _error = null);
+    if (changed != true) return;
+    onChanged?.call();
+    if (mounted) setState(() => _error = null);
   }
 
   Future<void> _openSms() async {
+    final onChanged = widget.onChanged;
     final changed = await showDialog<bool>(
       context: context,
       barrierDismissible: false,
@@ -182,9 +183,9 @@ class _AccountPageState extends State<AccountPage> {
         login: _login,
       ),
     );
-    if (!mounted || changed != true) return;
-    widget.onChanged?.call();
-    setState(() => _error = null);
+    if (changed != true) return;
+    onChanged?.call();
+    if (mounted) setState(() => _error = null);
   }
 
   Future<void> _storeQuota(String identity, Quota quota) =>

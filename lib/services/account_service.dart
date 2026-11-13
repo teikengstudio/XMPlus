@@ -7,6 +7,7 @@ import 'package:synchronized/synchronized.dart';
 import 'package:uuid/uuid.dart';
 
 import '../api/xmly_client.dart';
+import '../api/xmly_login.dart';
 import '../models/download_task.dart';
 import '../models/xmly_models.dart';
 import '../storage/app_storage.dart';
@@ -31,6 +32,9 @@ class AccountService {
 
   final AppStorage storage;
   final CredentialStore secrets;
+  // Account pages can be replaced during navigation or a window resize while
+  // their login dialog remains open. Keep SMS state for the account session.
+  final smsLogin = XmlyLogin();
 
   /// Stop new work and pause/save old playback/downloads. Must await all users.
   final Future<void> Function()? quiesce;
@@ -760,6 +764,7 @@ class AccountService {
           }
         }
         if (!preserveState) await _cleanupSecrets();
+        smsLogin.close();
         for (final client in _clients.values) {
           client.close();
         }
