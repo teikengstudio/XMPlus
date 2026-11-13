@@ -835,6 +835,11 @@ class _DownloadPageState extends State<DownloadPage> {
     );
 
     task = _service.task(task.id);
+    if (task.state == DownloadState.completed) {
+      await _service.retry(task.id);
+      if (mounted) await _recheckAvailability();
+      return;
+    }
     if (task.state == DownloadState.awaitingDebit && task.needsConfirmation) {
       // Drain the worker that reported the changed fee before preparing again.
       await widget.runtime.pauseDownload(task.id);
@@ -862,12 +867,23 @@ class _DownloadPageState extends State<DownloadPage> {
       "lib/pages/download_page.dart::_DownloadPageState._adjustProcessing",
     );
 
+    final media = task.settings['media'] as Map? ?? const {};
+    final download = task.settings['download'] as Map? ?? const {};
+    final savedFormat = media['format'];
+    final savedBitrate = media['bitrateKbps'];
+    final savedConflict = download['conflict'];
     var format =
-        (task.settings['media'] as Map?)?['format'] as String? ?? 'original';
+        const {'original', 'mp3', 'm4a', 'm4b', 'flac'}.contains(savedFormat)
+        ? savedFormat as String
+        : 'original';
     var bitrate =
-        (task.settings['media'] as Map?)?['bitrateKbps'] as int? ?? 64;
-    var conflict =
-        (task.settings['download'] as Map?)?['conflict'] as String? ?? 'skip';
+        savedBitrate is int &&
+            const {32, 64, 96, 128, 192}.contains(savedBitrate)
+        ? savedBitrate
+        : 64;
+    var conflict = const {'skip', 'overwrite', 'number'}.contains(savedConflict)
+        ? savedConflict as String
+        : 'skip';
     var currentTools = true;
     final accepted = await showDialog<bool>(
       context: context,
@@ -2282,6 +2298,8 @@ class _DownloadPageState extends State<DownloadPage> {
                 await widget.runtime.player.playLocal(task.id);
               case 'next':
                 await widget.runtime.player.playNext(task.track);
+              case 'retry':
+                await _retry(task);
               case 'open':
                 await _open(task);
               case 'delete':
@@ -2300,6 +2318,8 @@ class _DownloadPageState extends State<DownloadPage> {
               const PopupMenuItem(value: 'play', child: Text('播放')),
             if (available)
               const PopupMenuItem(value: 'next', child: Text('下一集播放')),
+            if (_available[task.id] == false)
+              const PopupMenuItem(value: 'retry', child: Text('重新下载')),
             const PopupMenuItem(value: 'open', child: Text('打开目录')),
             if (available)
               const PopupMenuItem(value: 'delete', child: Text('删除音频')),
