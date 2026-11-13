@@ -648,16 +648,13 @@ class _SmsLoginDialogState extends State<_SmsLoginDialog> {
   final _phone = TextEditingController(), _code = TextEditingController();
   final _watch = Stopwatch()..start();
   Timer? _timer;
-  Duration _resendAt = Duration.zero, _expiresAt = Duration.zero;
+  Duration _expiresAt = Duration.zero;
   String? _challenge, _error;
   Credentials? _candidate;
   bool _busy = false, _committing = false, _primary = true, _cancelled = false;
   bool _switchBlocked = false;
 
-  int get _cooldown => ((_resendAt - _watch.elapsed).inMilliseconds / 1000)
-      .ceil()
-      .clamp(0, 180)
-      .toInt();
+  int get _cooldown => _login.smsCooldownSeconds(_phone.text.trim());
 
   void _invalidate() {
     _cancelled = true;
@@ -709,9 +706,6 @@ class _SmsLoginDialogState extends State<_SmsLoginDialog> {
       _error = null;
     });
     try {
-      _login.clear();
-      _challenge = null;
-      _code.clear();
       final geetest = await GeetestDialog.show(
         context,
         captchaId: _login.config()['captcha_id'] as String,
@@ -727,8 +721,10 @@ class _SmsLoginDialogState extends State<_SmsLoginDialog> {
           !mounted ||
           _cancelled)
         return;
-      // Start cooldown before a single-send request: a timeout may still deliver.
-      _resendAt = _watch.elapsed + const Duration(seconds: 180);
+      // Keep the current code usable until the replacement send is confirmed.
+      _login.clear();
+      _challenge = null;
+      _code.clear();
       final response = await _login.sendSms(mobile, geetest);
       if (!mounted || _cancelled) return;
       _challenge = response['challenge_id'] as String;
@@ -808,6 +804,7 @@ class _SmsLoginDialogState extends State<_SmsLoginDialog> {
                 TextField(
                   controller: _phone,
                   enabled: !_busy && _challenge == null,
+                  onChanged: (_) => setState(() {}),
                   autocorrect: false,
                   enableSuggestions: false,
                   enableIMEPersonalizedLearning: false,

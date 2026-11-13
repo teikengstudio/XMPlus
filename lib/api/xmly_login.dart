@@ -350,6 +350,20 @@ class XmlyLogin {
     if (_pending != null && now >= _pending!.expires) _pending = null;
   }
 
+  static String _phoneKey(String mobile) => sha256
+      .convert(utf8.encode(mobile.replaceFirst(RegExp(r'^\+'), '')))
+      .toString();
+
+  /// Survives clearing the challenge, including an unknown send outcome.
+  int smsCooldownSeconds(String mobile) {
+    final last = _lastSms[_phoneKey(mobile)];
+    if (last == null) return 0;
+    final remaining = const Duration(seconds: 180) - (_monotonic() - last);
+    return remaining > Duration.zero
+        ? (remaining.inMicroseconds / Duration.microsecondsPerSecond).ceil()
+        : 0;
+  }
+
   Future<Map<String, dynamic>> sendSms(
     String mobile,
     Map<String, dynamic> geetest, {
@@ -375,9 +389,7 @@ class XmlyLogin {
     }
     final captcha = {for (final key in _fields) key: geetest[key] as String};
     final lot = sha256.convert(utf8.encode(captcha['lot_number']!)).toString();
-    final phone = sha256
-        .convert(utf8.encode(mobile.replaceFirst(RegExp(r'^\+'), '')))
-        .toString();
+    final phone = _phoneKey(mobile);
     final generation = _generation;
     return _lock.synchronized(() async {
       if (generation != _generation) {
@@ -388,10 +400,8 @@ class XmlyLogin {
           now - _usedLots[lot]! < const Duration(seconds: 600)) {
         throw XmlyLoginError('captcha_reused', '本次安全验证已使用，请重新验证');
       }
-      final last = _lastSms[phone];
-      if (last != null && now - last < const Duration(seconds: 180)) {
-        final seconds = ((180000000 - (now - last).inMicroseconds) / 1000000)
-            .ceil();
+      final seconds = smsCooldownSeconds(mobile);
+      if (seconds > 0) {
         throw XmlyLoginError(
           'sms_cooldown',
           '请在 $seconds 秒后重新发送短信',
