@@ -584,6 +584,7 @@ class _AlbumPageViewState extends State<AlbumPageView> {
   List<Track> _visible = [];
   List<Track>? _complete;
   int _page = 1, _total = 0, _generation = 0;
+  Completer<void>? _catalogueCancelled;
   bool _busy = false, _autoBusy = false, _offline = false;
   bool _showSearch = false, _selectionMode = false, _cachedView = false;
   String? _error;
@@ -624,6 +625,7 @@ class _AlbumPageViewState extends State<AlbumPageView> {
 
     widget.runtime.removeListener(_runtimeChanged);
     _generation++;
+    _cancelCatalogue();
     _search.dispose();
     _range.dispose();
     _albumScroll.dispose();
@@ -650,6 +652,13 @@ class _AlbumPageViewState extends State<AlbumPageView> {
         "lib/pages/catalogue_page.dart::_AlbumPageViewState._runtimeChanged.closure#1",
       );
 
+      if (accountChanged) {
+        _complete = null;
+        _offline = false;
+        _filter = '';
+        _search.clear();
+        _clearSelection();
+      }
       if (!listEquals(downloads, _observedDownloads) ||
           !identical(cached, _observedCache)) {
         _observedDownloads = downloads;
@@ -666,6 +675,39 @@ class _AlbumPageViewState extends State<AlbumPageView> {
     });
     if (accountChanged || (libraryChanged && !_subscriptionMutating)) {
       _loadSubscription();
+    }
+    if (accountChanged) _loadPage(1, target: widget.initialTrack);
+  }
+
+  void _cancelCatalogue() {
+    AppLog.instance.trace(
+      "lib/pages/catalogue_page.dart::_AlbumPageViewState._cancelCatalogue",
+    );
+
+    _catalogueCancelled?.complete();
+    _catalogueCancelled = null;
+  }
+
+  Future<T> _readCatalogue<T>(
+    XmlyClient client,
+    Future<T> Function() read,
+  ) async {
+    AppLog.instance.trace(
+      "lib/pages/catalogue_page.dart::_AlbumPageViewState._readCatalogue",
+    );
+
+    _cancelCatalogue();
+    final cancelled = _catalogueCancelled = Completer<void>();
+    try {
+      return await client.withReadPolicy(
+        read,
+        rateLimitRetries: 4,
+        cancelled: cancelled.future,
+      );
+    } finally {
+      if (identical(_catalogueCancelled, cancelled)) {
+        _catalogueCancelled = null;
+      }
     }
   }
 
@@ -1119,6 +1161,8 @@ class _AlbumPageViewState extends State<AlbumPageView> {
         "lib/pages/catalogue_page.dart::_AlbumPageViewState._loadPage.closure#1",
       );
 
+      final generation = ++_generation;
+      _cancelCatalogue();
       if (_offline) {
         final tracks = _orderedForDisplay(_cachedTracks());
         if (target != null) {
@@ -1139,7 +1183,6 @@ class _AlbumPageViewState extends State<AlbumPageView> {
         if (target != null) _revealTarget(target, _generation);
         return;
       }
-      final generation = ++_generation;
       final client = widget.runtime.client,
           key = widget.runtime.client.cacheIdentity;
       setState(() {
@@ -1153,11 +1196,12 @@ class _AlbumPageViewState extends State<AlbumPageView> {
       try {
         int? targetOrdinal;
         if (target != null) {
-          final located = await _locateAlbumTrack(
-            client,
-            widget.albumId,
-            target,
-          );
+          final located = await _readCatalogue(client, () {
+            AppLog.instance.trace(
+              "lib/pages/catalogue_page.dart::_AlbumPageViewState._loadPage.closure#1.closure#4",
+            );
+            return _locateAlbumTrack(client, widget.albumId, target);
+          });
           if (!_sameAccount(client, key) || generation != _generation) return;
           targetOrdinal = _trackOrdinal(located)!;
           page = (targetOrdinal - 1) ~/ _pageSize + 1;
@@ -1166,14 +1210,14 @@ class _AlbumPageViewState extends State<AlbumPageView> {
           final filter = _filter.toLowerCase();
           final filtered = _orderedForDisplay(_complete!).where((track) {
             AppLog.instance.trace(
-              "lib/pages/catalogue_page.dart::_AlbumPageViewState._loadPage.closure#1.closure#4",
+              "lib/pages/catalogue_page.dart::_AlbumPageViewState._loadPage.closure#1.closure#5",
             );
             return track.title.toLowerCase().contains(filter);
           }).toList();
           if (mounted && generation == _generation) {
             setState(() {
               AppLog.instance.trace(
-                "lib/pages/catalogue_page.dart::_AlbumPageViewState._loadPage.closure#1.closure#5",
+                "lib/pages/catalogue_page.dart::_AlbumPageViewState._loadPage.closure#1.closure#6",
               );
 
               _page = page;
@@ -1185,12 +1229,17 @@ class _AlbumPageViewState extends State<AlbumPageView> {
             });
           }
         } else {
-          var result = await client.album(
-            widget.albumId,
-            page: page,
-            pageSize: _pageSize,
-            ascending: _ascending,
-          );
+          var result = await _readCatalogue(client, () {
+            AppLog.instance.trace(
+              "lib/pages/catalogue_page.dart::_AlbumPageViewState._loadPage.closure#1.closure#7",
+            );
+            return client.album(
+              widget.albumId,
+              page: page,
+              pageSize: _pageSize,
+              ascending: _ascending,
+            );
+          });
           if (!_sameAccount(client, key) || generation != _generation) return;
           if (!_ascending &&
               targetOrdinal != null &&
@@ -1198,18 +1247,23 @@ class _AlbumPageViewState extends State<AlbumPageView> {
             final targetPage = (result.total - targetOrdinal) ~/ _pageSize + 1;
             if (targetPage != page) {
               page = targetPage;
-              result = await client.album(
-                widget.albumId,
-                page: page,
-                pageSize: _pageSize,
-                ascending: false,
-              );
+              result = await _readCatalogue(client, () {
+                AppLog.instance.trace(
+                  "lib/pages/catalogue_page.dart::_AlbumPageViewState._loadPage.closure#1.closure#8",
+                );
+                return client.album(
+                  widget.albumId,
+                  page: page,
+                  pageSize: _pageSize,
+                  ascending: false,
+                );
+              });
             }
           }
           if (_sameAccount(client, key) && generation == _generation) {
             setState(() {
               AppLog.instance.trace(
-                "lib/pages/catalogue_page.dart::_AlbumPageViewState._loadPage.closure#1.closure#6",
+                "lib/pages/catalogue_page.dart::_AlbumPageViewState._loadPage.closure#1.closure#9",
               );
 
               _offline = false;
@@ -1229,7 +1283,7 @@ class _AlbumPageViewState extends State<AlbumPageView> {
         if (_sameAccount(client, key) && generation == _generation) {
           setState(() {
             AppLog.instance.trace(
-              "lib/pages/catalogue_page.dart::_AlbumPageViewState._loadPage.closure#1.closure#7",
+              "lib/pages/catalogue_page.dart::_AlbumPageViewState._loadPage.closure#1.closure#10",
             );
 
             _restoreCache(page: page);
@@ -1241,14 +1295,14 @@ class _AlbumPageViewState extends State<AlbumPageView> {
             final index = _orderedForDisplay(_cachedTracks())
                 .indexWhere((track) {
                   AppLog.instance.trace(
-                    "lib/pages/catalogue_page.dart::_AlbumPageViewState._loadPage.closure#1.closure#8",
+                    "lib/pages/catalogue_page.dart::_AlbumPageViewState._loadPage.closure#1.closure#11",
                   );
                   return track.id == target.id;
                 });
             if (index >= 0) {
               setState(() {
                 AppLog.instance.trace(
-                  "lib/pages/catalogue_page.dart::_AlbumPageViewState._loadPage.closure#1.closure#9",
+                  "lib/pages/catalogue_page.dart::_AlbumPageViewState._loadPage.closure#1.closure#12",
                 );
                 _showCached(index ~/ _pageSize + 1);
               });
@@ -1260,7 +1314,7 @@ class _AlbumPageViewState extends State<AlbumPageView> {
         if (mounted && generation == _generation)
           setState(() {
             AppLog.instance.trace(
-              "lib/pages/catalogue_page.dart::_AlbumPageViewState._loadPage.closure#1.closure#10",
+              "lib/pages/catalogue_page.dart::_AlbumPageViewState._loadPage.closure#1.closure#13",
             );
             _busy = false;
           });
@@ -1308,6 +1362,7 @@ class _AlbumPageViewState extends State<AlbumPageView> {
       );
 
       if (_busy || _ascending == ascending) return;
+      final epoch = _accountEpoch;
       setState(() {
         AppLog.instance.trace(
           "lib/pages/catalogue_page.dart::_AlbumPageViewState._setOrder.closure#1.closure#1",
@@ -1339,7 +1394,7 @@ class _AlbumPageViewState extends State<AlbumPageView> {
         }
       } catch (error, stack) {
         _recordCatalogueError('Catalogue order failed', error, stack);
-        if (mounted)
+        if (mounted && epoch == _accountEpoch)
           setState(() {
             AppLog.instance.trace(
               "lib/pages/catalogue_page.dart::_AlbumPageViewState._setOrder.closure#1.closure#4",
@@ -1347,7 +1402,7 @@ class _AlbumPageViewState extends State<AlbumPageView> {
             _error = '目录排序保存失败，请重试';
           });
       } finally {
-        if (mounted)
+        if (mounted && epoch == _accountEpoch)
           setState(() {
             AppLog.instance.trace(
               "lib/pages/catalogue_page.dart::_AlbumPageViewState._setOrder.closure#1.closure#5",
@@ -1389,7 +1444,12 @@ class _AlbumPageViewState extends State<AlbumPageView> {
     }
     final generation = _generation, client = widget.runtime.client;
     final identity = client.cacheIdentity;
-    final tracks = await XmlyCatalogue(client).album(widget.albumId);
+    final tracks = await _readCatalogue(client, () {
+      AppLog.instance.trace(
+        "lib/pages/catalogue_page.dart::_AlbumPageViewState._all.closure#1",
+      );
+      return XmlyCatalogue(client).album(widget.albumId);
+    });
     if (!mounted ||
         generation != _generation ||
         !identical(client, widget.runtime.client) ||
@@ -1410,6 +1470,8 @@ class _AlbumPageViewState extends State<AlbumPageView> {
       );
 
       if (_busy) return;
+      final generation = _generation;
+      final filter = _search.text.trim();
       setState(() {
         AppLog.instance.trace(
           "lib/pages/catalogue_page.dart::_AlbumPageViewState._filterAll.closure#1.closure#1",
@@ -1420,7 +1482,7 @@ class _AlbumPageViewState extends State<AlbumPageView> {
       });
       try {
         if (_offline) {
-          _filter = _search.text.trim();
+          _filter = filter;
           setState(() {
             AppLog.instance.trace(
               "lib/pages/catalogue_page.dart::_AlbumPageViewState._filterAll.closure#1.closure#2",
@@ -1429,11 +1491,12 @@ class _AlbumPageViewState extends State<AlbumPageView> {
           });
           return;
         }
-        if (_search.text.trim().isNotEmpty) await _all();
-        _filter = _search.text.trim();
+        if (filter.isNotEmpty) await _all();
+        if (!mounted || generation != _generation) return;
+        _filter = filter;
       } catch (error, stack) {
         _recordCatalogueError('Catalogue filtering failed', error, stack);
-        if (mounted)
+        if (mounted && generation == _generation)
           setState(() {
             AppLog.instance.trace(
               "lib/pages/catalogue_page.dart::_AlbumPageViewState._filterAll.closure#1.closure#3",
@@ -1442,7 +1505,7 @@ class _AlbumPageViewState extends State<AlbumPageView> {
           });
         return;
       } finally {
-        if (mounted)
+        if (mounted && generation == _generation)
           setState(() {
             AppLog.instance.trace(
               "lib/pages/catalogue_page.dart::_AlbumPageViewState._filterAll.closure#1.closure#4",
@@ -1450,7 +1513,7 @@ class _AlbumPageViewState extends State<AlbumPageView> {
             _busy = false;
           });
       }
-      if (mounted) await _loadPage(1);
+      if (mounted && generation == _generation) await _loadPage(1);
     });
   }
 
@@ -1464,6 +1527,7 @@ class _AlbumPageViewState extends State<AlbumPageView> {
       );
 
       if (_busy) return;
+      final generation = _generation;
       final range = _range.text.trim();
       final selected = _selected.values.toList();
       setState(() {
@@ -1489,7 +1553,7 @@ class _AlbumPageViewState extends State<AlbumPageView> {
         await requestDownloads(context, widget.runtime, requested);
       } catch (error, stack) {
         _recordCatalogueError('Download request failed', error, stack);
-        if (mounted)
+        if (mounted && generation == _generation)
           setState(() {
             AppLog.instance.trace(
               "lib/pages/catalogue_page.dart::_AlbumPageViewState._download.closure#1.closure#2",
@@ -1497,7 +1561,7 @@ class _AlbumPageViewState extends State<AlbumPageView> {
             _error = _safeError(error);
           });
       } finally {
-        if (mounted)
+        if (mounted && generation == _generation)
           setState(() {
             AppLog.instance.trace(
               "lib/pages/catalogue_page.dart::_AlbumPageViewState._download.closure#1.closure#3",
