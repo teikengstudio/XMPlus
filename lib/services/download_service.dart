@@ -33,6 +33,12 @@ class DownloadStopped implements Exception {
   const DownloadStopped();
 }
 
+/// Carries only the locally selected message from a failed permission preview.
+class _DownloadUnavailable implements Exception {
+  const _DownloadUnavailable(this.message);
+  final String message;
+}
+
 /// Cooperative cancellation also interrupts cooldowns. A backend must checkpoint
 /// before opening a request and between chunks, and close its response on stop.
 class DownloadControl {
@@ -1753,10 +1759,8 @@ class DownloadService {
         }
         for (final item in admitted) {
           _state(item, previous: _tasks[item.id]);
+          _tasks[item.id] = item;
         }
-        _tasks
-          ..clear()
-          ..addAll(next);
         if (album != null) _albums[album.id] = album;
         _suspended = false;
         _notify();
@@ -3097,10 +3101,7 @@ class DownloadService {
       final prepared = batch.items.single;
       await control.checkpoint();
       if (prepared.error != null) {
-        final normalized = XmlyException(
-          'download_unavailable',
-          prepared.error!,
-        );
+        final normalized = _DownloadUnavailable(prepared.error!);
         final failure = prepared._failure;
         if (failure != null) {
           control._normalizedFailure = normalized;
@@ -3173,20 +3174,23 @@ class DownloadService {
             );
 
             final next = Map<String, DownloadTask>.from(_tasks);
+            final balances = <String, int>{};
             for (final item in next.values.toList()) {
               if (item.accountIdentity == current.accountIdentity &&
                   item.expectedBalance != null &&
                   item.state != DownloadState.completed &&
                   !_hasDebit(item.accountIdentity, item.id, item.track.id)) {
+                balances[item.id] = item.expectedBalance! + claimed;
                 next[item.id] = item.copyWith(
-                  expectedBalance: item.expectedBalance! + claimed,
+                  expectedBalance: balances[item.id],
                 );
               }
             }
             await _save(next);
-            _tasks
-              ..clear()
-              ..addAll(next);
+            for (final entry in balances.entries) {
+              _tasks[entry.key] = task(entry.key)
+                  .copyWith(expectedBalance: entry.value);
+            }
           });
           expectedBalance = task(id).expectedBalance;
         }
@@ -3590,6 +3594,7 @@ class DownloadService {
 
     if (error is DownloadStopped) return true;
     if (error is MediaInputException) return true;
+    if (error is _DownloadUnavailable) return true;
     if (error is AccountException) {
       return const {
         'missing',
@@ -3651,7 +3656,18 @@ class DownloadService {
       "lib/services/download_service.dart::DownloadService._message",
     );
 
+    if (error is _DownloadUnavailable) return error.message;
     // Never persist third-party messages (they can contain signed URLs/secrets).
+    if (error is AccountException) {
+      switch (error.code) {
+        case 'missing':
+          return '原账号未登录，请重新登录原账号后重试';
+        case 'credential_missing':
+          return '原账号安全凭据缺失，请重新导入原账号后重试';
+        case 'paused':
+          return '账号正在切换，请稍后重试';
+      }
+    }
     if (error is XmlyException) {
       switch (error.code) {
         case 'original_account_required':
