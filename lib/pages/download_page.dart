@@ -1841,12 +1841,19 @@ class _DownloadPageState extends State<DownloadPage> {
           }
         }
         if (!mounted || widget.runtime != runtime) return;
-        final count = groups.values.fold<int>(0, (sum, tasks) {
+        final selected = groups.values.fold<List<DownloadTask>>([], (
+          selected,
+          tasks,
+        ) {
           AppLog.instance.trace(
             "lib/pages/download_page.dart::_DownloadPageState._deleteSelectedAudio.closure#1.closure#3",
           );
-          return sum + tasks.length;
+          selected.addAll(tasks);
+          return selected;
         });
+        final count = selected.length;
+        final hiddenSelected =
+            count - _matchingDownloads(selected, _downloadFilter).length;
         final confirmed = await showDialog<bool>(
           context: context,
           builder: (context) {
@@ -1859,6 +1866,7 @@ class _DownloadPageState extends State<DownloadPage> {
               content: Text(
                 '共 ${groups.length} 个路径，预计释放 ${_bytes(estimatedBytes)}'
                 '${unknownSizes > 0 ? "（另有 $unknownSizes 个路径大小未知或文件已缺失）" : ""}。\n\n'
+                '${hiddenSelected > 0 ? "其中 $hiddenSelected 条已选声音不在当前搜索结果中，也将删除其音频。\n\n" : ""}'
                 '正在使用这些文件的播放会停止。任务和扣时记录保留；缺失文件不会记为主动删除。',
               ),
               actions: [
@@ -2378,6 +2386,40 @@ class _DownloadPageState extends State<DownloadPage> {
     }
   }
 
+  List<DownloadTask> _matchingDownloads(
+    List<DownloadTask> tasks,
+    String query,
+  ) {
+    AppLog.instance.trace(
+      "lib/pages/download_page.dart::_DownloadPageState._matchingDownloads",
+    );
+    if (query.isEmpty) return tasks;
+    final tokens = query.split(RegExp(r'\s+')).where((value) {
+      AppLog.instance.trace(
+        "lib/pages/download_page.dart::_DownloadPageState._matchingDownloads.closure#1",
+      );
+      return value.isNotEmpty;
+    });
+    return tasks.where((task) {
+      AppLog.instance.trace(
+        "lib/pages/download_page.dart::_DownloadPageState._matchingDownloads.closure#2",
+      );
+      final track = task.track;
+      final text = [
+        _downloadAlbumTitle(task),
+        track.album,
+        track.title,
+        for (final ordinal in {
+          track.officialPosition,
+          track.orderNo,
+          track.episode,
+        }.whereType<int>())
+          '$ordinal 第${ordinal}集',
+      ].join(' ').toLowerCase();
+      return tokens.every(text.contains);
+    }).toList();
+  }
+
   Widget _downloadedLibrary(List<DownloadTask> completed) {
     AppLog.instance.trace(
       "lib/pages/download_page.dart::_DownloadPageState._downloadedLibrary",
@@ -2385,38 +2427,20 @@ class _DownloadPageState extends State<DownloadPage> {
 
     final compact = MediaQuery.sizeOf(context).width < 320;
     final query = _downloadFilter;
-    final tokens = query.split(RegExp(r'\s+')).where((value) {
-      AppLog.instance.trace(
-        "lib/pages/download_page.dart::_DownloadPageState._downloadedLibrary.closure#1",
-      );
-      return value.isNotEmpty;
-    });
-    final matches = query.isEmpty
-        ? const <DownloadTask>[]
-        : completed.where((task) {
-            AppLog.instance.trace(
-              "lib/pages/download_page.dart::_DownloadPageState._downloadedLibrary.closure#2",
-            );
-
-            final track = task.track;
-            final text = [
-              _downloadAlbumTitle(task),
-              track.album,
-              track.title,
-              for (final ordinal in {
-                track.officialPosition,
-                track.orderNo,
-                track.episode,
-              }.whereType<int>())
-                '$ordinal 第${ordinal}集',
-            ].join(' ').toLowerCase();
-            return tokens.every(text.contains);
-          }).toList();
-    final visible = query.isEmpty ? completed : matches;
+    final visible = _matchingDownloads(completed, query);
+    final hiddenSelected = query.isEmpty || _selectedDownloads.isEmpty
+        ? 0
+        : _selectedDownloads.length -
+              visible.where((task) {
+                AppLog.instance.trace(
+                  "lib/pages/download_page.dart::_DownloadPageState._downloadedLibrary.closure#1",
+                );
+                return _selectedDownloads.contains(task.id);
+              }).length;
     return LayoutBuilder(
       builder: (context, constraints) {
         AppLog.instance.trace(
-          "lib/pages/download_page.dart::_DownloadPageState._downloadedLibrary.closure#3",
+          "lib/pages/download_page.dart::_DownloadPageState._downloadedLibrary.closure#2",
         );
         return Column(
           children: [
@@ -2446,7 +2470,7 @@ class _DownloadPageState extends State<DownloadPage> {
                             valueListenable: _downloadQuery,
                             builder: (context, value, _) {
                               AppLog.instance.trace(
-                                "lib/pages/download_page.dart::_DownloadPageState._downloadedLibrary.closure#3.closure#1",
+                                "lib/pages/download_page.dart::_DownloadPageState._downloadedLibrary.closure#2.closure#1",
                               );
                               return value.text.isEmpty
                                   ? const SizedBox.shrink()
@@ -2455,7 +2479,7 @@ class _DownloadPageState extends State<DownloadPage> {
                                       icon: const Icon(Icons.clear),
                                       onPressed: () {
                                         AppLog.instance.trace(
-                                          "lib/pages/download_page.dart::_DownloadPageState._downloadedLibrary.closure#3.closure#1.closure#1",
+                                          "lib/pages/download_page.dart::_DownloadPageState._downloadedLibrary.closure#2.closure#1.closure#1",
                                         );
                                         _downloadQuery.clear();
                                         _searchDownloads('', immediately: true);
@@ -2468,7 +2492,7 @@ class _DownloadPageState extends State<DownloadPage> {
                         onChanged: _searchDownloads,
                         onSubmitted: (text) {
                           AppLog.instance.trace(
-                            "lib/pages/download_page.dart::_DownloadPageState._downloadedLibrary.closure#3.closure#2",
+                            "lib/pages/download_page.dart::_DownloadPageState._downloadedLibrary.closure#2.closure#2",
                           );
                           _searchDownloads(text, immediately: true);
                         },
@@ -2487,7 +2511,7 @@ class _DownloadPageState extends State<DownloadPage> {
                               ? null
                               : () {
                                   AppLog.instance.trace(
-                                    "lib/pages/download_page.dart::_DownloadPageState._downloadedLibrary.closure#3.closure#3",
+                                    "lib/pages/download_page.dart::_DownloadPageState._downloadedLibrary.closure#2.closure#3",
                                   );
                                   _run(_recheckAvailability);
                                 },
@@ -2509,11 +2533,11 @@ class _DownloadPageState extends State<DownloadPage> {
                                 ? null
                                 : () {
                                     AppLog.instance.trace(
-                                      "lib/pages/download_page.dart::_DownloadPageState._downloadedLibrary.closure#3.closure#4",
+                                      "lib/pages/download_page.dart::_DownloadPageState._downloadedLibrary.closure#2.closure#4",
                                     );
                                     setState(() {
                                       AppLog.instance.trace(
-                                        "lib/pages/download_page.dart::_DownloadPageState._downloadedLibrary.closure#3.closure#4.closure#1",
+                                        "lib/pages/download_page.dart::_DownloadPageState._downloadedLibrary.closure#2.closure#4.closure#1",
                                       );
                                       _selectingDownloads = true;
                                     });
@@ -2522,13 +2546,16 @@ class _DownloadPageState extends State<DownloadPage> {
                             label: const Text('多选音频'),
                           )
                         else ...[
-                          Text('已选 ${_selectedDownloads.length} 条'),
+                          Text(
+                            '已选 ${_selectedDownloads.length} 条'
+                            '${hiddenSelected > 0 ? "（含 $hiddenSelected 条未显示）" : ""}',
+                          ),
                           TextButton(
                             onPressed: _deletingAudio || visible.isEmpty
                                 ? null
                                 : () {
                                     AppLog.instance.trace(
-                                      "lib/pages/download_page.dart::_DownloadPageState._downloadedLibrary.closure#3.closure#5",
+                                      "lib/pages/download_page.dart::_DownloadPageState._downloadedLibrary.closure#2.closure#5",
                                     );
                                     _selectAudio(visible);
                                   },
@@ -2542,7 +2569,7 @@ class _DownloadPageState extends State<DownloadPage> {
                                 ? null
                                 : () {
                                     AppLog.instance.trace(
-                                      "lib/pages/download_page.dart::_DownloadPageState._downloadedLibrary.closure#3.closure#6",
+                                      "lib/pages/download_page.dart::_DownloadPageState._downloadedLibrary.closure#2.closure#6",
                                     );
                                     _run(_deleteSelectedAudio);
                                   },
@@ -2554,11 +2581,11 @@ class _DownloadPageState extends State<DownloadPage> {
                                 ? null
                                 : () {
                                     AppLog.instance.trace(
-                                      "lib/pages/download_page.dart::_DownloadPageState._downloadedLibrary.closure#3.closure#7",
+                                      "lib/pages/download_page.dart::_DownloadPageState._downloadedLibrary.closure#2.closure#7",
                                     );
                                     setState(() {
                                       AppLog.instance.trace(
-                                        "lib/pages/download_page.dart::_DownloadPageState._downloadedLibrary.closure#3.closure#7.closure#1",
+                                        "lib/pages/download_page.dart::_DownloadPageState._downloadedLibrary.closure#2.closure#7.closure#1",
                                       );
                                       _selectingDownloads = false;
                                       _selectedDownloads.clear();
@@ -2585,7 +2612,7 @@ class _DownloadPageState extends State<DownloadPage> {
                       Padding(
                         padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
                         child: Text(
-                          '本地下载记录：匹配 ${matches.length} / 共 ${completed.length} 条',
+                          '本地下载记录：匹配 ${visible.length} / 共 ${completed.length} 条',
                         ),
                       ),
                     if (query.isNotEmpty && _error != null)
@@ -2605,18 +2632,18 @@ class _DownloadPageState extends State<DownloadPage> {
             Expanded(
               child: query.isEmpty
                   ? _albumList(completed, downloaded: true)
-                  : matches.isEmpty
+                  : visible.isEmpty
                   ? const Center(child: Text('未找到匹配的本地下载记录'))
                   : Scrollbar(
                       child: ListView.builder(
                         key: ValueKey('downloadSearch:$query'),
-                        itemCount: matches.length,
+                        itemCount: visible.length,
                         itemBuilder: (context, index) {
                           AppLog.instance.trace(
-                            "lib/pages/download_page.dart::_DownloadPageState._downloadedLibrary.closure#3.closure#8",
+                            "lib/pages/download_page.dart::_DownloadPageState._downloadedLibrary.closure#2.closure#8",
                           );
                           return _downloadedTrack(
-                            matches[index],
+                            visible[index],
                             compact,
                             searchResult: true,
                           );
