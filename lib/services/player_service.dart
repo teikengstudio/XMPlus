@@ -191,6 +191,9 @@ class PlayerService {
   late final StreamSubscription<AudioSnapshot> _driverEvents;
   late final StreamSubscription<void> _downloadEvents;
   Timer? _timer;
+  int _sleepRevision = 0;
+  // A queued expiry blocks advancement, but cancellation can still revoke it.
+  int? _pendingSleepRevision;
   AudioProxy? _proxy;
   Future<AudioProxy>? _proxyOpening;
   PlaybackSource? _source;
@@ -250,6 +253,13 @@ class PlayerService {
       "lib/services/player_service.dart::PlayerService.changes.get",
     );
     return _changes.stream;
+  }
+
+  bool get _sleepStopping {
+    AppLog.instance.trace(
+      "lib/services/player_service.dart::PlayerService._sleepStopping.get",
+    );
+    return _sleepStopped || _pendingSleepRevision != null;
   }
 
   List<Track> get queue {
@@ -2172,7 +2182,7 @@ class PlayerService {
     final source = _source;
     if (source == null ||
         _atEnd ||
-        _sleepStopped ||
+        _sleepStopping ||
         !snapshot.playing ||
         snapshot.buffering ||
         snapshot.duration <= 0 ||
@@ -2196,7 +2206,7 @@ class PlayerService {
       );
       return !_closed &&
           !_atEnd &&
-          !_sleepStopped &&
+          !_sleepStopping &&
           playing &&
           request == _request &&
           epoch == _epoch &&
@@ -2351,14 +2361,17 @@ class PlayerService {
     // admission now, so it cannot start audio before the queued sleep action.
     final expired = policy.pollSleep();
     if (expired != null) {
+      final revision = _sleepRevision;
       _newRequest();
-      _sleepStopped = true;
+      _pendingSleepRevision = revision;
       await _commands.synchronized(() async {
         AppLog.instance.trace(
           "lib/services/player_service.dart::PlayerService.tick.closure#1",
         );
 
-        if (!_closed) await _sleep(expired, invalidateRequest: false);
+        if (_closed || revision != _sleepRevision) return;
+        _pendingSleepRevision = null;
+        await _sleep(expired, invalidateRequest: false);
       });
       return;
     }
@@ -2402,7 +2415,7 @@ class PlayerService {
       return;
     }
     await _pause();
-    if (_manualPaused || intent != _advanceIntent) return;
+    if (_manualPaused || _sleepStopping || intent != _advanceIntent) return;
     if (effectiveSettings.loopMode == 'single') {
       await _openCurrent(_newRequest(), resumePosition: 0);
       return;
@@ -2432,7 +2445,7 @@ class PlayerService {
                 _closed ||
                 !_atEnd ||
                 _manualPaused ||
-                _sleepStopped ||
+                _sleepStopping ||
                 epoch != _epoch ||
                 request != _request ||
                 intent != _advanceIntent ||
@@ -2669,7 +2682,7 @@ class PlayerService {
               _endAdvanceIntent == _advanceIntent &&
               current?.id == last.id &&
               cursor + 1 < _queue.length &&
-              !_sleepStopped &&
+              !_sleepStopping &&
               !_manualPaused &&
               effectiveSettings.autoNext &&
               effectiveSettings.loopMode != 'single') {
@@ -2695,7 +2708,7 @@ class PlayerService {
         if (speculative &&
             (!_atEnd ||
                 _manualPaused ||
-                _sleepStopped ||
+                _sleepStopping ||
                 endEpoch != _epoch ||
                 advanceIntent != _advanceIntent))
           rethrow;
@@ -2748,6 +2761,8 @@ class PlayerService {
         'action': request.action.name,
       });
     }
+    ++_sleepRevision;
+    _pendingSleepRevision = null;
     policy.armSleep(request);
     _notify();
   }
@@ -2758,6 +2773,8 @@ class PlayerService {
     );
 
     if (AppLog.instance.level == AppLogLevel.debug) _command('cancelSleep');
+    ++_sleepRevision;
+    _pendingSleepRevision = null;
     policy.cancelSleep();
     _notify();
   }
@@ -2770,9 +2787,12 @@ class PlayerService {
       "lib/services/player_service.dart::PlayerService._sleep",
     );
 
+    final revision = _sleepRevision;
     if (invalidateRequest) _newRequest();
     _sleepStopped = true;
     await _pause(sleep: true);
+    // Cancellation or replacement revokes an expiry still saving its pause.
+    if (revision != _sleepRevision) return;
     status = '定时已结束';
     _notify();
     if (action == SleepAction.exit) {
@@ -2783,7 +2803,7 @@ class PlayerService {
         AppLog.instance.trace(
           "lib/services/player_service.dart::PlayerService._sleep.closure#1",
         );
-        _background(exit);
+        if (revision == _sleepRevision) _background(exit);
       });
     }
   }
