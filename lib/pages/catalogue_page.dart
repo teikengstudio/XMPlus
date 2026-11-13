@@ -448,7 +448,7 @@ class _AlbumPageViewState extends State<AlbumPageView> {
     );
   }
 
-  void _restoreCache() {
+  void _restoreCache({int page = 1}) {
     final cached = widget.runtime.albumCache[widget.albumId];
     final tracks = _cachedTracks();
     if (cached == null && tracks.isEmpty) return;
@@ -460,7 +460,7 @@ class _AlbumPageViewState extends State<AlbumPageView> {
           artist: tracks.first.artist,
           coverUrl: tracks.first.coverUrl,
         );
-    _showCached(1, orderedTracks: _orderedForDisplay(tracks));
+    _showCached(page, orderedTracks: _orderedForDisplay(tracks));
   }
 
   void _showCached(int page, {List<Track>? orderedTracks}) {
@@ -762,7 +762,7 @@ class _AlbumPageViewState extends State<AlbumPageView> {
     } catch (error) {
       if (_sameAccount(client, key) && generation == _generation) {
         setState(() {
-          _restoreCache();
+          _restoreCache(page: page);
           _offline = _album != null;
           _error = _offline ? null : _safeError(error);
           if (target != null) _targetWarning = '暂时无法定位这集，目标信息已保留，请重新定位。';
@@ -890,14 +890,11 @@ class _AlbumPageViewState extends State<AlbumPageView> {
       final requested = range.isNotEmpty
           ? XmlyCatalogue.selectRange(await _all(), range)
           : selected;
-      final downloaded = _completedTrackIds();
-      final tracks = requested
-          .where((track) => !downloaded.contains(track.id))
-          .toList();
-      if (tracks.isEmpty)
+      if (requested.isEmpty)
         throw const XmlyException('empty_selection', '请选择未下载的声音或填写集数范围');
       if (!mounted) return;
-      await requestDownloads(context, widget.runtime, tracks);
+      // Preparation checks completed files before deduplicating their tasks.
+      await requestDownloads(context, widget.runtime, requested);
     } catch (error) {
       if (mounted) setState(() => _error = _safeError(error));
     } finally {
@@ -1424,7 +1421,9 @@ class _AlbumPageViewState extends State<AlbumPageView> {
                                 if (_album == null) ...[
                                   const SizedBox(height: 8),
                                   TextButton.icon(
-                                    onPressed: _busy ? null : () => _loadPage(_page),
+                                    onPressed: _busy
+                                        ? null
+                                        : () => _loadPage(_page),
                                     icon: const Icon(Icons.refresh_rounded),
                                     label: const Text('重新加载专辑'),
                                   ),
@@ -1489,15 +1488,16 @@ class _AlbumPageViewState extends State<AlbumPageView> {
                       );
                     },
                   ),
-                  if (_album != null) SliverToBoxAdapter(
-                    child: _Paging(
-                      page: _page,
-                      total: _total,
-                      pageSize: _pageSize,
-                      busy: _busy,
-                      onPage: _loadPage,
+                  if (_album != null)
+                    SliverToBoxAdapter(
+                      child: _Paging(
+                        page: _page,
+                        total: _total,
+                        pageSize: _pageSize,
+                        busy: _busy,
+                        onPage: _loadPage,
+                      ),
                     ),
-                  ),
                 ].map((sliver) => SliverPadding(padding: padding, sliver: sliver)).toList(),
               ),
             );
