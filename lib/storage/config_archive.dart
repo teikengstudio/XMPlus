@@ -103,7 +103,19 @@ class ConfigArchive {
   String get _origin =>
       sha256.convert(utf8.encode(storage.directory)).toString();
 
-  Future<List<int>> export({bool includeAccount = false}) async {
+  Future<List<int>> export({
+    bool includeAccount = false,
+    Future<void>? cancelled,
+  }) async {
+    var stopped = false;
+    unawaited(cancelled?.then((_) => stopped = true));
+    void checkCancelled() {
+      if (stopped) throw const ConfigArchiveException('备份导出已取消');
+    }
+
+    // Observe an already completed cancellation before preparing the archive.
+    await Future<void>.value();
+    checkCancelled();
     final state = storage.state;
     final tasks = {
       'downloads': _clean(state['downloads']),
@@ -120,11 +132,13 @@ class ConfigArchive {
     if (includeAccount) {
       final records = <Map<String, dynamic>>[];
       for (final entry in (state['accounts'] as Map).entries) {
+        checkCancelled();
         final record = entry.value as Map;
         Map<String, dynamic>? pair;
         final ref = record['credentialRef'];
         if (ref is String) {
           final encoded = await secrets.read(ref);
+          checkCancelled();
           if (encoded == null)
             throw const ConfigArchiveException('安全凭据缺失，未导出备份');
           final credentials = Credentials.parse(encoded);
@@ -145,6 +159,7 @@ class ConfigArchive {
         ...tasks,
       };
     }
+    checkCancelled();
     files['meta.json'] = {
       'type': 'data_archive',
       'formatVersion': 65536,
