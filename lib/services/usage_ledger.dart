@@ -139,7 +139,6 @@ class UsageLedger {
           'task_mismatch',
           'invalid_duration',
           'invalid_speed',
-          'no_uncertain_operation',
           'cancelled',
           'client_closed',
         }.contains(error.code))
@@ -194,13 +193,13 @@ class UsageLedger {
     }
     final ledger = account['ledger'];
     if (ledger != null && ledger is! Map<String, dynamic>) {
-      throw const XmlyException('invalid_ledger', '听时记录损坏，请保留资料');
+      throw const XmlyException('invalid_ledger', '扣时资料损坏，请保留资料');
     }
     final result = ledger as Map<String, dynamic>? ?? const <String, dynamic>{};
     if ((result['usage_uncertain'] != null &&
             result['usage_uncertain'] is! bool) ||
         (result['usage_pending'] != null && result['usage_pending'] is! Map)) {
-      throw const XmlyException('invalid_ledger', '待核对听时记录无效，请保留资料');
+      throw const XmlyException('invalid_ledger', '待核对扣时资料无效，请保留资料');
     }
     return result;
   }
@@ -226,7 +225,7 @@ class UsageLedger {
         return <String, dynamic>{};
       });
       if (ledger is! Map<String, dynamic>) {
-        throw const XmlyException('invalid_ledger', '听时记录损坏，请保留资料');
+        throw const XmlyException('invalid_ledger', '扣时资料损坏，请保留资料');
       }
       update(ledger);
     });
@@ -278,35 +277,21 @@ class UsageLedger {
         });
   }
 
-  /// A durable zero-baseline report cannot be resolved by comparing balances.
-  bool hasUnverifiableReport(String identity) {
-    AppLog.instance.trace(
-      "lib/services/usage_ledger.dart::UsageLedger.hasUnverifiableReport",
-    );
-
-    if (identity == 'anonymous') return false;
-    final pending = _ledger(identity)['usage_pending'];
-    return pending is Map &&
-        pending['accountIdentity'] == identity &&
-        pending['balanceBefore'] == 0 &&
-        (pending['state'] == 'submitting' || pending['state'] == 'uncertain');
-  }
-
-  void _guard(String identity) {
+  Future<void> _guard(String identity) async {
     AppLog.instance.trace("lib/services/usage_ledger.dart::UsageLedger._guard");
 
-    if (isBlocked(identity)) throw _uncertain;
     if (clientFor(identity).identity != identity) {
       throw const XmlyException('account_mismatch', '请求账号已改变，请重新操作');
     }
+    if (isBlocked(identity)) await _refreshPending(identity);
   }
 
   static const _uncertain = XmlyException(
     'usage_uncertain',
-    '上次扣时结果未知，请先到官方 App 核对并确认是否已扣',
+    '听时暂时无法确认，正在自动核对，请稍后再试',
   );
 
-  /// Local recovery only; no POST, query, or automatic replay on startup.
+  /// Local recovery only; operation entry points refresh quota without replaying.
   Future<void> load() async {
     AppLog.instance.trace("lib/services/usage_ledger.dart::UsageLedger.load");
 
@@ -395,7 +380,7 @@ class UsageLedger {
           throw const XmlyException('account_mismatch', '声音授权与下载账号不符');
         }
         await _recover(identity);
-        _guard(identity);
+        await _guard(identity);
         for (final receipt in receipts(identity).reversed) {
           if (receipt.taskId != taskId) continue;
           if (receipt.trackId != audio.track.id) {
@@ -480,7 +465,7 @@ class UsageLedger {
               } else {
                 await Future<void>.delayed(delay);
               }
-              _guard(identity);
+              await _guard(identity);
               final refreshed = await clientFor(identity).queryQuota();
               if (refreshed.remainingSeconds != quota.remainingSeconds) {
                 throw const XmlyException(
@@ -537,7 +522,7 @@ class UsageLedger {
         );
 
         await _recover(identity);
-        _guard(identity);
+        await _guard(identity);
         final quota = await clientFor(identity).queryQuota();
         final newDevice = quota.newDevice && quota.remainingSeconds == 0;
         if (!newDevice && quota.remainingSeconds - debt(identity) <= 0) {
@@ -630,7 +615,7 @@ class UsageLedger {
 
           try {
             await _sample(watch.identity);
-            if (isBlocked(watch.identity)) throw _uncertain;
+            await _guard(watch.identity);
             if (!playing ||
                 _monotonic() - watch.settledAt >=
                     const Duration(seconds: 120)) {
@@ -756,15 +741,15 @@ class UsageLedger {
     await _settleAccounts();
   }
 
-  /// Exit can leave these durable journals intact, but may not replay them.
+  /// Exit refreshes unknown reports without replaying them.
   Future<void> settleForExit() {
     AppLog.instance.trace(
       "lib/services/usage_ledger.dart::UsageLedger.settleForExit",
     );
-    return _settleAccounts(exiting: true);
+    return _settleAccounts();
   }
 
-  Future<void> _settleAccounts({bool exiting = false}) {
+  Future<void> _settleAccounts() {
     AppLog.instance.trace(
       "lib/services/usage_ledger.dart::UsageLedger._settleAccounts",
     );
@@ -786,11 +771,7 @@ class UsageLedger {
             await _settleLocked(id);
           } on XmlyException catch (error, stack) {
             _recordFailure(error, stack, id);
-            if (!exiting ||
-                error.code != 'usage_uncertain' ||
-                !hasUnverifiableReport(id)) {
-              rethrow;
-            }
+            rethrow;
           }
         });
       }
@@ -810,7 +791,7 @@ class UsageLedger {
         debt(identity) < 1 &&
         watch?.identity != identity)
       return;
-    _guard(identity);
+    await _guard(identity);
     var seconds = debt(identity).floor();
     while (seconds > 0) {
       final amount = seconds > maxSeconds ? maxSeconds : seconds;
@@ -905,11 +886,7 @@ class UsageLedger {
                   .remainingSeconds;
       } catch (error, stack) {
         _recordFailure(error, stack, identity);
-        // A generic rejection is not operation-specific proof for a report on
-        // a device without a balance bucket. Keep its journal replay-blocking.
-        if (error is XmlyException &&
-            error.definitive &&
-            !(online && balanceBefore == 0)) {
+        if (error is XmlyException && error.definitive) {
           try {
             await _finish(
               identity,
@@ -925,16 +902,16 @@ class UsageLedger {
           }
           rethrow;
         }
-        await _markUncertain(identity, operation, online: online);
-        AppLog.instance.linkError(_uncertain, error);
-        throw _uncertain;
+        try {
+          await _refreshPending(identity);
+          return;
+        } catch (refreshError, refreshStack) {
+          _recordFailure(refreshError, refreshStack, identity);
+          await _markUncertain(identity, operation, online: online);
+          rethrow;
+        }
       }
       operation['balanceAfter'] = balanceAfter;
-      // A new-device flag describes quota, not whether this report was applied.
-      if (!freeDay && balanceBefore - balanceAfter != operation['seconds']) {
-        await _markUncertain(identity, operation, online: online);
-        throw _uncertain;
-      }
       try {
         await _finish(
           identity,
@@ -1032,74 +1009,64 @@ class UsageLedger {
     });
   }
 
-  /// [wasDebited] is an explicit human decision, never inferred from a balance.
-  /// A negative decision permits the next explicit operation, not an auto-retry.
-  Future<void> reconcile(
-    String identity,
-    String operationId, {
-    required bool wasDebited,
-  }) {
+  /// Adopt the server balance, not a locally inferred per-report outcome.
+  Future<void> _refreshPending(String identity) async {
     AppLog.instance.trace(
-      "lib/services/usage_ledger.dart::UsageLedger.reconcile",
-    );
-    return _lock(identity).synchronized(() async {
-      AppLog.instance.trace(
-        "lib/services/usage_ledger.dart::UsageLedger.reconcile.closure#1",
-      );
-
-      await _recover(identity);
-      final ledger = _ledger(identity);
-      final pending = ledger['usage_pending'];
-      final online = pending is Map && pending['operationId'] == operationId;
-      Map<String, dynamic>? operation;
-      if (online) {
-        operation = Map<String, dynamic>.from(pending);
-      } else {
-        for (final receipt in receipts(identity)) {
-          if (receipt.operationId == operationId) operation = receipt.toJson();
-        }
-      }
-      if (operation == null ||
-          operation['accountIdentity'] != identity ||
-          !['uncertain', 'submitting'].contains(operation['state'])) {
-        throw const XmlyException('no_uncertain_operation', '没有这笔需要人工核对的扣时');
-      }
-      if (operation['seconds'] is! int ||
-          (operation['seconds'] as int) < 1 ||
-          (online && (operation['seconds'] as int) > debt(identity))) {
-        throw const XmlyException('invalid_ledger', '待核对扣时记录无效，请保留资料');
-      }
-      // The screen already tried to display the balance. A human decision made
-      // in the official app must remain saveable when that query is unavailable.
-      // Validate the mounted identity without making another network request.
-      queryClient(identity);
-      // A report may be accepted without deducting anything on a new device.
-      // Neither manual balance-based answer proves whether it was applied.
-      if (online && operation['balanceBefore'] == 0) {
-        throw const XmlyException(
-          'usage_uncertain',
-          '新设备没有可核对的余额变动，已保留听时记录，不会重复上报',
-        );
-      }
-      await _finish(
-        identity,
-        operation,
-        online: online,
-        state: wasDebited ? DebitState.confirmed : DebitState.rejected,
-      );
-    });
-  }
-
-  XmlyClient queryClient(String identity) {
-    AppLog.instance.trace(
-      "lib/services/usage_ledger.dart::UsageLedger.queryClient",
+      "lib/services/usage_ledger.dart::UsageLedger._refreshPending",
     );
 
+    final pending = _ledger(identity)['usage_pending'];
+    if (pending is Map &&
+        (pending['accountIdentity'] != identity ||
+            pending['operationId'] is! String ||
+            (pending['operationId'] as String).isEmpty ||
+            !['uncertain', 'submitting'].contains(pending['state']) ||
+            pending['seconds'] is! int ||
+            (pending['seconds'] as int) < 1 ||
+            (pending['seconds'] as int) > maxSeconds ||
+            (pending['seconds'] as int) > debt(identity))) {
+      throw const XmlyException('invalid_ledger', '待核对扣时记录无效，请保留资料');
+    }
+    final entries = receipts(identity);
     final client = clientFor(identity);
     if (client.identity != identity) {
-      throw const XmlyException('account_mismatch', '请使用原账号核对听时');
+      throw const XmlyException('account_mismatch', '请求账号已改变，请重新操作');
     }
-    return client;
+    final quota = await client.queryQuota();
+    if (!identical(client, clientFor(identity)) ||
+        client.identity != identity) {
+      throw const XmlyException('account_mismatch', '请求账号已改变，请重新操作');
+    }
+    if (pending is Map) {
+      await _finish(
+        identity,
+        {
+          ...Map<String, dynamic>.from(pending),
+          'balanceAfter': quota.remainingSeconds,
+        },
+        online: true,
+        state: DebitState.confirmed,
+      );
+    }
+    for (final receipt in entries) {
+      if (receipt.state != DebitState.submitting &&
+          receipt.state != DebitState.uncertain)
+        continue;
+      await _finish(
+        identity,
+        {...receipt.toJson(), 'balanceAfter': quota.remainingSeconds},
+        online: false,
+        state: DebitState.confirmed,
+      );
+    }
+    if (pending == null && _ledger(identity)['usage_uncertain'] == true) {
+      await _write(identity, (ledger) {
+        AppLog.instance.trace(
+          "lib/services/usage_ledger.dart::UsageLedger._refreshPending.closure#1",
+        );
+        ledger['usage_uncertain'] = false;
+      });
+    }
   }
 }
 

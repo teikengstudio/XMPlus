@@ -18,10 +18,8 @@ import '../services/update_service.dart';
 import 'settings_page.dart';
 import 'home_page.dart';
 import 'listening_page.dart';
-import 'usage_page.dart';
 import '../models/xmly_models.dart';
 import 'download_page.dart';
-import 'catalogue_page.dart';
 
 class ShellPage extends StatefulWidget {
   const ShellPage({
@@ -180,48 +178,6 @@ class _ShellPageState extends State<ShellPage> {
     });
   }
 
-  void _openSearch() {
-    AppLog.instance.trace(
-      "lib/pages/shell_page.dart::_ShellPageState._openSearch",
-    );
-    Navigator.of(context).push(
-      MaterialPageRoute<void>(
-        builder: (_) {
-          AppLog.instance.trace(
-            "lib/pages/shell_page.dart::_ShellPageState._openSearch.closure#1",
-          );
-          return Scaffold(
-            appBar: AppHeader(title: const Text('搜索')),
-            body: DiscoveryPage(
-              runtime: widget.runtime,
-              onDownload: _download,
-              onPlayAlbum: widget.runtime.player.playAlbum,
-            ),
-          );
-        },
-      ),
-    );
-  }
-
-  void _openUsage() {
-    AppLog.instance.trace(
-      "lib/pages/shell_page.dart::_ShellPageState._openUsage",
-    );
-    Navigator.of(context).push(
-      MaterialPageRoute<void>(
-        builder: (_) {
-          AppLog.instance.trace(
-            "lib/pages/shell_page.dart::_ShellPageState._openUsage.closure#1",
-          );
-          return UsagePage(
-            runtime: widget.runtime,
-            ledger: widget.runtime.ledger,
-          );
-        },
-      ),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     AppLog.instance.trace("lib/pages/shell_page.dart::_ShellPageState.build");
@@ -279,39 +235,6 @@ class _ShellPageState extends State<ShellPage> {
                     ];
                   },
                 ),
-              if (compact)
-                PopupMenuButton<String>(
-                  tooltip: '更多操作',
-                  offset: const Offset(0, 12),
-                  onSelected: (value) {
-                    AppLog.instance.trace(
-                      "lib/pages/shell_page.dart::_ShellPageState.build.closure#1.closure#3",
-                    );
-
-                    value == 'search' ? _openSearch() : _openUsage();
-                  },
-                  itemBuilder: (_) {
-                    AppLog.instance.trace(
-                      "lib/pages/shell_page.dart::_ShellPageState.build.closure#1.closure#4",
-                    );
-                    return const [
-                      PopupMenuItem(value: 'search', child: Text('搜索专辑或声音')),
-                      PopupMenuItem(value: 'usage', child: Text('听时记录')),
-                    ];
-                  },
-                )
-              else ...[
-                IconButton(
-                  tooltip: '搜索专辑或声音',
-                  icon: const Icon(Icons.search),
-                  onPressed: _openSearch,
-                ),
-                IconButton(
-                  tooltip: '听时记录',
-                  icon: const Icon(Icons.receipt_long_outlined),
-                  onPressed: _openUsage,
-                ),
-              ],
             ],
           ),
           body: SafeArea(
@@ -354,7 +277,7 @@ class _ShellPageState extends State<ShellPage> {
                         selectedIndex: _selectedIndex,
                         destinations: _destinations.map((destination) {
                           AppLog.instance.trace(
-                            "lib/pages/shell_page.dart::_ShellPageState.build.closure#1.closure#5",
+                            "lib/pages/shell_page.dart::_ShellPageState.build.closure#1.closure#3",
                           );
 
                           return NavigationRailDestination(
@@ -381,7 +304,7 @@ class _ShellPageState extends State<ShellPage> {
                         listenable: widget.runtime,
                         builder: (context, _) {
                           AppLog.instance.trace(
-                            "lib/pages/shell_page.dart::_ShellPageState.build.closure#1.closure#6",
+                            "lib/pages/shell_page.dart::_ShellPageState.build.closure#1.closure#4",
                           );
                           return widget.runtime.lifecycleError == null
                               ? const SizedBox.shrink()
@@ -391,7 +314,7 @@ class _ShellPageState extends State<ShellPage> {
                                     TextButton(
                                       onPressed: () {
                                         AppLog.instance.trace(
-                                          "lib/pages/shell_page.dart::_ShellPageState.build.closure#1.closure#6.closure#1",
+                                          "lib/pages/shell_page.dart::_ShellPageState.build.closure#1.closure#4.closure#1",
                                         );
 
                                         widget.runtime.lifecycleError = null;
@@ -444,7 +367,7 @@ class _ShellPageState extends State<ShellPage> {
                       onSelected: _select,
                       itemBuilder: (_) {
                         AppLog.instance.trace(
-                          "lib/pages/shell_page.dart::_ShellPageState.build.closure#1.closure#7",
+                          "lib/pages/shell_page.dart::_ShellPageState.build.closure#1.closure#5",
                         );
                         return [
                           for (
@@ -485,7 +408,7 @@ class _ShellPageState extends State<ShellPage> {
                   selectedIndex: _selectedIndex,
                   destinations: _destinations.map((destination) {
                     AppLog.instance.trace(
-                      "lib/pages/shell_page.dart::_ShellPageState.build.closure#1.closure#8",
+                      "lib/pages/shell_page.dart::_ShellPageState.build.closure#1.closure#6",
                     );
 
                     return NavigationDestination(

@@ -102,6 +102,7 @@ Map<String, dynamic> _publicRaw(Map<String, dynamic> raw) {
     'albumImage',
     'tracks',
     'totalCount',
+    'likes',
     'total',
     'year',
     'date',
@@ -364,6 +365,12 @@ class Track {
   String get number {
     AppLog.instance.trace("lib/models/xmly_models.dart::Track.number.get");
     return id.substring(5);
+  }
+
+  int? get likes {
+    AppLog.instance.trace("lib/models/xmly_models.dart::Track.likes.get");
+    final value = raw['likes'];
+    return value is int && value >= 0 ? value : null;
   }
 
   int? get officialPosition {

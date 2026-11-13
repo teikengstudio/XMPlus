@@ -1523,11 +1523,6 @@ class PlayerService {
     final local = _localProgress(track);
     try {
       final resume = saved ?? local?.position ?? 0.0;
-      if (source.requiresReward &&
-          source.kind == 'online' &&
-          ledger.isBlocked(source.identity)) {
-        throw const XmlyException('usage_uncertain', '请先核对听时');
-      }
       await ledger.startWatch(
         identity: source.identity,
         trackId: track.id,
@@ -1715,9 +1710,6 @@ class PlayerService {
       throw const XmlyException('identity_mismatch', '声音授权与账号不符');
     }
     final reward = audio.requiresReward;
-    if (reward && ledger.isBlocked(identity)) {
-      throw const XmlyException('usage_uncertain', '请先核对听时');
-    }
     final directory = p.join(
       storage.directory,
       'playback-cache',
@@ -2780,15 +2772,7 @@ class PlayerService {
 
     if (invalidateRequest) _newRequest();
     _sleepStopped = true;
-    try {
-      await _pause(sleep: true);
-    } on XmlyException catch (error) {
-      if (action != SleepAction.exit ||
-          error.code != 'usage_uncertain' ||
-          !ledger.hasUnverifiableReport(_progressIdentity)) {
-        rethrow;
-      }
-    }
+    await _pause(sleep: true);
     status = '定时已结束';
     _notify();
     if (action == SleepAction.exit) {
@@ -3306,7 +3290,6 @@ class PlayerService {
 
   Future<void> _stopSource({
     bool preserveUnknown = false,
-    bool exiting = false,
     Track? localTarget,
   }) async {
     AppLog.instance.trace(
@@ -3328,23 +3311,18 @@ class PlayerService {
         await _saveProgress(terminal: true);
         await ledger.stopWatch();
       } on XmlyException catch (error) {
-        final preserveOnExit =
-            exiting &&
-            error.code == 'usage_uncertain' &&
-            ledger.hasUnverifiableReport(_progressIdentity);
-        if (!preserveOnExit &&
-            (!const {
-                  'usage_uncertain',
-                  'insufficient_quota',
-                }.contains(error.code) ||
-                localTarget == null ||
-                await _downloaded(localTarget) == null)) {
+        if (!const {
+              'usage_uncertain',
+              'insufficient_quota',
+            }.contains(error.code) ||
+            localTarget == null ||
+            await _downloaded(localTarget) == null) {
           rethrow;
         }
-        // Exit or a verified local source needs no new debit. Save the watch
-        // without changing any pending operation or receipt.
+        // A verified local source needs no new debit. Save the watch without
+        // changing any pending operation or receipt.
         await ledger.captureForRestore();
-        await _saveProgress(terminal: true, sync: preserveOnExit);
+        await _saveProgress(terminal: true, sync: false);
       }
     }
     await _driver.stop();
@@ -3385,19 +3363,13 @@ class PlayerService {
     });
   }
 
-  Future<void> quiesce({
-    bool preserveUnknown = false,
-    bool exiting = false,
-  }) async {
+  Future<void> quiesce({bool preserveUnknown = false}) async {
     AppLog.instance.trace(
       "lib/services/player_service.dart::PlayerService.quiesce",
     );
 
     if (AppLog.instance.level == AppLogLevel.debug) {
-      _command('quiesce', {
-        'preserveUnknown': preserveUnknown,
-        'exiting': exiting,
-      });
+      _command('quiesce', {'preserveUnknown': preserveUnknown});
     }
     if (_closed) return;
     _newRequest();
@@ -3406,7 +3378,7 @@ class PlayerService {
         "lib/services/player_service.dart::PlayerService.quiesce.closure#1",
       );
 
-      await _stopSource(preserveUnknown: preserveUnknown, exiting: exiting);
+      await _stopSource(preserveUnknown: preserveUnknown);
       _notify();
     });
   }

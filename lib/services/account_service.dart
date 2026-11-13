@@ -1059,7 +1059,7 @@ class AccountService {
 
     for (final account in accounts.values) {
       if (_unsettled(account)) {
-        throw const AccountException('unsettled', '仍有未结算或结果未知的扣时，请先核对原账号');
+        throw const AccountException('unsettled', '听时暂时无法确认，正在自动核对，请稍后再试');
       }
     }
   }

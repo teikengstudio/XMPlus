@@ -13,6 +13,7 @@ import '../common/widgets/app_tab_button.dart';
 import '../common/widgets/confirmation_dialog.dart';
 import '../common/widgets/logged_network_image.dart';
 import '../common/widgets/local_panel.dart';
+import '../common/widgets/playback_action_button.dart';
 import '../models/xmly_models.dart';
 import '../services/app_log.dart';
 import '../services/app_runtime.dart';
@@ -105,14 +106,12 @@ class PlayerPanel extends StatefulWidget {
   }
 }
 
-class _PlayerPanelState extends State<PlayerPanel>
-    with SingleTickerProviderStateMixin {
-  late final TabController _tabs;
+class _PlayerPanelState extends State<PlayerPanel> {
   PageController _pages = PageController(keepPage: false);
   final _retiredPages = <PageController>{};
   int _paneCount = 1, _secondaryPage = 1;
-  int? _pendingPaneCount;
-  bool _pageSwipe = false;
+  (int, bool)? _pendingPaneLayout;
+  bool _configuredManuscript = true;
   bool _changingPaneLayout = false;
   final _visitedPages = <int>{0};
   int _selectedPage = 0;
@@ -129,6 +128,11 @@ class _PlayerPanelState extends State<PlayerPanel>
   bool? _favorite;
   bool _favoriteBusy = false, _favoriteMutating = false;
   int _favoriteRequest = 0, _libraryRevision = -1;
+  XmlyClient? _likeClient;
+  String? _likeKey, _likeTrackId, _likeError, _likeCountError;
+  int? _likeCount;
+  bool _likeBusy = false, _likeCountLoading = false;
+  int _likeRequest = 0, _likeCountRequest = 0;
   XmlyClient? _manuscriptClient;
   String? _manuscriptKey, _manuscriptTrackId, _manuscript, _manuscriptError;
   bool _manuscriptLoading = false;
@@ -156,10 +160,14 @@ class _PlayerPanelState extends State<PlayerPanel>
     );
 
     super.initState();
-    _tabs = TabController(length: 3, vsync: this)..addListener(_pageChanged);
     _runtime.addListener(_favoriteContextChanged);
+    _runtime.addListener(_likeContextChanged);
     _runtime.addListener(_manuscriptContextChanged);
-    if (widget.expanded) unawaited(_refreshFavorite());
+    if (widget.expanded) {
+      unawaited(_refreshFavorite());
+      _refreshLikes();
+      unawaited(_refreshManuscript());
+    }
   }
 
   @override
@@ -171,16 +179,20 @@ class _PlayerPanelState extends State<PlayerPanel>
     super.didUpdateWidget(oldWidget);
     if (oldWidget.runtime != _runtime) {
       oldWidget.runtime.removeListener(_favoriteContextChanged);
+      oldWidget.runtime.removeListener(_likeContextChanged);
       oldWidget.runtime.removeListener(_manuscriptContextChanged);
       _runtime.addListener(_manuscriptContextChanged);
       _runtime.addListener(_favoriteContextChanged);
+      _runtime.addListener(_likeContextChanged);
       _dragPosition = null;
       _dragEpoch = null;
     }
     if (widget.expanded &&
         (oldWidget.runtime != _runtime || !oldWidget.expanded)) {
       unawaited(_refreshFavorite());
+      _refreshLikes();
     }
+    if (oldWidget.runtime != _runtime && !widget.expanded) _refreshLikes();
     if (oldWidget.runtime != _runtime ||
         oldWidget.expanded != widget.expanded) {
       unawaited(_refreshManuscript());
@@ -194,17 +206,19 @@ class _PlayerPanelState extends State<PlayerPanel>
     );
 
     _runtime.removeListener(_favoriteContextChanged);
+    _runtime.removeListener(_likeContextChanged);
     _runtime.removeListener(_manuscriptContextChanged);
     _manuscriptRequest++;
     _manuscriptCancelled?.complete();
     _manuscriptCancelled = null;
     _favoriteRequest++;
+    _likeRequest++;
+    _likeCountRequest++;
     _pages.dispose();
     for (final controller in _retiredPages) {
       controller.dispose();
     }
     _retiredPages.clear();
-    _tabs.dispose();
     _keyboardFocus.dispose();
     super.dispose();
   }
@@ -245,7 +259,7 @@ class _PlayerPanelState extends State<PlayerPanel>
         keyboard.isShiftPressed) {
       return KeyEventResult.ignored;
     }
-    if (widget.expanded && _selectedPage != 0) {
+    if (widget.expanded && _paneCount == 1 && _selectedPage != 0) {
       return KeyEventResult.ignored;
     }
     final player = _runtime.player;
@@ -333,8 +347,7 @@ class _PlayerPanelState extends State<PlayerPanel>
         _manuscript = null;
         _manuscriptError = null;
         _manuscriptLoaded = false;
-        _manuscriptLoading =
-            widget.expanded && _manuscriptVisible && trackId != null;
+        _manuscriptLoading = widget.expanded && trackId != null;
       });
       if (!_manuscriptLoading) return;
       final cancelled = _manuscriptCancelled = Completer<void>();
@@ -369,6 +382,13 @@ class _PlayerPanelState extends State<PlayerPanel>
 
             _manuscript = manuscript;
             _manuscriptLoaded = true;
+            if (manuscript == null) {
+              if (_selectedPage == 1) _selectedPage = 2;
+              if (_secondaryPage == 1) _secondaryPage = 2;
+              if (_paneCount == 2 || _selectedPage == 2) {
+                _visitedPages.add(2);
+              }
+            }
           });
         }
       } catch (error, stack) {
@@ -397,23 +417,23 @@ class _PlayerPanelState extends State<PlayerPanel>
     });
   }
 
-  void _pageChanged() {
+  void _selectPage(int page) {
     AppLog.instance.trace(
-      'lib/pages/player_panel.dart::_PlayerPanelState._pageChanged',
+      'lib/pages/player_panel.dart::_PlayerPanelState._selectPage',
     );
-    if (_selectedPage == _tabs.index) return;
+    if (!_pageOrder.contains(page)) return;
     setState(() {
       AppLog.instance.trace(
-        'lib/pages/player_panel.dart::_PlayerPanelState._pageChanged.closure#1',
+        'lib/pages/player_panel.dart::_PlayerPanelState._selectPage.closure#1',
       );
-      _selectedPage = _tabs.index;
-      if (_selectedPage != 0) _secondaryPage = _selectedPage;
-      _visitedPages.add(_selectedPage);
+      _selectedPage = page;
+      if (page != 0) _secondaryPage = page;
+      _visitedPages.add(page);
     });
-    if (_paneCount == 1 && !_pageSwipe && _pages.hasClients) {
+    if (_paneCount == 1 && _pages.hasClients && !_changingPaneLayout) {
       unawaited(
         _pages.animateToPage(
-          _selectedPage,
+          _pageOrder.indexOf(page),
           duration: MediaQuery.disableAnimationsOf(context)
               ? Duration.zero
               : const Duration(milliseconds: 250),
@@ -421,33 +441,42 @@ class _PlayerPanelState extends State<PlayerPanel>
         ),
       );
     }
-    if (_manuscriptVisible) unawaited(_refreshManuscript());
   }
 
-  bool get _manuscriptVisible {
+  bool get _hasManuscript {
     AppLog.instance.trace(
-      'lib/pages/player_panel.dart::_PlayerPanelState._manuscriptVisible.get',
+      'lib/pages/player_panel.dart::_PlayerPanelState._hasManuscript.get',
     );
-    return _paneCount == 3 ||
-        (_paneCount == 2 ? _secondaryPage == 1 : _selectedPage == 1);
+    return !_manuscriptLoaded || _manuscript != null;
+  }
+
+  List<int> get _pageOrder {
+    AppLog.instance.trace(
+      'lib/pages/player_panel.dart::_PlayerPanelState._pageOrder.get',
+    );
+    if (!_hasManuscript) return const [0, 2];
+    return _paneCount == 2 && _secondaryPage == 2
+        ? const [0, 2, 1]
+        : const [0, 1, 2];
   }
 
   void _configurePanes(int count) {
     AppLog.instance.trace(
       'lib/pages/player_panel.dart::_PlayerPanelState._configurePanes',
     );
-    if (count == _paneCount) {
-      _pendingPaneCount = null;
+    final layout = (count, _hasManuscript);
+    if (count == _paneCount && _hasManuscript == _configuredManuscript) {
+      _pendingPaneLayout = null;
       return;
     }
-    if (count == _pendingPaneCount) return;
-    _pendingPaneCount = count;
+    if (layout == _pendingPaneLayout) return;
+    _pendingPaneLayout = layout;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       AppLog.instance.trace(
         'lib/pages/player_panel.dart::_PlayerPanelState._configurePanes.closure#1',
       );
-      if (!mounted || _pendingPaneCount != count) return;
-      _pendingPaneCount = null;
+      if (!mounted || _pendingPaneLayout != layout) return;
+      _pendingPaneLayout = null;
       final oldPages = _pages;
       _changingPaneLayout = true;
       setState(() {
@@ -455,13 +484,13 @@ class _PlayerPanelState extends State<PlayerPanel>
           'lib/pages/player_panel.dart::_PlayerPanelState._configurePanes.closure#1.closure#1',
         );
         _paneCount = count;
+        _configuredManuscript = _hasManuscript;
         _pages = PageController(
           keepPage: false,
           viewportFraction: 1 / count,
-          initialPage: count == 1 ? _selectedPage : 0,
+          initialPage: count == 1 ? _pageOrder.indexOf(_selectedPage) : 0,
         );
-        if (count >= 2) _visitedPages.add(_secondaryPage);
-        if (count == 3) _visitedPages.addAll(const [1, 2]);
+        if (count == 2) _visitedPages.add(_secondaryPage);
       });
       final installedPages = _pages;
       _retiredPages.add(oldPages);
@@ -471,13 +500,14 @@ class _PlayerPanelState extends State<PlayerPanel>
         );
         if (mounted && identical(_pages, installedPages)) {
           if (installedPages.hasClients) {
-            installedPages.jumpToPage(count == 1 ? _selectedPage : 0);
+            installedPages.jumpToPage(
+              count == 1 ? _pageOrder.indexOf(_selectedPage) : 0,
+            );
           }
           _changingPaneLayout = false;
         }
         if (_retiredPages.remove(oldPages)) oldPages.dispose();
       });
-      if (_manuscriptVisible) unawaited(_refreshManuscript());
     });
   }
 
@@ -485,10 +515,17 @@ class _PlayerPanelState extends State<PlayerPanel>
     AppLog.instance.trace(
       'lib/pages/player_panel.dart::_PlayerPanelState._pageSwiped',
     );
-    if (_paneCount != 1 || _changingPaneLayout || _tabs.indexIsChanging) return;
-    _pageSwipe = true;
-    _tabs.index = index;
-    _pageSwipe = false;
+    if (_paneCount != 1 || _changingPaneLayout) return;
+    final order = _pageOrder;
+    if (index >= order.length) return;
+    setState(() {
+      AppLog.instance.trace(
+        'lib/pages/player_panel.dart::_PlayerPanelState._pageSwiped.closure#1',
+      );
+      _selectedPage = order[index];
+      if (_selectedPage != 0) _secondaryPage = _selectedPage;
+      _visitedPages.add(_selectedPage);
+    });
   }
 
   Widget _manuscriptPage(Track? track) {
@@ -507,7 +544,7 @@ class _PlayerPanelState extends State<PlayerPanel>
             mainAxisSize: MainAxisSize.min,
             children: [
               Text(_manuscriptError!, textAlign: TextAlign.center),
-              TextButton.icon(
+              PlaybackActionButton(
                 onPressed: () {
                   AppLog.instance.trace(
                     'lib/pages/player_panel.dart::_PlayerPanelState._manuscriptPage.closure#1',
@@ -515,7 +552,7 @@ class _PlayerPanelState extends State<PlayerPanel>
                   unawaited(_refreshManuscript(force: true));
                 },
                 icon: const Icon(Icons.refresh),
-                label: const Text('重试文稿'),
+                label: '重试文稿',
               ),
             ],
           ),
@@ -573,6 +610,298 @@ class _PlayerPanelState extends State<PlayerPanel>
         identical(client, _runtime.client) &&
         key == _runtime.client.cacheIdentity &&
         trackId == _runtime.player.current?.id;
+  }
+
+  void _likeContextChanged() {
+    AppLog.instance.trace(
+      "lib/pages/player_panel.dart::_PlayerPanelState._likeContextChanged",
+    );
+    if (!mounted) return;
+    final client = _runtime.client;
+    if (!identical(client, _likeClient) ||
+        client.cacheIdentity != _likeKey ||
+        _runtime.player.current?.id != _likeTrackId) {
+      _refreshLikes();
+    }
+  }
+
+  bool _likeContextCurrent(XmlyClient client, String key, String trackId) {
+    AppLog.instance.trace(
+      "lib/pages/player_panel.dart::_PlayerPanelState._likeContextCurrent",
+    );
+    return mounted &&
+        identical(client, _runtime.client) &&
+        key == _runtime.client.cacheIdentity &&
+        trackId == _runtime.player.current?.id;
+  }
+
+  bool _likeCurrent(
+    XmlyClient client,
+    String key,
+    String trackId,
+    int request,
+  ) {
+    AppLog.instance.trace(
+      "lib/pages/player_panel.dart::_PlayerPanelState._likeCurrent",
+    );
+    return request == _likeRequest && _likeContextCurrent(client, key, trackId);
+  }
+
+  bool _likeCountCurrent(
+    XmlyClient client,
+    String key,
+    String trackId,
+    int request,
+  ) {
+    AppLog.instance.trace(
+      "lib/pages/player_panel.dart::_PlayerPanelState._likeCountCurrent",
+    );
+    return request == _likeCountRequest &&
+        _likeContextCurrent(client, key, trackId);
+  }
+
+  void _refreshLikes() {
+    AppLog.instance.trace(
+      "lib/pages/player_panel.dart::_PlayerPanelState._refreshLikes",
+    );
+    final client = _runtime.client, key = _runtime.client.cacheIdentity;
+    final track = _runtime.player.current;
+    final sameContext =
+        identical(client, _likeClient) &&
+        key == _likeKey &&
+        track?.id == _likeTrackId;
+    if (sameContext && _likeBusy) return;
+    _likeRequest++;
+    _likeCountRequest++;
+    _likeClient = client;
+    _likeKey = key;
+    _likeTrackId = track?.id;
+    setState(() {
+      AppLog.instance.trace(
+        "lib/pages/player_panel.dart::_PlayerPanelState._refreshLikes.closure#1",
+      );
+      _likeCount = sameContext ? _likeCount ?? track?.likes : track?.likes;
+      _likeBusy = false;
+      _likeCountLoading = false;
+      _likeError = null;
+      _likeCountError = null;
+    });
+    if (widget.expanded && track != null) unawaited(_refreshLikeCount(track));
+  }
+
+  Future<void> _refreshLikeCount(Track track, {bool force = false}) async {
+    AppLog.instance.trace(
+      "lib/pages/player_panel.dart::_PlayerPanelState._refreshLikeCount",
+    );
+    final client = _runtime.client, key = _runtime.client.cacheIdentity;
+    if (!_likeContextCurrent(client, key, track.id)) return;
+    final request = ++_likeCountRequest;
+    setState(() {
+      AppLog.instance.trace(
+        "lib/pages/player_panel.dart::_PlayerPanelState._refreshLikeCount.closure#1",
+      );
+      _likeCountLoading = true;
+      _likeCountError = null;
+    });
+    Future<Track> fetch() async {
+      AppLog.instance.trace(
+        "lib/pages/player_panel.dart::_PlayerPanelState._refreshLikeCount.fetch",
+      );
+      // Search/catalogue entries can replace full metadata in the shared cache.
+      final forced = force || _likeCount == null;
+      final value = await client.track(track.id, force: forced);
+      if (!forced &&
+          value.likes == null &&
+          _likeCountCurrent(client, key, track.id, request)) {
+        return client.track(track.id, force: true);
+      }
+      return value;
+    }
+
+    try {
+      final value = client.accountAvailable
+          ? await _runtime.accounts.runWithAccount(client.identity, (admitted) {
+              AppLog.instance.trace(
+                "lib/pages/player_panel.dart::_PlayerPanelState._refreshLikeCount.closure#2",
+              );
+              if (!_likeCountCurrent(client, key, track.id, request) ||
+                  !identical(admitted, client)) {
+                throw const XmlyException('account_changed', '账号已变更，请重试');
+              }
+              return fetch();
+            })
+          : await fetch();
+      if (_likeCountCurrent(client, key, track.id, request)) {
+        setState(() {
+          AppLog.instance.trace(
+            "lib/pages/player_panel.dart::_PlayerPanelState._refreshLikeCount.closure#3",
+          );
+          _likeCount = value.likes ?? _likeCount;
+        });
+      }
+    } catch (error, stack) {
+      _recordPlayerPanelError(
+        'Like count failed',
+        error,
+        stack,
+        recoverable: true,
+      );
+      if (_likeCountCurrent(client, key, track.id, request)) {
+        setState(() {
+          AppLog.instance.trace(
+            "lib/pages/player_panel.dart::_PlayerPanelState._refreshLikeCount.closure#4",
+          );
+          _likeCountError = error is XmlyException
+              ? error.message
+              : '喜欢数读取失败，请重试';
+        });
+      }
+    } finally {
+      if (_likeCountCurrent(client, key, track.id, request)) {
+        setState(() {
+          AppLog.instance.trace(
+            "lib/pages/player_panel.dart::_PlayerPanelState._refreshLikeCount.closure#5",
+          );
+          _likeCountLoading = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _likeAction(Track track) {
+    AppLog.instance.trace(
+      "lib/pages/player_panel.dart::_PlayerPanelState._likeAction",
+    );
+    return AppLog.instance.runWithErrorScope(() async {
+      AppLog.instance.trace(
+        "lib/pages/player_panel.dart::_PlayerPanelState._likeAction.closure#1",
+      );
+      final client = _runtime.client, key = _runtime.client.cacheIdentity;
+      if (_likeBusy || !_likeContextCurrent(client, key, track.id)) return;
+      if (!client.accountAvailable) {
+        setState(() {
+          AppLog.instance.trace(
+            "lib/pages/player_panel.dart::_PlayerPanelState._likeAction.closure#1.closure#1",
+          );
+          _likeError = '请先登录后点赞声音';
+        });
+        return;
+      }
+      final request = ++_likeRequest;
+      _likeCountRequest++;
+      var attempted = false;
+      setState(() {
+        AppLog.instance.trace(
+          "lib/pages/player_panel.dart::_PlayerPanelState._likeAction.closure#1.closure#2",
+        );
+        _likeBusy = true;
+        _likeCountLoading = false;
+        _likeError = null;
+      });
+      try {
+        await _runtime.accounts.runWithAccount(client.identity, (
+          admitted,
+        ) async {
+          AppLog.instance.trace(
+            "lib/pages/player_panel.dart::_PlayerPanelState._likeAction.closure#1.closure#3",
+          );
+          if (!_likeCurrent(client, key, track.id, request) ||
+              !identical(admitted, client)) {
+            throw const XmlyException('account_changed', '账号已变更，请重试');
+          }
+          attempted = true;
+          await XmlyExperience(client).likeTrack(track);
+        });
+        if (_likeCurrent(client, key, track.id, request)) {
+          ScaffoldMessenger.of(context)
+              .showSnackBar(const SnackBar(content: Text('点赞成功')));
+        }
+      } catch (error, stack) {
+        _recordPlayerPanelError('Like change failed', error, stack);
+        if (_likeCurrent(client, key, track.id, request)) {
+          setState(() {
+            AppLog.instance.trace(
+              "lib/pages/player_panel.dart::_PlayerPanelState._likeAction.closure#1.closure#4",
+            );
+            _likeError = error is XmlyException ? error.message : '点赞操作未完成，请重试';
+          });
+        }
+      } finally {
+        if (_likeCurrent(client, key, track.id, request)) {
+          if (attempted) await _refreshLikeCount(track, force: true);
+          if (_likeCurrent(client, key, track.id, request)) {
+            setState(() {
+              AppLog.instance.trace(
+                "lib/pages/player_panel.dart::_PlayerPanelState._likeAction.closure#1.closure#5",
+              );
+              _likeBusy = false;
+            });
+          }
+        }
+      }
+    });
+  }
+
+  Widget _likeControl(Track? track) {
+    AppLog.instance.trace(
+      "lib/pages/player_panel.dart::_PlayerPanelState._likeControl",
+    );
+    final current =
+        track != null &&
+        identical(_likeClient, _runtime.client) &&
+        _likeKey == _runtime.client.cacheIdentity &&
+        _likeTrackId == track.id;
+    final count = current ? _likeCount : null;
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        PlaybackActionButton(
+          tooltip:
+              '${_likeBusy
+                  ? '正在点赞'
+                  : _runtime.client.accountAvailable
+                  ? '点赞'
+                  : '点赞（需登录）'} · 喜欢数：${count ?? '未知'}',
+          onPressed: track == null || !current || _likeBusy
+              ? null
+              : () {
+                  AppLog.instance.trace(
+                    "lib/pages/player_panel.dart::_PlayerPanelState._likeControl.closure#1",
+                  );
+                  unawaited(_likeAction(track));
+                },
+          icon: const Icon(
+            Icons.thumb_up_outlined,
+            size: 20,
+            semanticLabel: '点赞',
+          ),
+          label: count?.toString() ?? '—',
+        ),
+        if (current && _likeError != null)
+          SizedBox(
+            width: 160,
+            child: Text(
+              _likeError!,
+              textAlign: TextAlign.center,
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+          ),
+        if (current && _likeCountError != null)
+          PlaybackActionButton(
+            tooltip: _likeCountError!,
+            onPressed: _likeBusy || _likeCountLoading
+                ? null
+                : () {
+                    AppLog.instance.trace(
+                      "lib/pages/player_panel.dart::_PlayerPanelState._likeControl.closure#2",
+                    );
+                    unawaited(_refreshLikeCount(track, force: true));
+                  },
+            icon: const Icon(Icons.refresh_rounded, size: 16),
+            label: '重试喜欢数',
+          ),
+      ],
+    );
   }
 
   Future<void> _refreshFavorite() {
@@ -772,25 +1101,23 @@ class _PlayerPanelState extends State<PlayerPanel>
       "lib/pages/player_panel.dart::_PlayerPanelState._favoriteControl",
     );
     if (_favoriteError == null) {
-      return Tooltip(
-        message: _favoriteLabel,
-        child: TextButton.icon(
-          onPressed: track == null || _favoriteBusy
-              ? null
-              : () {
-                  AppLog.instance.trace(
-                    "lib/pages/player_panel.dart::_PlayerPanelState._favoriteControl.closure#1",
-                  );
-                  _favoriteAction(track);
-                },
-          icon: Icon(
-            _favorite == true
-                ? Icons.favorite_rounded
-                : Icons.favorite_border_rounded,
-            size: 20,
-          ),
-          label: Text(_favorite == true ? '已喜欢' : '喜欢'),
+      return PlaybackActionButton(
+        tooltip: _favoriteLabel,
+        onPressed: track == null || _favoriteBusy
+            ? null
+            : () {
+                AppLog.instance.trace(
+                  "lib/pages/player_panel.dart::_PlayerPanelState._favoriteControl.closure#1",
+                );
+                _favoriteAction(track);
+              },
+        icon: Icon(
+          _favorite == true
+              ? Icons.favorite_rounded
+              : Icons.favorite_border_rounded,
+          size: 20,
         ),
+        label: _favorite == true ? '已收藏' : '收藏',
       );
     }
     final colors = Theme.of(context).colorScheme;
@@ -825,24 +1152,22 @@ class _PlayerPanelState extends State<PlayerPanel>
         AppLog.instance.trace(
           "lib/pages/player_panel.dart::_PlayerPanelState._favoriteControl.closure#2",
         );
-        return Tooltip(
-          message: '收藏状态暂不可用，点击查看',
-          child: TextButton.icon(
-            key: const ValueKey('favoriteStatusUnavailable'),
-            onPressed: () {
-              AppLog.instance.trace(
-                "lib/pages/player_panel.dart::_PlayerPanelState._favoriteControl.closure#2.closure#1",
-              );
+        return PlaybackActionButton(
+          tooltip: '收藏状态暂不可用，点击查看',
+          key: const ValueKey('favoriteStatusUnavailable'),
+          onPressed: () {
+            AppLog.instance.trace(
+              "lib/pages/player_panel.dart::_PlayerPanelState._favoriteControl.closure#2.closure#1",
+            );
 
-              controller.isOpen ? controller.close() : controller.open();
-            },
-            icon: Badge(
-              smallSize: 6,
-              backgroundColor: colors.outline,
-              child: const Icon(Icons.favorite_border_rounded, size: 20),
-            ),
-            label: const Text('喜欢'),
+            controller.isOpen ? controller.close() : controller.open();
+          },
+          icon: Badge(
+            smallSize: 6,
+            backgroundColor: colors.outline,
+            child: const Icon(Icons.favorite_border_rounded, size: 20),
           ),
+          label: '收藏',
         );
       },
     );
@@ -1070,16 +1395,21 @@ class _PlayerPanelState extends State<PlayerPanel>
   }
 
   Widget _button(
-    String tooltip,
+    String label,
     IconData icon,
     Future<void> Function()? command, {
-    double size = 28,
+    double size = 56,
+    double iconSize = 24,
+    String? tooltip,
   }) {
     AppLog.instance.trace(
       "lib/pages/player_panel.dart::_PlayerPanelState._button",
     );
-    return IconButton(
+    return PlaybackActionButton(
+      label: label,
+      showLabel: false,
       tooltip: tooltip,
+      size: size,
       onPressed: _busy || _cancelling || command == null
           ? null
           : () {
@@ -1088,7 +1418,7 @@ class _PlayerPanelState extends State<PlayerPanel>
               );
               _act(command);
             },
-      icon: Icon(icon, size: size),
+      icon: Icon(icon, size: iconSize),
     );
   }
 
@@ -1141,6 +1471,41 @@ class _PlayerPanelState extends State<PlayerPanel>
         final coverUrl = track?.coverUrl?.toString();
         final compact = MediaQuery.sizeOf(context).width < 400;
         final widePlayer = MediaQuery.sizeOf(context).width >= 920;
+        Widget playControl({required Key key, double size = 48}) {
+          AppLog.instance.trace(
+            'lib/pages/player_panel.dart::_PlayerPanelState.build.closure#1.playControl',
+          );
+          return PlaybackActionButton(
+            key: key,
+            showLabel: false,
+            size: size,
+            emphasized: true,
+            label: playLabel,
+            tooltip: _keyHint(playLabel, '空格'),
+            onPressed: play,
+            icon: SizedBox.square(
+              dimension: 26,
+              child: Stack(
+                alignment: Alignment.center,
+                children: [
+                  if (player.loading ||
+                      player.buffering ||
+                      _busy ||
+                      _cancelling)
+                    CircularProgressIndicator(
+                      strokeWidth: 2,
+                      color: colors.onPrimaryContainer,
+                    ),
+                  Icon(
+                    canPause ? Icons.pause_rounded : Icons.play_arrow_rounded,
+                    size: 24,
+                  ),
+                ],
+              ),
+            ),
+          );
+        }
+
         Widget seekSlider({bool dock = false}) {
           AppLog.instance.trace(
             "lib/pages/player_panel.dart::_PlayerPanelState.build.closure#1.seekSlider",
@@ -1223,56 +1588,9 @@ class _PlayerPanelState extends State<PlayerPanel>
 
         if (!widget.expanded) {
           if (!widget.miniWindow) {
-            Widget dockPlay({double size = 52}) {
-              AppLog.instance.trace(
-                "lib/pages/player_panel.dart::_PlayerPanelState.build.closure#1.dockPlay",
-              );
-              return Tooltip(
-                message: playLabel,
-                child: SizedBox.square(
-                  dimension: size,
-                  child: FilledButton(
-                    key: const ValueKey('dockPlayPause'),
-                    onPressed: play,
-                    style: FilledButton.styleFrom(
-                      padding: EdgeInsets.zero,
-                      shape: const CircleBorder(),
-                    ),
-                    child: Stack(
-                      alignment: Alignment.center,
-                      children: [
-                        if (player.loading ||
-                            player.buffering ||
-                            _busy ||
-                            _cancelling)
-                          SizedBox.square(
-                            dimension: size - 10,
-                            child: CircularProgressIndicator(
-                              strokeWidth: 2,
-                              color: colors.onPrimary,
-                            ),
-                          ),
-                        Icon(
-                          canPause
-                              ? Icons.pause_rounded
-                              : Icons.play_arrow_rounded,
-                          size: 30,
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              );
-            }
-
             final timeStyle = theme.textTheme.bodySmall?.copyWith(
               color: colors.onSurfaceVariant,
               fontFeatures: const [FontFeature.tabularFigures()],
-            );
-            final queueButton = IconButton(
-              tooltip: '播放列表',
-              onPressed: _queue,
-              icon: const Icon(Icons.queue_music_rounded),
             );
             return Material(
               color: colors.surfaceContainerLow,
@@ -1282,169 +1600,140 @@ class _PlayerPanelState extends State<PlayerPanel>
                     "lib/pages/player_panel.dart::_PlayerPanelState.build.closure#1.closure#2",
                   );
 
-                  if (constraints.maxWidth < 600) {
-                    return Padding(
-                      key: const ValueKey('playbackDockNarrow'),
-                      padding: const EdgeInsets.fromLTRB(12, 10, 12, 4),
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Row(
-                            children: [
-                              _PlayerExpandTarget(
-                                onTap: widget.onExpand ?? _expand,
-                                child: _cover(coverUrl, 40, small: true),
-                              ),
-                              const SizedBox(width: 10),
-                              Expanded(
-                                child: _PlayerExpandTarget(
-                                  onTap: widget.onExpand ?? _expand,
-                                  child: Column(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.start,
-                                    children: [
-                                      Text(
-                                        title,
-                                        maxLines: 1,
-                                        overflow: TextOverflow.ellipsis,
-                                      ),
-                                      Text(
-                                        message ?? track?.artist ?? '',
-                                        maxLines: 1,
-                                        overflow: TextOverflow.ellipsis,
-                                        style: theme.textTheme.bodySmall
-                                            ?.copyWith(
-                                              color: message == null
-                                                  ? colors.onSurfaceVariant
-                                                  : colors.error,
-                                            ),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                              ),
-                              const SizedBox(width: 8),
-                              dockPlay(size: 48),
-                              queueButton,
-                            ],
-                          ),
-                          Row(
-                            children: [
-                              _button(
-                                '上一集',
-                                Icons.skip_previous_rounded,
-                                track == null ? null : player.previous,
-                                size: 24,
-                              ),
-                              Text(playbackTime(position), style: timeStyle),
-                              Expanded(child: seekSlider(dock: true)),
-                              Text(playbackTime(max), style: timeStyle),
-                              _button(
-                                '下一集',
-                                Icons.skip_next_rounded,
-                                track == null ? null : player.next,
-                                size: 24,
-                              ),
-                            ],
-                          ),
-                        ],
-                      ),
-                    );
-                  }
+                  final fontSize = theme.textTheme.bodyMedium?.fontSize ?? 14;
+                  final textScale = math.max(
+                    1.0,
+                    MediaQuery.textScalerOf(context).scale(fontSize) / fontSize,
+                  );
+                  final availableWidth = constraints.maxWidth / textScale;
+                  final showProgress = availableWidth >= 600;
                   return Padding(
-                    key: const ValueKey('playbackDockWide'),
+                    key: ValueKey(
+                      showProgress ? 'playbackDockWide' : 'playbackDockNarrow',
+                    ),
                     padding: const EdgeInsets.symmetric(
-                      horizontal: 20,
-                      vertical: 14,
+                      horizontal: 12,
+                      vertical: 4,
                     ),
                     child: Row(
                       children: [
-                        _button(
-                          '上一集',
-                          Icons.skip_previous_rounded,
-                          track == null ? null : player.previous,
-                          size: 28,
-                        ),
-                        const SizedBox(width: 4),
-                        dockPlay(),
-                        const SizedBox(width: 4),
-                        _button(
-                          '下一集',
-                          Icons.skip_next_rounded,
-                          track == null ? null : player.next,
-                          size: 28,
-                        ),
-                        const SizedBox(width: 24),
-                        _PlayerExpandTarget(
-                          onTap: widget.onExpand ?? _expand,
-                          child: _cover(coverUrl, 56, small: true),
-                        ),
-                        const SizedBox(width: 16),
-                        Expanded(
-                          child: Column(
-                            mainAxisSize: MainAxisSize.min,
-                            crossAxisAlignment: CrossAxisAlignment.stretch,
-                            children: [
-                              Row(
-                                children: [
-                                  Expanded(
-                                    child: _PlayerExpandTarget(
-                                      onTap: widget.onExpand ?? _expand,
-                                      child: Text(
-                                        title,
-                                        maxLines: 1,
-                                        overflow: TextOverflow.ellipsis,
-                                        style: theme.textTheme.bodyMedium,
+                        if (showProgress)
+                          _button(
+                            '上一集',
+                            Icons.skip_previous_rounded,
+                            track == null ? null : player.previous,
+                            size: 48,
+                          ),
+                        if (showProgress)
+                          playControl(key: const ValueKey('dockPlayPause'))
+                        else
+                          Semantics(
+                            value:
+                                '${playbackTime(position)} / ${playbackTime(max)}',
+                            child: Stack(
+                              children: [
+                                playControl(
+                                  key: const ValueKey('dockPlayPause'),
+                                ),
+                                Positioned.fill(
+                                  child: IgnorePointer(
+                                    child: ExcludeSemantics(
+                                      child: CircularProgressIndicator(
+                                        value: max > 0 ? position / max : 0,
+                                        strokeWidth: 2,
+                                        strokeCap: StrokeCap.round,
+                                        backgroundColor: colors.onSurface
+                                            .withValues(alpha: 0.12),
                                       ),
                                     ),
-                                  ),
-                                  if (constraints.maxWidth >= 1180 &&
-                                      track?.artist.isNotEmpty == true) ...[
-                                    const SizedBox(width: 20),
-                                    ConstrainedBox(
-                                      constraints: const BoxConstraints(
-                                        maxWidth: 130,
-                                      ),
-                                      child: Text(
-                                        track!.artist,
-                                        maxLines: 1,
-                                        overflow: TextOverflow.ellipsis,
-                                        style: timeStyle,
-                                      ),
-                                    ),
-                                  ],
-                                  const SizedBox(width: 20),
-                                  Text(
-                                    '${playbackTime(position)} / ${playbackTime(max)}',
-                                    key: const ValueKey('dockPlaybackTime'),
-                                    style: timeStyle,
-                                  ),
-                                ],
-                              ),
-                              seekSlider(dock: true),
-                              if (message != null)
-                                Text(
-                                  message,
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: theme.textTheme.bodySmall?.copyWith(
-                                    color: colors.error,
                                   ),
                                 ),
-                            ],
+                              ],
+                            ),
+                          ),
+                        if (showProgress)
+                          _button(
+                            '下一集',
+                            Icons.skip_next_rounded,
+                            track == null ? null : player.next,
+                            size: 48,
+                          ),
+                        const SizedBox(width: 8),
+                        if (showProgress) ...[
+                          _PlayerExpandTarget(
+                            onTap: widget.onExpand ?? _expand,
+                            child: _cover(coverUrl, 40, small: true),
+                          ),
+                          const SizedBox(width: 8),
+                        ],
+                        Expanded(
+                          flex: showProgress ? 2 : 1,
+                          child: _PlayerExpandTarget(
+                            onTap: widget.onExpand ?? _expand,
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  title,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: theme.textTheme.bodyMedium,
+                                ),
+                                if (showProgress)
+                                  Text(
+                                    message ?? track?.artist ?? '',
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: theme.textTheme.bodySmall?.copyWith(
+                                      color: message == null
+                                          ? colors.onSurfaceVariant
+                                          : colors.error,
+                                    ),
+                                  ),
+                              ],
+                            ),
                           ),
                         ),
-                        const SizedBox(width: 20),
-                        if (constraints.maxWidth >= 760)
+                        if (showProgress) ...[
+                          const SizedBox(width: 16),
+                          Expanded(
+                            flex: 3,
+                            child: Row(
+                              children: [
+                                Expanded(child: seekSlider(dock: true)),
+                                const SizedBox(width: 8),
+                                Text(
+                                  '${playbackTime(position)} / ${playbackTime(max)}',
+                                  key: const ValueKey('dockPlaybackTime'),
+                                  style: timeStyle,
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                        if (availableWidth >= 760)
                           PlaybackSpeedControl(
                             runtime: _runtime,
+                            size: 48,
                             albumId: track?.albumId.isNotEmpty == true
                                 ? track!.albumId
                                 : null,
                           ),
-                        if (constraints.maxWidth >= 960)
-                          PlaybackVolumeControl(runtime: _runtime),
-                        queueButton,
+                        if (availableWidth >= 960)
+                          PlaybackVolumeControl(
+                            runtime: _runtime,
+                            vertical: true,
+                            size: 48,
+                          ),
+                        if (showProgress)
+                          PlaybackActionButton(
+                            size: 48,
+                            tooltip: '播放列表',
+                            label: '列表',
+                            onPressed: _queue,
+                            icon: const Icon(Icons.queue_music_rounded),
+                          ),
                       ],
                     ),
                   );
@@ -1463,11 +1752,11 @@ class _PlayerPanelState extends State<PlayerPanel>
                       child: _PlayerExpandTarget(
                         onTap: widget.onExpand ?? _expand,
                         child: Padding(
-                          padding: const EdgeInsets.fromLTRB(16, 10, 4, 10),
+                          padding: const EdgeInsets.fromLTRB(10, 4, 4, 4),
                           child: Row(
                             children: [
                               if (!compact) ...[
-                                _cover(coverUrl, 44, small: true),
+                                _cover(coverUrl, 40, small: true),
                                 const SizedBox(width: 12),
                               ],
                               Expanded(
@@ -1499,28 +1788,13 @@ class _PlayerPanelState extends State<PlayerPanel>
                         ),
                       ),
                     ),
-                    IconButton(
-                      tooltip: playLabel,
-                      onPressed: play,
-                      icon: Icon(
-                        canPause
-                            ? Icons.pause_rounded
-                            : Icons.play_arrow_rounded,
-                        size: 32,
-                      ),
+                    playControl(key: const ValueKey('miniPlayPause')),
+                    _button(
+                      '下一集',
+                      Icons.skip_next_rounded,
+                      track == null ? null : player.next,
+                      size: 48,
                     ),
-                    if (widget.miniWindow)
-                      _button(
-                        '下一集',
-                        Icons.skip_next_rounded,
-                        track == null ? null : player.next,
-                      )
-                    else
-                      IconButton(
-                        tooltip: '播放列表',
-                        onPressed: _queue,
-                        icon: const Icon(Icons.queue_music_rounded),
-                      ),
                     const SizedBox(width: 4),
                   ],
                 ),
@@ -1614,7 +1888,8 @@ class _PlayerPanelState extends State<PlayerPanel>
         );
         final quickControls = Wrap(
           alignment: WrapAlignment.center,
-          spacing: 12,
+          spacing: 4,
+          runSpacing: 4,
           crossAxisAlignment: WrapCrossAlignment.center,
           children: [
             PlaybackSpeedControl(
@@ -1624,8 +1899,8 @@ class _PlayerPanelState extends State<PlayerPanel>
                   ? track!.albumId
                   : null,
             ),
-            PlaybackVolumeControl(runtime: _runtime),
-            TextButton.icon(
+            PlaybackVolumeControl(runtime: _runtime, vertical: true),
+            PlaybackActionButton(
               onPressed: () {
                 AppLog.instance.trace(
                   "lib/pages/player_panel.dart::_PlayerPanelState.build.closure#1.closure#4",
@@ -1636,21 +1911,20 @@ class _PlayerPanelState extends State<PlayerPanel>
                 sleep == null ? Icons.timer_outlined : Icons.timer,
                 size: 20,
               ),
-              label: Text(
-                sleepLabel,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-              ),
+              label: '定时关闭',
+              tooltip: sleepLabel,
             ),
           ],
         );
         final contentActions = Wrap(
           alignment: WrapAlignment.center,
-          spacing: 24,
+          spacing: 4,
+          runSpacing: 4,
           crossAxisAlignment: WrapCrossAlignment.center,
           children: [
+            _likeControl(track),
             _favoriteControl(track),
-            TextButton.icon(
+            PlaybackActionButton(
               onPressed: track == null || _busy || _cancelling
                   ? null
                   : () {
@@ -1676,30 +1950,37 @@ class _PlayerPanelState extends State<PlayerPanel>
                       });
                     },
               icon: const Icon(Icons.bookmark_add_outlined, size: 20),
-              label: const Text('书签'),
+              label: '书签',
             ),
-            TextButton.icon(
-              onPressed: track == null || _busy || _cancelling
-                  ? null
-                  : () {
-                      AppLog.instance.trace(
-                        "lib/pages/player_panel.dart::_PlayerPanelState.build.closure#1.closure#6",
-                      );
-                      _act(player.replay);
-                    },
-              icon: const Icon(Icons.restart_alt_rounded, size: 20),
-              label: const Text('重听'),
-            ),
-            TextButton.icon(
+            PlaybackActionButton(
               onPressed: _queue,
               icon: const Icon(Icons.queue_music_rounded, size: 20),
-              label: const Text('播放列表'),
+              label: '播放列表',
             ),
           ],
         );
         final progress = Column(
           children: [
-            seekSlider(),
+            Row(
+              children: [
+                _button(
+                  '快退',
+                  Icons.replay_rounded,
+                  track == null ? null : player.seekBackward,
+                  tooltip: _keyHint(
+                    '后退 ${settings.seekBackwardSeconds} 秒',
+                    '←',
+                  ),
+                ),
+                Expanded(child: seekSlider()),
+                _button(
+                  '快进',
+                  Icons.forward_rounded,
+                  track == null ? null : player.seekForward,
+                  tooltip: _keyHint('前进 ${settings.seekForwardSeconds} 秒', '→'),
+                ),
+              ],
+            ),
             DefaultTextStyle(
               style: (theme.textTheme.bodySmall ?? const TextStyle()).copyWith(
                 color: colors.onSurfaceVariant,
@@ -1724,76 +2005,23 @@ class _PlayerPanelState extends State<PlayerPanel>
                 : 20,
           ),
           child: Wrap(
-            alignment: WrapAlignment.spaceBetween,
+            alignment: WrapAlignment.center,
+            spacing: 4,
+            runSpacing: 4,
             crossAxisAlignment: WrapCrossAlignment.center,
             children: [
-              _button(
-                _keyHint('后退 ${settings.seekBackwardSeconds} 秒', '←'),
-                Icons.replay_rounded,
-                track == null ? null : player.seekBackward,
-                size: 24,
-              ),
               _button(
                 '上一集',
                 Icons.skip_previous_rounded,
                 track == null ? null : player.previous,
-                size: 34,
+                iconSize: 30,
               ),
-              Tooltip(
-                message: _keyHint(playLabel, '空格'),
-                child: SizedBox.square(
-                  dimension: compact
-                      ? 64
-                      : widePlayer
-                      ? 68
-                      : 76,
-                  child: FilledButton(
-                    key: const ValueKey('playerPlayPause'),
-                    style: FilledButton.styleFrom(
-                      padding: EdgeInsets.zero,
-                      shape: const CircleBorder(),
-                    ),
-                    onPressed: play,
-                    child: Stack(
-                      alignment: Alignment.center,
-                      children: [
-                        if (_busy ||
-                            _cancelling ||
-                            player.loading ||
-                            player.buffering)
-                          SizedBox.square(
-                            dimension: compact
-                                ? 52
-                                : widePlayer
-                                ? 56
-                                : 62,
-                            child: CircularProgressIndicator(
-                              strokeWidth: 2,
-                              color: colors.onPrimary,
-                            ),
-                          ),
-                        Icon(
-                          canPause
-                              ? Icons.pause_rounded
-                              : Icons.play_arrow_rounded,
-                          size: 42,
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              ),
+              playControl(key: const ValueKey('playerPlayPause'), size: 64),
               _button(
                 '下一集',
                 Icons.skip_next_rounded,
                 track == null ? null : player.next,
-                size: 34,
-              ),
-              _button(
-                _keyHint('前进 ${settings.seekForwardSeconds} 秒', '→'),
-                Icons.forward_rounded,
-                track == null ? null : player.seekForward,
-                size: 24,
+                iconSize: 30,
               ),
             ],
           ),
@@ -1802,16 +2030,19 @@ class _PlayerPanelState extends State<PlayerPanel>
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             if (sleep != null)
-              TextButton(
-                onPressed: () {
-                  AppLog.instance.trace(
-                    "lib/pages/player_panel.dart::_PlayerPanelState.build.closure#1.closure#7",
-                  );
+              Center(
+                child: PlaybackActionButton(
+                  onPressed: () {
+                    AppLog.instance.trace(
+                      "lib/pages/player_panel.dart::_PlayerPanelState.build.closure#1.closure#6",
+                    );
 
-                  player.cancelSleep();
-                  _runtime.changed();
-                },
-                child: const Text('取消定时'),
+                    player.cancelSleep();
+                    _runtime.changed();
+                  },
+                  icon: const Icon(Icons.timer_off_outlined, size: 20),
+                  label: '取消定时',
+                ),
               ),
             if (message != null)
               Padding(
@@ -1833,7 +2064,7 @@ class _PlayerPanelState extends State<PlayerPanel>
               tooltip: '收起播放器',
               onPressed: () {
                 AppLog.instance.trace(
-                  "lib/pages/player_panel.dart::_PlayerPanelState.build.closure#1.closure#8",
+                  "lib/pages/player_panel.dart::_PlayerPanelState.build.closure#1.closure#7",
                 );
                 Navigator.of(context).maybePop();
               },
@@ -1856,20 +2087,24 @@ class _PlayerPanelState extends State<PlayerPanel>
                 AppTabStrip(
                   key: const ValueKey('playerContentTabs'),
                   children: [
-                    for (final (index, label) in const [
-                      (0, '播放'),
-                      (1, '文稿'),
+                    for (final (index, label) in [
+                      if (_paneCount == 1) (0, '播放'),
+                      if (_hasManuscript) (1, '文稿'),
                       (2, '评论'),
                     ])
                       AppTabButton(
                         key: ValueKey(index),
                         label: label,
-                        selected: _selectedPage == index,
+                        selected:
+                            (_paneCount == 2
+                                ? _secondaryPage
+                                : _selectedPage) ==
+                            index,
                         onPressed: () {
                           AppLog.instance.trace(
-                            "lib/pages/player_panel.dart::_PlayerPanelState.build.closure#1.closure#9",
+                            "lib/pages/player_panel.dart::_PlayerPanelState.build.closure#1.closure#8",
                           );
-                          _tabs.animateTo(index);
+                          _selectPage(index);
                         },
                       ),
                   ],
@@ -1878,7 +2113,7 @@ class _PlayerPanelState extends State<PlayerPanel>
                   child: LayoutBuilder(
                     builder: (context, constraints) {
                       AppLog.instance.trace(
-                        "lib/pages/player_panel.dart::_PlayerPanelState.build.closure#1.closure#10",
+                        "lib/pages/player_panel.dart::_PlayerPanelState.build.closure#1.closure#9",
                       );
                       final minPaneWidth = math.max(
                         460.0,
@@ -1887,17 +2122,15 @@ class _PlayerPanelState extends State<PlayerPanel>
                       _configurePanes(
                         (constraints.maxWidth / minPaneWidth).floor().clamp(
                           1,
-                          3,
+                          2,
                         ),
                       );
-                      final order = _paneCount == 2 && _secondaryPage == 2
-                          ? const [0, 2, 1]
-                          : const [0, 1, 2];
+                      final order = _pageOrder;
                       final contents = <Widget>[
                         LayoutBuilder(
                           builder: (context, constraints) {
                             AppLog.instance.trace(
-                              "lib/pages/player_panel.dart::_PlayerPanelState.build.closure#1.closure#10.closure#1",
+                              "lib/pages/player_panel.dart::_PlayerPanelState.build.closure#1.closure#9.closure#1",
                             );
                             final textHeight = MediaQuery.textScalerOf(context)
                                 .scale(56);
@@ -1976,27 +2209,26 @@ class _PlayerPanelState extends State<PlayerPanel>
                                 ? null
                                 : const NeverScrollableScrollPhysics(),
                             onPageChanged: _pageSwiped,
-                            itemCount: 3,
+                            itemCount: order.length,
                             findChildIndexCallback: (key) {
                               AppLog.instance.trace(
-                                "lib/pages/player_panel.dart::_PlayerPanelState.build.closure#1.closure#10.closure#2",
+                                "lib/pages/player_panel.dart::_PlayerPanelState.build.closure#1.closure#9.closure#2",
                               );
-                              return order.indexOf(
+                              final index = order.indexOf(
                                 (key as ValueKey<int>).value,
                               );
+                              return index < 0 ? null : index;
                             },
                             itemBuilder: (context, index) {
                               AppLog.instance.trace(
-                                "lib/pages/player_panel.dart::_PlayerPanelState.build.closure#1.closure#10.closure#3",
+                                "lib/pages/player_panel.dart::_PlayerPanelState.build.closure#1.closure#9.closure#3",
                               );
                               final page = order[index];
                               return _PlayerPage(
                                 key: ValueKey(page),
-                                visible:
-                                    _paneCount == 3 ||
-                                    (_paneCount == 2
-                                        ? page == 0 || page == _secondaryPage
-                                        : page == _selectedPage),
+                                visible: _paneCount == 2
+                                    ? page == 0 || page == _secondaryPage
+                                    : page == _selectedPage,
                                 child: DecoratedBox(
                                   decoration: BoxDecoration(
                                     border: _paneCount == 1

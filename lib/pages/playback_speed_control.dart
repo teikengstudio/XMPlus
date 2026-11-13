@@ -2,16 +2,23 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
+import '../common/widgets/playback_action_button.dart';
 import '../services/app_runtime.dart';
 import '../services/app_log.dart';
 import '../storage/app_storage.dart';
 import 'playback_settings_page.dart';
 
 class PlaybackSpeedControl extends StatefulWidget {
-  const PlaybackSpeedControl({required this.runtime, this.albumId, super.key});
+  const PlaybackSpeedControl({
+    required this.runtime,
+    this.albumId,
+    this.size = 64,
+    super.key,
+  });
 
   final AppRuntime runtime;
   final String? albumId;
+  final double size;
 
   @override
   State<PlaybackSpeedControl> createState() {
@@ -269,23 +276,17 @@ class _PlaybackSpeedControlState extends State<PlaybackSpeedControl> {
         AppLog.instance.trace(
           "lib/pages/playback_speed_control.dart::_PlaybackSpeedControlState.build.closure#4",
         );
-        return Tooltip(
-          message: '调整播放倍速',
-          child: TextButton(
-            style: TextButton.styleFrom(
-              padding: const EdgeInsets.symmetric(horizontal: 12),
-            ),
-            onPressed: () {
-              AppLog.instance.trace(
-                "lib/pages/playback_speed_control.dart::_PlaybackSpeedControlState.build.closure#4.closure#1",
-              );
-              controller.isOpen ? controller.close() : controller.open();
-            },
-            child: SizedBox(
-              width: MediaQuery.textScalerOf(context).scale(44),
-              child: Text(_label(current), textAlign: TextAlign.center),
-            ),
-          ),
+        return PlaybackActionButton(
+          size: widget.size,
+          tooltip: '调整播放倍速',
+          icon: const Icon(Icons.speed_rounded),
+          label: _label(current),
+          onPressed: () {
+            AppLog.instance.trace(
+              "lib/pages/playback_speed_control.dart::_PlaybackSpeedControlState.build.closure#4.closure#1",
+            );
+            controller.isOpen ? controller.close() : controller.open();
+          },
         );
       },
     );

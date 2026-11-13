@@ -178,7 +178,7 @@ class AppRuntime extends ChangeNotifier {
       AppLog.instance.trace(
         "lib/services/app_runtime.dart::AppRuntime.new.closure#9",
       );
-      return player.quiesce(exiting: closing);
+      return player.quiesce();
     });
     pauseHandlers.add(downloads.pauseAll);
   }
@@ -739,8 +739,6 @@ class AppRuntime extends ChangeNotifier {
         !accounts.accountIds.contains(identity)) {
       throw const XmlyException('missing_account', '请先登录原账号');
     }
-    if (ledger.isBlocked(identity))
-      throw const XmlyException('usage_uncertain', '请先核对未确认的听时');
   }
 
   Future<void> pauseDownload(String id) async {
@@ -1243,7 +1241,7 @@ class AppRuntime extends ChangeNotifier {
         _recordFailure('Closing runtime failed', error, stack);
         lifecycleError = exitOnly
             ? '退出未完成，部分服务已关闭，请重试退出后重新打开应用'
-            : '保存或结算未完成，请核对后再退出';
+            : '保存或结算未完成，请稍后重试退出';
         if (!exitOnly) {
           closing = false;
           if (!restoreNeedsReload) autoDownloads.resume();

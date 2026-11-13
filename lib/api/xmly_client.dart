@@ -183,6 +183,7 @@ class XmlyClient {
             '/fmobile-track/fmobile/track/v2/baseInfo',
             '/lite-mobile/audi/func/v1/config',
             '/lite-mobile/audi/func/v1/report',
+            '/favourite-business/favorite/track',
             '/lite-mobile/like/v1/like',
             '/lite-mobile/like/v1/dislike',
             '/subscribe/album/subscribe/delete',

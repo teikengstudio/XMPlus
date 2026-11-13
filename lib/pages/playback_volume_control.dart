@@ -2,14 +2,22 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
+import '../common/widgets/playback_action_button.dart';
 import '../services/app_runtime.dart';
 import '../services/app_log.dart';
 import '../storage/app_storage.dart';
 
 class PlaybackVolumeControl extends StatefulWidget {
-  const PlaybackVolumeControl({required this.runtime, super.key});
+  const PlaybackVolumeControl({
+    required this.runtime,
+    this.vertical = false,
+    this.size = 64,
+    super.key,
+  });
 
   final AppRuntime runtime;
+  final bool vertical;
+  final double size;
 
   @override
   State<PlaybackVolumeControl> createState() {
@@ -22,7 +30,6 @@ class PlaybackVolumeControl extends StatefulWidget {
 
 class _PlaybackVolumeControlState extends State<PlaybackVolumeControl> {
   bool _saving = false;
-  bool _dismissedWhileSaving = false;
   double? _draft;
   String? _error;
   double? _failedVolume;
@@ -51,7 +58,6 @@ class _PlaybackVolumeControlState extends State<PlaybackVolumeControl> {
         );
 
         _saving = true;
-        _dismissedWhileSaving = false;
         _draft = value;
         _error = null;
         _failedVolume = null;
@@ -136,7 +142,6 @@ class _PlaybackVolumeControlState extends State<PlaybackVolumeControl> {
               "lib/pages/playback_volume_control.dart::_PlaybackVolumeControlState.build.closure#1.closure#1",
             );
 
-            if (_saving) _dismissedWhileSaving = true;
             if (mounted && !_saving && _draft != null) {
               setState(() {
                 AppLog.instance.trace(
@@ -164,6 +169,28 @@ class _PlaybackVolumeControlState extends State<PlaybackVolumeControl> {
                           child: Text(
                             muted ? '主音量 · 已静音' : '主音量',
                             style: theme.textTheme.titleMedium,
+                          ),
+                        ),
+                        IconButton(
+                          key: const ValueKey('playbackMuteButton'),
+                          tooltip: _failedMuted != null
+                              ? (_failedMuted! ? '重试静音' : '重试取消静音')
+                              : (muted ? '取消静音' : '静音'),
+                          isSelected: muted,
+                          onPressed: () async {
+                            AppLog.instance.trace(
+                              "lib/pages/playback_volume_control.dart::_PlaybackVolumeControlState.build.closure#1.closure#2",
+                            );
+                            if (_saving) return;
+                            await _save(muted: _failedMuted ?? !muted);
+                          },
+                          icon: Icon(
+                            _failedMuted != null
+                                ? Icons.error_outline_rounded
+                                : muted || current == 0
+                                ? Icons.volume_off_rounded
+                                : Icons.volume_up_rounded,
+                            size: 20,
                           ),
                         ),
                         const SizedBox(width: 12),
@@ -196,7 +223,7 @@ class _PlaybackVolumeControlState extends State<PlaybackVolumeControl> {
                       label: _label(current),
                       semanticFormatterCallback: (value) {
                         AppLog.instance.trace(
-                          "lib/pages/playback_volume_control.dart::_PlaybackVolumeControlState.build.closure#1.closure#2",
+                          "lib/pages/playback_volume_control.dart::_PlaybackVolumeControlState.build.closure#1.closure#3",
                         );
                         return '主音量 ${_label(value)}';
                       },
@@ -204,20 +231,20 @@ class _PlaybackVolumeControlState extends State<PlaybackVolumeControl> {
                       // it enabled, but ignore edits while this save is pending.
                       onChanged: (value) {
                         AppLog.instance.trace(
-                          "lib/pages/playback_volume_control.dart::_PlaybackVolumeControlState.build.closure#1.closure#3",
+                          "lib/pages/playback_volume_control.dart::_PlaybackVolumeControlState.build.closure#1.closure#4",
                         );
 
                         if (!_saving)
                           setState(() {
                             AppLog.instance.trace(
-                              "lib/pages/playback_volume_control.dart::_PlaybackVolumeControlState.build.closure#1.closure#3.closure#1",
+                              "lib/pages/playback_volume_control.dart::_PlaybackVolumeControlState.build.closure#1.closure#4.closure#1",
                             );
                             _draft = value;
                           });
                       },
                       onChangeEnd: (value) {
                         AppLog.instance.trace(
-                          "lib/pages/playback_volume_control.dart::_PlaybackVolumeControlState.build.closure#1.closure#4",
+                          "lib/pages/playback_volume_control.dart::_PlaybackVolumeControlState.build.closure#1.closure#5",
                         );
                         _save(value: value);
                       },
@@ -243,7 +270,7 @@ class _PlaybackVolumeControlState extends State<PlaybackVolumeControl> {
                             TextButton(
                               onPressed: () {
                                 AppLog.instance.trace(
-                                  "lib/pages/playback_volume_control.dart::_PlaybackVolumeControlState.build.closure#1.closure#5",
+                                  "lib/pages/playback_volume_control.dart::_PlaybackVolumeControlState.build.closure#1.closure#6",
                                 );
                                 _save(
                                   value: _failedVolume,
@@ -262,57 +289,38 @@ class _PlaybackVolumeControlState extends State<PlaybackVolumeControl> {
           ],
           builder: (context, controller, _) {
             AppLog.instance.trace(
-              "lib/pages/playback_volume_control.dart::_PlaybackVolumeControlState.build.closure#1.closure#6",
+              "lib/pages/playback_volume_control.dart::_PlaybackVolumeControlState.build.closure#1.closure#7",
             );
-            return Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                IconButton(
-                  key: const ValueKey('playbackMuteButton'),
-                  tooltip: _failedMuted != null
-                      ? (_failedMuted! ? '重试静音' : '重试取消静音')
-                      : (muted ? '取消静音' : '静音'),
-                  isSelected: muted,
-                  onPressed: () async {
-                    AppLog.instance.trace(
-                      "lib/pages/playback_volume_control.dart::_PlaybackVolumeControlState.build.closure#1.closure#6.closure#1",
-                    );
-
-                    if (_saving) return;
-                    // A failed device command may already have saved its target.
-                    // Retrying must apply that target, not toggle it back.
-                    await _save(muted: _failedMuted ?? !muted);
-                    if (mounted &&
-                        _error != null &&
-                        !_dismissedWhileSaving &&
-                        !controller.isOpen) {
-                      controller.open();
-                    }
-                  },
-                  icon: Icon(
-                    _failedMuted != null
-                        ? Icons.error_outline_rounded
-                        : muted || current == 0
-                        ? Icons.volume_off_rounded
-                        : Icons.volume_up_rounded,
-                    size: 20,
-                  ),
-                ),
-                Tooltip(
-                  message: '调整主音量（所有专辑）',
-                  child: TextButton(
-                    onPressed: () {
-                      AppLog.instance.trace(
-                        "lib/pages/playback_volume_control.dart::_PlaybackVolumeControlState.build.closure#1.closure#6.closure#2",
-                      );
-                      controller.isOpen
-                          ? controller.close()
-                          : controller.open();
-                    },
-                    child: Text(_label(current)),
-                  ),
-                ),
-              ],
+            final onPressed = () {
+              AppLog.instance.trace(
+                "lib/pages/playback_volume_control.dart::_PlaybackVolumeControlState.build.closure#1.closure#7.closure#1",
+              );
+              controller.isOpen ? controller.close() : controller.open();
+            };
+            final icon = Icon(
+              _failedMuted != null
+                  ? Icons.error_outline_rounded
+                  : muted || current == 0
+                  ? Icons.volume_off_rounded
+                  : Icons.volume_up_rounded,
+              size: widget.vertical ? null : 20,
+            );
+            if (widget.vertical) {
+              return PlaybackActionButton(
+                size: widget.size,
+                tooltip: '调整主音量或静音（所有专辑）',
+                onPressed: onPressed,
+                icon: icon,
+                label: _label(current),
+              );
+            }
+            return Tooltip(
+              message: '调整主音量或静音（所有专辑）',
+              child: TextButton.icon(
+                onPressed: onPressed,
+                icon: icon,
+                label: Text(_label(current)),
+              ),
             );
           },
         );

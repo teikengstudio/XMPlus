@@ -49,7 +49,7 @@ String _accountError(Object error) {
     'uncertain' => '请求结果未知，请先在官方 App 核对，不要重复领取。',
     'reward_rejected' => '领取未成功，请在官方 App 检查。',
     'reward_paused' => '领取已暂停，请先在官方 App 核对，再选择恢复领取。',
-    'unsettled' || 'usage_uncertain' => '还有未结算或结果未知的扣时，请先核对原账号。',
+    'unsettled' || 'usage_uncertain' => '听时暂时无法确认，正在自动核对，请稍后再试。',
     'integration_required' => '暂时无法安全切换账号，原账号已保留。',
     'credential_write_failed' => '安全凭据保存失败，原账号已保留。',
     'credential_mismatch' => '请导入该账号的 Cookie，并保留原设备 ID；其他账号不能恢复此记录。',

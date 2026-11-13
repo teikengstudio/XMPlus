@@ -605,6 +605,26 @@ class XmlyExperience {
     if (_integer(response['ret']) != 0) throw _invalid;
   }
 
+  Future<void> likeTrack(Track track) async {
+    AppLog.instance.trace(
+      'lib/api/xmly_experience.dart::XmlyExperience.likeTrack',
+    );
+
+    _requireAccount();
+    final response = await client.request(
+      'POST',
+      XmlyClient.mobile,
+      '/favourite-business/favorite/track',
+      data: {
+        'trackId': xmlyIdentifier(track.id),
+        'playTime': '1',
+        'favorite': 'true',
+      },
+      form: true,
+    );
+    _mutationSuccess(response);
+  }
+
   Future<void> setFavorite(Track track, {required bool favorite}) async {
     AppLog.instance.trace(
       "lib/api/xmly_experience.dart::XmlyExperience.setFavorite",

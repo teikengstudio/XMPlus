@@ -1189,6 +1189,23 @@ class DownloadService {
 
               await checkpoint?.call();
               await control?.checkpoint();
+              if (candidate != 'anonymous' && ledger.isBlocked(candidate)) {
+                Future<void> refreshPending() {
+                  AppLog.instance.trace(
+                    "lib/services/download_service.dart::DownloadService._preview.closure#1.read.refreshPending",
+                  );
+                  return ledger.settleForDownload(candidate);
+                }
+
+                await readRequests(
+                  client,
+                  settings,
+                  refreshPending,
+                  control: control,
+                  cancelled: cancelled,
+                  checkpoint: checkpoint,
+                );
+              }
               final receipt = _receipt(
                 candidate,
                 selection.taskId,
@@ -1257,9 +1274,6 @@ class DownloadService {
                   : 0;
               int? expected;
               if (seconds > 0) {
-                if (ledger.isBlocked(candidate)) {
-                  throw const XmlyException('usage_uncertain', '请先核对未确认的听时扣除');
-                }
                 if (!balances.containsKey(candidate)) {
                   await readRequests(
                     client,
@@ -3070,7 +3084,7 @@ class DownloadService {
     if (current.settings['billingPreviewPending'] == true) {
       if (_hasDebit(current.accountIdentity, id, current.track.id) &&
           _receipt(current.accountIdentity, id, current.track.id) == null) {
-        throw const XmlyException('usage_uncertain', '请先核对本集未确认的听时扣除');
+        throw const XmlyException('usage_uncertain', '听时暂时无法确认，正在自动核对，请稍后再试');
       }
       // Manual batches defer the existing fee/account preview until execution.
       final batch = await _preview(
@@ -3120,18 +3134,13 @@ class DownloadService {
 
       await control.checkpoint();
       if (current.accountIdentity != 'anonymous' &&
-          ledger.receipts(current.accountIdentity).any((receipt) {
-            AppLog.instance.trace(
-              "lib/services/download_service.dart::DownloadService._admit.authorize.closure#1",
-            );
-            return receipt.taskId == id &&
-                !receipt.historical &&
-                const {
-                  DebitState.submitting,
-                  DebitState.uncertain,
-                }.contains(receipt.state);
-          })) {
-        throw const XmlyException('usage_uncertain', '请先核对本集未确认的听时扣除');
+          ledger.isBlocked(current.accountIdentity)) {
+        await readRequests(client, current.settings, () {
+          AppLog.instance.trace(
+            "lib/services/download_service.dart::DownloadService._admit.authorize.closure#1",
+          );
+          return ledger.settleForDownload(current.accountIdentity);
+        }, control: control);
       }
       final previous = _receipt(current.accountIdentity, id, current.track.id);
       final fresh = _freshResolves.contains(id);
@@ -3200,11 +3209,6 @@ class DownloadService {
       _identity(audio, current.accountIdentity, current.track.id);
       await control.checkpoint();
       final reward = _reward(audio);
-      if (reward &&
-          previous == null &&
-          ledger.isBlocked(current.accountIdentity)) {
-        throw const XmlyException('usage_uncertain', '请先核对未确认的听时扣除');
-      }
       if (previous == null && current.userConfirmed) {
         // The start action authorizes this selected track and configured account
         // policy; revalidate a stale quote, never replay an uncertain debit.
@@ -3663,7 +3667,7 @@ class DownloadService {
           return '专辑分页、顺序或声音 ID 无效，已停止；已下载内容和扣时记录保留';
         case 'usage_uncertain':
         case 'receipt_required':
-          return '听时扣除尚未确认，请先核对';
+          return '听时暂时无法确认，正在自动核对，请稍后再试';
         case 'insufficient_quota':
           return '听时不足，请在官方 App 获取听时';
         case 'rate_limited':
@@ -3696,7 +3700,7 @@ class DownloadService {
         case 'media_tool_missing':
         case 'media_tool':
           return Platform.isAndroid
-              ? '随附 Android FFmpeg/FFprobe 无法使用，请重新安装完整安装包；任务、源缓存及已确认的听时记录保留'
+              ? '随附 Android FFmpeg/FFprobe 无法使用，请重新安装完整安装包；任务、源缓存及已确认的扣时结果保留'
               : '无法启动媒体工具，请检查路径';
         case 'media_probe':
           return '无法识别有效音轨或时长，源缓存已保留，请选择重新获取或其他格式';
@@ -3731,7 +3735,7 @@ class DownloadService {
     if (error is FileSystemException) {
       return '文件保存失败，源缓存已保留，请检查目录权限或更换目录';
     }
-    return '下载失败，已保留任务及已确认的听时记录';
+    return '下载失败，已保留任务及已确认的扣时结果';
   }
 
   void _notify() {

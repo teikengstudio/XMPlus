@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:ui';
 
+import 'package:flutter/widgets.dart' show WidgetsBinding;
 import 'package:synchronized/synchronized.dart';
 import 'package:window_manager/window_manager.dart';
 
@@ -65,8 +66,15 @@ class DesktopPlaybackWindow {
           try {
             await _normalWindow();
             saved.bounds = await windowManager.getBounds();
-            await windowManager.setMinimumSize(const Size(320, 128));
-            await windowManager.setSize(const Size(420, 140));
+            await WidgetsBinding.instance.endOfFrame;
+            final view = WidgetsBinding.instance.platformDispatcher.views.first;
+            // Window bounds include the native resize frame; content needs 90dp.
+            final height =
+                90 +
+                saved.bounds.height -
+                view.physicalSize.height / view.devicePixelRatio;
+            await windowManager.setMinimumSize(Size(320, height));
+            await windowManager.setSize(Size(420, height));
             await windowManager.setAlwaysOnTop(true);
             await windowManager.show();
           } catch (failure, stack) {
