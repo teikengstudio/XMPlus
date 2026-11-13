@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:file_picker/file_picker.dart';
@@ -22,6 +23,8 @@ class BackupPage extends StatefulWidget {
 
 class _BackupPageState extends State<BackupPage> {
   late final ConfigArchive _archive = widget.runtime.backupArchive;
+  Completer<void>? _cancelled;
+  StreamIterator<Uint8List>? _importStream;
   bool _includeAccount = false;
   bool _busy = false;
   bool _waitingForReload = false;
@@ -30,6 +33,14 @@ class _BackupPageState extends State<BackupPage> {
       _waitingForReload && !widget.runtime.restoreNeedsReload
       ? '备份已恢复，未完成任务保持暂停'
       : _message;
+
+  @override
+  void dispose() {
+    _cancelled?.complete();
+    // Provider cleanup errors cannot be shown after leaving the page.
+    unawaited(_importStream?.cancel().catchError((_) {}));
+    super.dispose();
+  }
 
   Future<bool> _confirm(String title, Widget content, String action) =>
       showConfirmationDialog(
@@ -41,6 +52,7 @@ class _BackupPageState extends State<BackupPage> {
 
   Future<void> _run(Future<void> Function() action) async {
     if (_busy || !mounted) return;
+    final cancelled = _cancelled = Completer<void>();
     setState(() {
       _busy = true;
       _waitingForReload = false;
@@ -60,6 +72,8 @@ class _BackupPageState extends State<BackupPage> {
         },
       );
     } finally {
+      if (!cancelled.isCompleted) cancelled.complete();
+      _cancelled = null;
       if (mounted) setState(() => _busy = false);
     }
   }
@@ -94,18 +108,31 @@ class _BackupPageState extends State<BackupPage> {
     );
     if (file == null || !mounted) return;
     final length = await file.length();
+    if (!mounted) return;
     if (length != null && length > ConfigArchive.maxBytes) {
       throw const ConfigArchiveException('备份超过 64 MiB');
     }
     // A bounded stream also handles providers which do not report file length.
     final bytes = BytesBuilder(copy: false);
-    await for (final chunk in file.readAsByteStream()) {
-      if (bytes.length + chunk.length > ConfigArchive.maxBytes) {
-        throw const ConfigArchiveException('备份超过 64 MiB');
+    final stream = _importStream = StreamIterator(file.readAsByteStream());
+    try {
+      while (await stream.moveNext()) {
+        if (!mounted) return;
+        final chunk = stream.current;
+        if (bytes.length + chunk.length > ConfigArchive.maxBytes) {
+          throw const ConfigArchiveException('备份超过 64 MiB');
+        }
+        bytes.add(chunk);
       }
-      bytes.add(chunk);
+    } finally {
+      _importStream = null;
+      await stream.cancel();
     }
-    final draft = await _archive.inspect(bytes.takeBytes());
+    if (!mounted) return;
+    final draft = await _archive.inspect(
+      bytes.takeBytes(),
+      cancelled: _cancelled?.future,
+    );
     if (!mounted) return;
     final replacements = <String, String>{};
     for (final oldRoot in draft.missingDirectories) {
