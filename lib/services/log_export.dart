@@ -8,16 +8,19 @@ import 'android_platform.dart';
 import 'app_log.dart';
 
 /// Exports only a session returned by the logger, never an arbitrary path.
-/// A null result means the user cancelled the platform save dialog.
-Future<Uri?> exportLogSession(LogSession session) {
+/// A null result means the caller or the platform save dialog cancelled.
+/// [canStart] gates preparation; an opened save dialog can still finish.
+Future<Uri?> exportLogSession(LogSession session, {bool Function()? canStart}) {
   AppLog.instance.trace("lib/services/log_export.dart::exportLogSession");
   return AppLog.instance.runWithErrorScope(() async {
     AppLog.instance.trace(
       "lib/services/log_export.dart::exportLogSession.closure#1",
     );
 
+    if (canStart?.call() == false) return null;
     final log = AppLog.instance;
     final sessions = await log.sessions();
+    if (canStart?.call() == false) return null;
     if (!sessions.any((candidate) {
       AppLog.instance.trace(
         "lib/services/log_export.dart::exportLogSession.closure#1.closure#1",
@@ -35,6 +38,7 @@ Future<Uri?> exportLogSession(LogSession session) {
       throw ArgumentError.value(name, 'fileName', '日志文件名无效');
     }
     final snapshot = await log.snapshot(name);
+    if (canStart?.call() == false) return null;
     if (Platform.isAndroid) {
       return AndroidPlatform.exportLogSnapshot(snapshot, name);
     }

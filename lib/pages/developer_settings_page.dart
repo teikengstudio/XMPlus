@@ -30,6 +30,14 @@ class _DeveloperSettingsPageState extends State<DeveloperSettingsPage> {
   String? _selected;
   String? _error;
   bool _busy = false;
+  bool _leaving = false;
+
+  bool _canContinueExport() {
+    AppLog.instance.trace(
+      "lib/pages/developer_settings_page.dart::_DeveloperSettingsPageState._canContinueExport",
+    );
+    return mounted && !_leaving;
+  }
 
   @override
   void initState() {
@@ -202,7 +210,7 @@ class _DeveloperSettingsPageState extends State<DeveloperSettingsPage> {
         "lib/pages/developer_settings_page.dart::_DeveloperSettingsPageState._export.closure#1",
       );
 
-      if (_busy) return;
+      if (_busy || !_canContinueExport()) return;
       final session = _sessions.where((session) {
         AppLog.instance.trace(
           "lib/pages/developer_settings_page.dart::_DeveloperSettingsPageState._export.closure#1.closure#1",
@@ -221,19 +229,25 @@ class _DeveloperSettingsPageState extends State<DeveloperSettingsPage> {
       try {
         if (clipboard) {
           final snapshot = await _log.snapshot(session.fileName);
+          if (!_canContinueExport()) return;
           if (!snapshot.canCopyToClipboard(android: Platform.isAndroid)) {
             throw StateError('日志过大，无法完整复制，请导出到文件');
           }
           final text = await snapshot.readForClipboard(
             android: Platform.isAndroid,
           );
+          if (!_canContinueExport()) return;
           await Clipboard.setData(ClipboardData(text: text));
-          if (mounted) _message('日志已复制');
+          if (_canContinueExport()) _message('日志已复制');
         } else {
-          final destination = await exportLogSession(session);
-          if (destination != null && mounted) _message('日志已导出');
+          final destination = await exportLogSession(
+            session,
+            canStart: _canContinueExport,
+          );
+          if (destination != null && _canContinueExport()) _message('日志已导出');
         }
       } catch (error, stack) {
+        if (!_canContinueExport()) return;
         if (!_log.errorWasRecorded(error)) {
           _log.write(
             AppLogLevel.warning,
@@ -301,7 +315,7 @@ class _DeveloperSettingsPageState extends State<DeveloperSettingsPage> {
       "lib/pages/developer_settings_page.dart::_DeveloperSettingsPageState.build",
     );
 
-    return ListenableBuilder(
+    final content = ListenableBuilder(
       listenable: widget.runtime,
       builder: (context, _) {
         AppLog.instance.trace(
@@ -513,6 +527,15 @@ class _DeveloperSettingsPageState extends State<DeveloperSettingsPage> {
             );
           },
         );
+      },
+    );
+    return PopScope(
+      child: content,
+      onPopInvokedWithResult: (didPop, _) {
+        AppLog.instance.trace(
+          "lib/pages/developer_settings_page.dart::_DeveloperSettingsPageState.build.closure#2",
+        );
+        if (didPop) _leaving = true;
       },
     );
   }
