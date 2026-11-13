@@ -1317,7 +1317,10 @@ class _ListeningPageState extends State<ListeningPage>
                       padding: const EdgeInsets.fromLTRB(12, 12, 12, 4),
                       child: AdaptiveText(
                         row,
-                        style: Theme.of(context).textTheme.titleMedium,
+                        style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                          fontWeight: FontWeight.w600,
+                          color: Theme.of(context).colorScheme.onSurfaceVariant,
+                        ),
                       ),
                     )
                   : tile(row as T);
