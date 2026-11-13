@@ -132,6 +132,9 @@ class PlayerService {
   late final StreamSubscription<AudioSnapshot> _driverEvents;
   late final StreamSubscription<void> _downloadEvents;
   Timer? _timer;
+  int _sleepRevision = 0;
+  // A queued expiry blocks advancement, but cancellation can still revoke it.
+  int? _pendingSleepRevision;
   AudioProxy? _proxy;
   Future<AudioProxy>? _proxyOpening;
   PlaybackSource? _source;
@@ -173,6 +176,7 @@ class PlayerService {
   int _playbackRecoveryRevision = 0;
 
   Stream<void> get changes => _changes.stream;
+  bool get _sleepStopping => _sleepStopped || _pendingSleepRevision != null;
   List<Track> get queue => List.unmodifiable(_queue);
   Track? get current =>
       cursor >= 0 && cursor < _queue.length ? _queue[cursor] : null;
@@ -1348,7 +1352,7 @@ class PlayerService {
     final source = _source;
     if (source == null ||
         _atEnd ||
-        _sleepStopped ||
+        _sleepStopping ||
         !snapshot.playing ||
         snapshot.buffering ||
         snapshot.duration <= 0 ||
@@ -1369,7 +1373,7 @@ class PlayerService {
     bool active() =>
         !_closed &&
         !_atEnd &&
-        !_sleepStopped &&
+        !_sleepStopping &&
         playing &&
         request == _request &&
         epoch == _epoch &&
@@ -1492,10 +1496,13 @@ class PlayerService {
     // admission now, so it cannot start audio before the queued sleep action.
     final expired = policy.pollSleep();
     if (expired != null) {
+      final revision = _sleepRevision;
       _newRequest();
-      _sleepStopped = true;
+      _pendingSleepRevision = revision;
       await _commands.synchronized(() async {
-        if (!_closed) await _sleep(expired, invalidateRequest: false);
+        if (_closed || revision != _sleepRevision) return;
+        _pendingSleepRevision = null;
+        await _sleep(expired, invalidateRequest: false);
       });
       return;
     }
@@ -1531,7 +1538,7 @@ class PlayerService {
       return;
     }
     await _pause();
-    if (_manualPaused || intent != _advanceIntent) return;
+    if (_manualPaused || _sleepStopping || intent != _advanceIntent) return;
     if (effectiveSettings.loopMode == 'single') {
       await _openCurrent(_newRequest(), resumePosition: 0);
       return;
@@ -1557,7 +1564,7 @@ class PlayerService {
                 _closed ||
                 !_atEnd ||
                 _manualPaused ||
-                _sleepStopped ||
+                _sleepStopping ||
                 epoch != _epoch ||
                 request != _request ||
                 intent != _advanceIntent ||
@@ -1745,7 +1752,7 @@ class PlayerService {
               _endAdvanceIntent == _advanceIntent &&
               current?.id == last.id &&
               cursor + 1 < _queue.length &&
-              !_sleepStopped &&
+              !_sleepStopping &&
               !_manualPaused &&
               effectiveSettings.autoNext &&
               effectiveSettings.loopMode != 'single') {
@@ -1766,7 +1773,7 @@ class PlayerService {
         if (speculative &&
             (!_atEnd ||
                 _manualPaused ||
-                _sleepStopped ||
+                _sleepStopping ||
                 endEpoch != _epoch ||
                 advanceIntent != _advanceIntent))
           rethrow;
@@ -1799,11 +1806,15 @@ class PlayerService {
   }
 
   void setSleep(SleepRequest request) {
+    ++_sleepRevision;
+    _pendingSleepRevision = null;
     policy.armSleep(request);
     _notify();
   }
 
   void cancelSleep() {
+    ++_sleepRevision;
+    _pendingSleepRevision = null;
     policy.cancelSleep();
     _notify();
   }
@@ -1812,6 +1823,7 @@ class PlayerService {
     SleepAction action, {
     bool invalidateRequest = true,
   }) async {
+    final revision = _sleepRevision;
     if (invalidateRequest) _newRequest();
     _sleepStopped = true;
     try {
@@ -1823,13 +1835,17 @@ class PlayerService {
         rethrow;
       }
     }
+    // Saving the stopped state can outlive a cancelled or replacement timer.
+    if (revision != _sleepRevision) return;
     status = '定时已结束';
     _notify();
     if (action == SleepAction.exit) {
       // Called outside the command lock: normal application close quiesces us.
       final exit = exitApplication;
       if (exit == null) throw StateError('未配置应用退出处理');
-      scheduleMicrotask(() => _background(exit));
+      scheduleMicrotask(() {
+        if (revision == _sleepRevision) _background(exit);
+      });
     }
   }
 
