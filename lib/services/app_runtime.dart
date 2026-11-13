@@ -704,7 +704,9 @@ class AppRuntime extends ChangeNotifier {
           },
           // Drain final history sync while the account client can still finish it.
           () => player.close(quiesced: true),
-          accounts.close,
+          // The runtime boundary already applied the exit settlement policy.
+          // Account-switch checks would reject journals that exit may preserve.
+          () => accounts.close(preserveState: true),
           () async {
             await _playerChanges?.cancel();
           },

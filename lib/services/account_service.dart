@@ -746,7 +746,8 @@ class AccountService {
 
   /// Does not own AppStorage; caller closes storage after all services finish.
   /// A failed settlement leaves this service available for manual resolution.
-  /// Startup rollback preserves state because no work has been admitted yet.
+  /// Preserve state after startup rollback or an approved runtime exit boundary,
+  /// releasing clients without repeating account-change settlement checks.
   Future<void> close({bool preserveState = false}) =>
       _accounts.synchronized(() async {
         if (_closed) return;
