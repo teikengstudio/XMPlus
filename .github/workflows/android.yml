@@ -266,6 +266,7 @@ jobs:
         run: |
           set -euo pipefail
           (cd release && sha256sum --check SHA256SUMS)
+          (cd release && sha256sum ./*.apk ./*.zip > SHA256SUMS)
           python3 tool/release_notes.py "$RELEASE_TAG" --output release/RELEASE-NOTES.md
           release_flags=()
           if [[ "$RELEASE_TAG" == "v1.1.8" ]]; then

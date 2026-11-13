@@ -1492,7 +1492,7 @@ class _AlbumPageViewState extends State<AlbumPageView> {
         if (mounted)
           setState(() {
             AppLog.instance.trace(
-              "lib/pages/catalogue_page.dart::_AlbumPageViewState._download.closure#1.closure#3",
+              "lib/pages/catalogue_page.dart::_AlbumPageViewState._download.closure#1.closure#2",
             );
             _error = _safeError(error);
           });
@@ -1500,7 +1500,7 @@ class _AlbumPageViewState extends State<AlbumPageView> {
         if (mounted)
           setState(() {
             AppLog.instance.trace(
-              "lib/pages/catalogue_page.dart::_AlbumPageViewState._download.closure#1.closure#4",
+              "lib/pages/catalogue_page.dart::_AlbumPageViewState._download.closure#1.closure#3",
             );
             _busy = false;
           });
