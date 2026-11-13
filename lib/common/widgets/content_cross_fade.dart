@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import "../../services/app_log.dart";
+
 /// Keeps the previous surface painted until the incoming content is opaque.
 class ContentCrossFade extends StatefulWidget {
   const ContentCrossFade({required this.child, super.key});
@@ -7,7 +9,12 @@ class ContentCrossFade extends StatefulWidget {
   final Widget child;
 
   @override
-  State<ContentCrossFade> createState() => _ContentCrossFadeState();
+  State<ContentCrossFade> createState() {
+    AppLog.instance.trace(
+      "lib/common/widgets/content_cross_fade.dart::ContentCrossFade.createState",
+    );
+    return _ContentCrossFadeState();
+  }
 }
 
 class _ContentCrossFadeState extends State<ContentCrossFade>
@@ -17,11 +24,19 @@ class _ContentCrossFadeState extends State<ContentCrossFade>
 
   @override
   void initState() {
+    AppLog.instance.trace(
+      "lib/common/widgets/content_cross_fade.dart::_ContentCrossFadeState.initState",
+    );
+
     super.initState();
     _addLayer(animate: false);
   }
 
   void _addLayer({required bool animate}) {
+    AppLog.instance.trace(
+      "lib/common/widgets/content_cross_fade.dart::_ContentCrossFadeState._addLayer",
+    );
+
     for (final layer in _layers) {
       layer.controller.stop();
     }
@@ -33,6 +48,10 @@ class _ContentCrossFadeState extends State<ContentCrossFade>
     final layer = _ContentLayer(widget.child, controller);
     _layers.add(layer);
     controller.addStatusListener((status) {
+      AppLog.instance.trace(
+        "lib/common/widgets/content_cross_fade.dart::_ContentCrossFadeState._addLayer.closure#1",
+      );
+
       if (status == AnimationStatus.completed &&
           mounted &&
           identical(_layers.last, layer)) {
@@ -43,6 +62,10 @@ class _ContentCrossFadeState extends State<ContentCrossFade>
   }
 
   void _releasePrevious() {
+    AppLog.instance.trace(
+      "lib/common/widgets/content_cross_fade.dart::_ContentCrossFadeState._releasePrevious",
+    );
+
     while (_layers.length > 1) {
       _layers.removeAt(0).dispose();
     }
@@ -50,6 +73,10 @@ class _ContentCrossFadeState extends State<ContentCrossFade>
 
   @override
   void didChangeDependencies() {
+    AppLog.instance.trace(
+      "lib/common/widgets/content_cross_fade.dart::_ContentCrossFadeState.didChangeDependencies",
+    );
+
     super.didChangeDependencies();
     _reduceMotion = MediaQuery.disableAnimationsOf(context);
     if (_reduceMotion) {
@@ -60,6 +87,10 @@ class _ContentCrossFadeState extends State<ContentCrossFade>
 
   @override
   void didUpdateWidget(covariant ContentCrossFade oldWidget) {
+    AppLog.instance.trace(
+      "lib/common/widgets/content_cross_fade.dart::_ContentCrossFadeState.didUpdateWidget",
+    );
+
     super.didUpdateWidget(oldWidget);
     if (Widget.canUpdate(oldWidget.child, widget.child)) {
       _layers.last.child = widget.child;
@@ -71,6 +102,10 @@ class _ContentCrossFadeState extends State<ContentCrossFade>
 
   @override
   void dispose() {
+    AppLog.instance.trace(
+      "lib/common/widgets/content_cross_fade.dart::_ContentCrossFadeState.dispose",
+    );
+
     for (final layer in _layers) {
       layer.dispose();
     }
@@ -78,42 +113,47 @@ class _ContentCrossFadeState extends State<ContentCrossFade>
   }
 
   @override
-  Widget build(BuildContext context) => ClipRect(
-    child: Stack(
-      fit: StackFit.expand,
-      children: [
-        for (final layer in _layers)
-          ExcludeFocus(
-            key: ObjectKey(layer),
-            excluding:
-                !identical(layer, _layers.last) ||
-                !layer.controller.isCompleted,
-            child: ExcludeSemantics(
+  Widget build(BuildContext context) {
+    AppLog.instance.trace(
+      "lib/common/widgets/content_cross_fade.dart::_ContentCrossFadeState.build",
+    );
+    return ClipRect(
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          for (final layer in _layers)
+            ExcludeFocus(
+              key: ObjectKey(layer),
               excluding:
                   !identical(layer, _layers.last) ||
                   !layer.controller.isCompleted,
-              child: IgnorePointer(
-                ignoring:
+              child: ExcludeSemantics(
+                excluding:
                     !identical(layer, _layers.last) ||
                     !layer.controller.isCompleted,
-                child: TickerMode(
-                  enabled: identical(layer, _layers.last),
-                  child: FadeTransition(
-                    opacity: layer.opacity,
-                    child: RepaintBoundary(
-                      child: ColoredBox(
-                        color: Theme.of(context).colorScheme.surface,
-                        child: layer.child,
+                child: IgnorePointer(
+                  ignoring:
+                      !identical(layer, _layers.last) ||
+                      !layer.controller.isCompleted,
+                  child: TickerMode(
+                    enabled: identical(layer, _layers.last),
+                    child: FadeTransition(
+                      opacity: layer.opacity,
+                      child: RepaintBoundary(
+                        child: ColoredBox(
+                          color: Theme.of(context).colorScheme.surface,
+                          child: layer.child,
+                        ),
                       ),
                     ),
                   ),
                 ),
               ),
             ),
-          ),
-      ],
-    ),
-  );
+        ],
+      ),
+    );
+  }
 }
 
 class _ContentLayer {
@@ -121,13 +161,21 @@ class _ContentLayer {
     : opacity = CurvedAnimation(
         parent: controller,
         curve: Curves.easeInOutCubic,
-      );
+      ) {
+    AppLog.instance.trace(
+      "lib/common/widgets/content_cross_fade.dart::_ContentLayer.new",
+    );
+  }
 
   Widget child;
   final AnimationController controller;
   final CurvedAnimation opacity;
 
   void dispose() {
+    AppLog.instance.trace(
+      "lib/common/widgets/content_cross_fade.dart::_ContentLayer.dispose",
+    );
+
     opacity.dispose();
     controller.dispose();
   }

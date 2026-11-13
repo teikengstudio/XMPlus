@@ -44,6 +44,8 @@ jobs:
           cache: true
       - name: Resolve locked dependencies
         run: flutter pub get --enforce-lockfile
+      - name: Check method trace coverage
+        run: dart --disable-dart-dev --packages=.dart_tool/package_config.json tool/check_method_trace.dart
       - name: Restore source-built native media executables
         uses: actions/download-artifact@v7
         with:
@@ -57,6 +59,13 @@ jobs:
     needs: native-tools
     if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v'))
     runs-on: ubuntu-24.04
+    env:
+      SENTRY_DSN: ${{ vars.SENTRY_DSN }}
+      SENTRY_ORG: ${{ vars.SENTRY_ORG }}
+      SENTRY_PROJECT: ${{ vars.SENTRY_PROJECT }}
+      SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+      SENTRY_UPLOAD_SYMBOLS: 'true'
+      SENTRY_ENVIRONMENT: production
     outputs:
       version: ${{ steps.version.outputs.version }}
     steps:
@@ -72,6 +81,15 @@ jobs:
           flutter-version: '3.47.9'
           channel: stable
           cache: true
+      - name: Require release telemetry configuration
+        run: |
+          set -euo pipefail
+          for name in SENTRY_DSN SENTRY_ORG SENTRY_PROJECT SENTRY_AUTH_TOKEN; do
+            if [[ -z "${!name}" ]]; then
+              echo "::error::Required Sentry configuration $name is missing; configure variables SENTRY_DSN/SENTRY_ORG/SENTRY_PROJECT and secret SENTRY_AUTH_TOKEN."
+              exit 1
+            fi
+          done
       - name: Check version and tag
         id: version
         env:
@@ -89,6 +107,8 @@ jobs:
               raise SystemExit(f'Tag must equal v{version} from pubspec.yaml')
           with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
               output.write(f'version={version}\n')
+              output.write(f'release=xmplus@{version}+{match[2]}\n')
+              output.write(f'dist={match[2]}\n')
           PY
       - name: Resolve locked dependencies
         run: flutter pub get --enforce-lockfile
@@ -125,7 +145,22 @@ jobs:
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-        run: flutter build apk --release --split-per-abi --no-pub
+        run: >-
+          flutter build apk --release --split-per-abi --no-pub
+          --dart-define=SENTRY_DSN="$SENTRY_DSN"
+          --dart-define=SENTRY_ENVIRONMENT="$SENTRY_ENVIRONMENT"
+      - name: Upload Android debug symbols
+        env:
+          SENTRY_RELEASE: ${{ steps.version.outputs.release }}
+          SENTRY_DIST: ${{ steps.version.outputs.dist }}
+        run: >-
+          dart --disable-dart-dev --packages=.dart_tool/package_config.json tool/upload_sentry_symbols.dart
+          --sentry-define=org="$SENTRY_ORG"
+          --sentry-define=project="$SENTRY_PROJECT"
+          --sentry-define=symbols_path=build
+          --sentry-define=release="$SENTRY_RELEASE"
+          --sentry-define=dist="$SENTRY_DIST"
+          --sentry-define=commits=false
       - name: Verify APK signatures, package and version
         env:
           APP_VERSION: ${{ steps.version.outputs.version }}
@@ -161,6 +196,13 @@ jobs:
     needs: native-tools
     if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v'))
     runs-on: windows-2022
+    env:
+      SENTRY_DSN: ${{ vars.SENTRY_DSN }}
+      SENTRY_ORG: ${{ vars.SENTRY_ORG }}
+      SENTRY_PROJECT: ${{ vars.SENTRY_PROJECT }}
+      SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+      SENTRY_UPLOAD_SYMBOLS: 'true'
+      SENTRY_ENVIRONMENT: production
     steps:
       - uses: actions/checkout@v5
         with:
@@ -170,6 +212,14 @@ jobs:
           flutter-version: '3.47.9'
           channel: stable
           cache: true
+      - name: Require release telemetry configuration
+        shell: pwsh
+        run: |
+          foreach ($name in @('SENTRY_DSN', 'SENTRY_ORG', 'SENTRY_PROJECT', 'SENTRY_AUTH_TOKEN')) {
+            if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($name, 'Process'))) {
+              throw "Required Sentry configuration $name is missing; configure variables SENTRY_DSN/SENTRY_ORG/SENTRY_PROJECT and secret SENTRY_AUTH_TOKEN."
+            }
+          }
       - name: Restore source-built Windows runtime and provenance
         uses: actions/download-artifact@v7
         with:
@@ -216,6 +266,7 @@ jobs:
         run: |
           set -euo pipefail
           (cd release && sha256sum --check SHA256SUMS)
+          (cd release && sha256sum ./*.apk ./*.zip > SHA256SUMS)
           python3 tool/release_notes.py "$RELEASE_TAG" --output release/RELEASE-NOTES.md
           release_flags=()
           if [[ "$RELEASE_TAG" == "v1.1.8" ]]; then

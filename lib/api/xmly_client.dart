@@ -10,8 +10,9 @@ import 'package:path/path.dart' as p;
 import 'package:synchronized/synchronized.dart';
 
 import '../models/xmly_models.dart';
+import '../services/app_log.dart';
 import '../services/network_retry.dart';
-import '../services/request_diagnostics.dart';
+import '../services/http_log_attempt.dart';
 import 'xmly_crypto.dart';
 
 class XmlyClient {
@@ -46,6 +47,10 @@ class XmlyClient {
   Future<void> _urlCacheReady = Future<void>.value();
   Quota? _quota;
   void invalidateQuota() {
+    AppLog.instance.trace(
+      "lib/api/xmly_client.dart::XmlyClient.invalidateQuota",
+    );
+
     _quota = null;
   }
 
@@ -55,6 +60,8 @@ class XmlyClient {
     this.quality = 'auto',
     String? urlCacheDirectory,
   }) : _dio = dio ?? Dio() {
+    AppLog.instance.trace("lib/api/xmly_client.dart::XmlyClient.new");
+
     if (quality != 'auto' && !_qualities.contains(quality))
       throw const XmlyException('invalid_quality', '音质设置无效', definitive: true);
     // This client has no shared cookie jar or redirect interceptor.
@@ -63,12 +70,25 @@ class XmlyClient {
     _dio.options.connectTimeout = const Duration(seconds: 10);
     if (urlCacheDirectory != null) attachUrlCache(urlCacheDirectory);
   }
-  String get identity => credentials?.identity ?? 'anonymous';
-  String get cacheIdentity => credentials?.cacheIdentity ?? 'anonymous';
+  String get identity {
+    AppLog.instance.trace("lib/api/xmly_client.dart::XmlyClient.identity.get");
+    return credentials?.identity ?? 'anonymous';
+  }
+
+  String get cacheIdentity {
+    AppLog.instance.trace(
+      "lib/api/xmly_client.dart::XmlyClient.cacheIdentity.get",
+    );
+    return credentials?.cacheIdentity ?? 'anonymous';
+  }
 
   /// Serializes balance mutations for one account/device, including clients
   /// using refreshed credentials. Callers acquire account/ledger locks first.
   Future<T> withBalanceChange<T>(Future<T> Function() action) async {
+    AppLog.instance.trace(
+      "lib/api/xmly_client.dart::XmlyClient.withBalanceChange",
+    );
+
     final key = _requireAccount().identity;
     final changes = _balanceChanges.putIfAbsent(key, _BalanceChanges.new);
     changes.users++;
@@ -79,8 +99,16 @@ class XmlyClient {
     }
   }
 
-  bool get accountAvailable => credentials != null && !_expired;
+  bool get accountAvailable {
+    AppLog.instance.trace(
+      "lib/api/xmly_client.dart::XmlyClient.accountAvailable.get",
+    );
+    return credentials != null && !_expired;
+  }
+
   Map<String, String> context() {
+    AppLog.instance.trace("lib/api/xmly_client.dart::XmlyClient.context");
+
     final value = _requireAccount();
     return {
       'uid': value.uid,
@@ -94,6 +122,10 @@ class XmlyClient {
   }
 
   Credentials _requireAccount() {
+    AppLog.instance.trace(
+      "lib/api/xmly_client.dart::XmlyClient._requireAccount",
+    );
+
     if (credentials == null)
       throw const XmlyException(
         'login_required',
@@ -109,11 +141,18 @@ class XmlyClient {
     return credentials!;
   }
 
-  static bool _cachedAlbumEndpoint(String method, String origin, String path) =>
-      method == 'GET' &&
-      origin == cachedAlbumOrigin &&
-      RegExp(r'^/fmobile-album/album/track/ts-[0-9]+$').hasMatch(path);
+  static bool _cachedAlbumEndpoint(String method, String origin, String path) {
+    AppLog.instance.trace(
+      "lib/api/xmly_client.dart::XmlyClient._cachedAlbumEndpoint",
+    );
+    return method == 'GET' &&
+        origin == cachedAlbumOrigin &&
+        RegExp(r'^/fmobile-album/album/track/ts-[0-9]+$').hasMatch(path);
+  }
+
   static bool _endpoint(String method, String origin, String path) {
+    AppLog.instance.trace("lib/api/xmly_client.dart::XmlyClient._endpoint");
+
     if (origin == cachedAlbumOrigin)
       return _cachedAlbumEndpoint(method, origin, path) ||
           (method == 'GET' && path == '/nyx/v1/history/query/android');
@@ -126,7 +165,6 @@ class XmlyClient {
           const {
             '/revision/search',
             '/revision/track/simple',
-            '/revision/comment/queryComments',
             '/revision/comment/queryReplies',
           }.contains(path);
     if (origin == collector)
@@ -142,14 +180,18 @@ class XmlyClient {
     if (origin != mobile) return false;
     if (method == 'POST')
       return const [
-        '/fmobile-track/fmobile/track/v2/baseInfo',
-        '/lite-mobile/audi/func/v1/config',
-        '/lite-mobile/audi/func/v1/report',
-        '/lite-mobile/like/v1/like',
-        '/lite-mobile/like/v1/dislike',
-        '/subscribe/album/subscribe/delete',
-        '/subscribe/album-subscribe/and/ask-anchor-info',
-      ].contains(path);
+            '/fmobile-track/fmobile/track/v2/baseInfo',
+            '/lite-mobile/audi/func/v1/config',
+            '/lite-mobile/audi/func/v1/report',
+            '/favourite-business/favorite/track',
+            '/lite-mobile/like/v1/like',
+            '/lite-mobile/like/v1/dislike',
+            '/subscribe/album/subscribe/delete',
+            '/subscribe/album-subscribe/and/ask-anchor-info',
+            '/comment-mobile/like',
+            '/comment-mobile/v1/create',
+          ].contains(path) ||
+          RegExp(r'^/mobile/comment/delete/[0-9]+$').hasMatch(path);
     return method == 'GET' &&
         (const [
               '/mobile/v1/album/track/v2',
@@ -157,6 +199,11 @@ class XmlyClient {
             ].contains(path) ||
             RegExp(r'^/mobile/track/[1-9][0-9]{0,18}$').hasMatch(path) ||
             RegExp(r'^/fmobile-album/album/track/ts-[0-9]+$').hasMatch(path) ||
+            RegExp(r'^/fmobile-album/album/rec/detail/ts-[0-9]+$')
+                .hasMatch(path) ||
+            RegExp(r'^/comment-mobile/v1/track/comment/[0-9]+$')
+                .hasMatch(path) ||
+            RegExp(r'^/fmobile-user/homePage/ts-[0-9]+$').hasMatch(path) ||
             RegExp(r'^/lite-mobile/index/v1/(?:subPages|modules)/[0-9]+$')
                 .hasMatch(path) ||
             RegExp(r'^/fsubscribe-web/subscribe/comprehensive/rank/[0-9]+$')
@@ -165,10 +212,14 @@ class XmlyClient {
                 .hasMatch(path));
   }
 
-  static Duration _retryAfter(String? value) =>
-      serverRetryAfter(value) ?? const Duration(seconds: 30);
+  static Duration _retryAfter(String? value) {
+    AppLog.instance.trace("lib/api/xmly_client.dart::XmlyClient._retryAfter");
+    return serverRetryAfter(value) ?? const Duration(seconds: 30);
+  }
 
   Never _rateLimit(String origin, Duration delay) {
+    AppLog.instance.trace("lib/api/xmly_client.dart::XmlyClient._rateLimit");
+
     _cooldowns[origin] = DateTime.fromMillisecondsSinceEpoch(
       min(
         DateTime.now().millisecondsSinceEpoch + delay.inMilliseconds,
@@ -184,6 +235,8 @@ class XmlyClient {
   }
 
   void _expire() {
+    AppLog.instance.trace("lib/api/xmly_client.dart::XmlyClient._expire");
+
     if (_closed) return;
     _expired = true;
     _quota = null;
@@ -199,6 +252,10 @@ class XmlyClient {
     Future<void>? cancelled,
     Future<void> Function()? checkpoint,
   }) {
+    AppLog.instance.trace(
+      "lib/api/xmly_client.dart::XmlyClient.withReadPolicy",
+    );
+
     if (rateLimitRetries < 0 ||
         rateLimitRetries > 1000 ||
         minimumRateLimitDelay.isNegative) {
@@ -218,6 +275,8 @@ class XmlyClient {
   }
 
   Future<void> _checkRead(_ReadPolicy? policy) async {
+    AppLog.instance.trace("lib/api/xmly_client.dart::XmlyClient._checkRead");
+
     await policy?.checkpoint?.call();
     if (_closed) {
       throw const XmlyException('client_closed', '连接已关闭', definitive: true);
@@ -232,15 +291,25 @@ class XmlyClient {
     CancelToken cancel,
     _ReadPolicy? policy,
   ) async {
+    AppLog.instance.trace("lib/api/xmly_client.dart::XmlyClient._readAttempt");
+
     try {
       final result = await Future.any<T>([
         action,
         _closeSignal.future.then<T>((_) {
+          AppLog.instance.trace(
+            "lib/api/xmly_client.dart::XmlyClient._readAttempt.closure#1",
+          );
+
           cancel.cancel();
           throw const XmlyException('client_closed', '连接已关闭', definitive: true);
         }),
         if (policy?.cancelled != null)
           policy!.cancelled!.then<T>((_) async {
+            AppLog.instance.trace(
+              "lib/api/xmly_client.dart::XmlyClient._readAttempt.closure#2",
+            );
+
             cancel.cancel();
             await _checkRead(policy);
             throw const XmlyException(
@@ -258,6 +327,8 @@ class XmlyClient {
   }
 
   Future<void> _retryWait(Duration delay, [_ReadPolicy? policy]) async {
+    AppLog.instance.trace("lib/api/xmly_client.dart::XmlyClient._retryWait");
+
     await _checkRead(policy);
     try {
       await waitToRetry(
@@ -266,7 +337,12 @@ class XmlyClient {
           _closeSignal.future,
           if (policy?.cancelled != null) policy!.cancelled!,
         ]),
-        checkpoint: () => _checkRead(policy),
+        checkpoint: () {
+          AppLog.instance.trace(
+            "lib/api/xmly_client.dart::XmlyClient._retryWait.closure#1",
+          );
+          return _checkRead(policy);
+        },
       );
     } catch (_) {
       // Preserve the caller's typed stop exception rather than leaking the
@@ -286,137 +362,183 @@ class XmlyClient {
     bool account = true,
     bool signed = false,
     bool form = false,
-  }) async {
-    if (_closed)
-      throw const XmlyException('client_closed', '连接已关闭', definitive: true);
-    method = method.toUpperCase();
-    if (!_endpoint(method, origin, path) || (account && origin == searchOrigin))
-      throw const XmlyException(
-        'invalid_endpoint',
-        '请求地址不受支持',
-        definitive: true,
+  }) {
+    AppLog.instance.trace("lib/api/xmly_client.dart::XmlyClient.request");
+    if (AppLog.instance.level == AppLogLevel.debug) {
+      AppLog.instance.write(
+        AppLogLevel.debug,
+        'api',
+        'XmlyClient.request parameters',
+        data: {
+          'method': method,
+          'origin': origin,
+          'path': path,
+          'query': query,
+          'data': data,
+        },
       );
-    if (signed &&
-        (origin != mobile ||
-            path != '/fmobile-track/fmobile/track/v2/baseInfo'))
-      throw const XmlyException(
-        'invalid_endpoint',
-        '签名请求地址不受支持',
-        definitive: true,
+    }
+    return AppLog.instance.runWithErrorScope(() async {
+      AppLog.instance.trace(
+        "lib/api/xmly_client.dart::XmlyClient.request.closure#1",
       );
-    final authenticated = account && credentials != null;
-    if (authenticated) _requireAccount();
-    if (signed && !authenticated)
-      throw const XmlyException('login_required', '签名请求需要登录', definitive: true);
-    final readOnly =
-        method == 'GET' ||
-        (origin == mobile &&
-            method == 'POST' &&
-            const [
-              '/fmobile-track/fmobile/track/v2/baseInfo',
-              '/lite-mobile/audi/func/v1/config',
-            ].contains(path));
-    final policy = readOnly
-        ? Zone.current[_readPolicyKey] as _ReadPolicy?
-        : null;
-    var failures = 0, rateRetries = 0;
-    while (true) {
-      await _checkRead(policy);
-      Duration? rateDelay;
-      final until = _cooldowns[origin];
-      if (until != null && until.isAfter(DateTime.now())) {
-        final delay = until.difference(DateTime.now());
-        if (policy?.rateLimitRetries == 0) {
-          throw XmlyException(
-            'rate_limited',
-            '请求过于频繁，请稍后重试',
-            retryAfter: delay,
-          );
+
+      if (_closed)
+        throw const XmlyException('client_closed', '连接已关闭', definitive: true);
+      method = method.toUpperCase();
+      if (!_endpoint(method, origin, path) ||
+          (account && origin == searchOrigin))
+        throw const XmlyException(
+          'invalid_endpoint',
+          '请求地址不受支持',
+          definitive: true,
+        );
+      if (signed &&
+          (origin != mobile ||
+              path != '/fmobile-track/fmobile/track/v2/baseInfo'))
+        throw const XmlyException(
+          'invalid_endpoint',
+          '签名请求地址不受支持',
+          definitive: true,
+        );
+      final authenticated = account && credentials != null;
+      if (authenticated) _requireAccount();
+      if (signed && !authenticated)
+        throw const XmlyException(
+          'login_required',
+          '签名请求需要登录',
+          definitive: true,
+        );
+      final readOnly =
+          method == 'GET' ||
+          (origin == mobile &&
+              method == 'POST' &&
+              const [
+                '/fmobile-track/fmobile/track/v2/baseInfo',
+                '/lite-mobile/audi/func/v1/config',
+              ].contains(path));
+      final policy = readOnly
+          ? Zone.current[_readPolicyKey] as _ReadPolicy?
+          : null;
+      var failures = 0, rateRetries = 0;
+      while (true) {
+        await _checkRead(policy);
+        Duration? rateDelay;
+        final until = _cooldowns[origin];
+        if (until != null && until.isAfter(DateTime.now())) {
+          final delay = until.difference(DateTime.now());
+          if (policy?.rateLimitRetries == 0) {
+            throw XmlyException(
+              'rate_limited',
+              '请求过于频繁，请稍后重试',
+              retryAfter: delay,
+            );
+          }
+          await _retryWait(delay, policy);
         }
+        await _checkRead(policy);
+        final cancel = CancelToken();
+        final diagnostic = HttpLogAttempt(
+          account: identity,
+          method: method,
+          url: '$origin$path',
+        );
+        try {
+          final action = _attempt(
+            method,
+            origin,
+            path,
+            query,
+            data,
+            authenticated,
+            signed,
+            form,
+            cancel,
+            diagnostic,
+          );
+          final attempt = readOnly
+              ? _readAttempt(action, cancel, policy)
+              : action;
+          return await attempt.timeout(
+            const Duration(seconds: 25),
+            onTimeout: () {
+              AppLog.instance.trace(
+                "lib/api/xmly_client.dart::XmlyClient.request.closure#1.closure#1",
+              );
+
+              final error = TimeoutException('request');
+              unawaited(diagnostic.fail(error, StackTrace.current));
+              cancel.cancel();
+              throw error;
+            },
+          );
+        } on _RetryableStatus catch (error) {
+          if (!readOnly || failures++ >= 4) {
+            final failure = XmlyException(
+              readOnly ? 'network' : 'uncertain',
+              readOnly ? '喜马拉雅服务暂时不可用' : '请求结果未知，请核对后重试',
+            );
+            AppLog.instance.linkError(failure, error);
+            throw failure;
+          }
+        } on DioException catch (error) {
+          await _checkRead(policy);
+          if (error.error case final XmlyException limit
+              when limit.code == 'response_too_large') {
+            AppLog.instance.linkError(limit, error);
+            throw limit;
+          }
+          if (cancel.cancelError?.error case final XmlyException limit
+              when limit.code == 'response_too_large') {
+            AppLog.instance.linkError(limit, error);
+            throw limit;
+          }
+          if (!readOnly || failures++ >= 4) {
+            final failure = XmlyException(
+              readOnly ? 'network' : 'uncertain',
+              readOnly ? '请求失败或超时' : '请求结果未知，请核对后重试',
+            );
+            AppLog.instance.linkError(failure, error);
+            throw failure;
+          }
+        } on TimeoutException catch (error) {
+          if (!readOnly || failures++ >= 4) {
+            final failure = XmlyException(
+              readOnly ? 'network' : 'uncertain',
+              readOnly ? '请求失败或超时' : '请求结果未知，请核对后重试',
+            );
+            AppLog.instance.linkError(failure, error);
+            throw failure;
+          }
+        } on IOException catch (error) {
+          if (!readOnly || failures++ >= 4) {
+            final failure = XmlyException(
+              readOnly ? 'network' : 'uncertain',
+              readOnly ? '请求失败或超时' : '请求结果未知，请核对后重试',
+            );
+            AppLog.instance.linkError(failure, error);
+            throw failure;
+          }
+        } on XmlyException catch (error) {
+          if (_closed || policy?.stopped == true) diagnostic.cancelled(error);
+          if (!readOnly || error.code != 'rate_limited') rethrow;
+          if (policy != null) {
+            if (rateRetries++ >= policy.rateLimitRetries) rethrow;
+            final server = error.retryAfter ?? Duration.zero;
+            rateDelay = server > policy.minimumRateLimitDelay
+                ? server
+                : policy.minimumRateLimitDelay;
+          } else if (failures++ >= 4) {
+            rethrow;
+          }
+        }
+        final backoff = Duration(seconds: 1 << max(0, min(failures - 1, 4)));
+        final cooldown = _cooldowns[origin]?.difference(DateTime.now());
+        var delay = cooldown != null && cooldown > backoff ? cooldown : backoff;
+        if (rateDelay != null && rateDelay > delay) delay = rateDelay;
         await _retryWait(delay, policy);
       }
-      await _checkRead(policy);
-      final cancel = CancelToken();
-      final diagnostic = RequestDiagnostic(
-        account: identity,
-        method: method,
-        url: '$origin$path',
-      );
-      try {
-        final action = _attempt(
-          method,
-          origin,
-          path,
-          query,
-          data,
-          authenticated,
-          signed,
-          form,
-          cancel,
-          diagnostic,
-        );
-        final attempt = readOnly
-            ? _readAttempt(action, cancel, policy)
-            : action;
-        return await attempt.timeout(
-          const Duration(seconds: 25),
-          onTimeout: () {
-            cancel.cancel();
-            unawaited(
-              diagnostic.fail(TimeoutException('request (25 seconds)')),
-            );
-            throw TimeoutException('request');
-          },
-        );
-      } on _RetryableStatus {
-        if (!readOnly || failures++ >= 4)
-          throw XmlyException(
-            readOnly ? 'network' : 'uncertain',
-            readOnly ? '喜马拉雅服务暂时不可用' : '请求结果未知，请核对后重试',
-          );
-      } on DioException catch (error) {
-        await _checkRead(policy);
-        if (error.error case final XmlyException limit
-            when limit.code == 'response_too_large')
-          throw limit;
-        if (cancel.cancelError?.error case final XmlyException limit
-            when limit.code == 'response_too_large')
-          throw limit;
-        if (!readOnly || failures++ >= 4)
-          throw XmlyException(
-            readOnly ? 'network' : 'uncertain',
-            readOnly ? '请求失败或超时' : '请求结果未知，请核对后重试',
-          );
-      } on TimeoutException {
-        if (!readOnly || failures++ >= 4)
-          throw XmlyException(
-            readOnly ? 'network' : 'uncertain',
-            readOnly ? '请求失败或超时' : '请求结果未知，请核对后重试',
-          );
-      } on IOException {
-        if (!readOnly || failures++ >= 4)
-          throw XmlyException(
-            readOnly ? 'network' : 'uncertain',
-            readOnly ? '请求失败或超时' : '请求结果未知，请核对后重试',
-          );
-      } on XmlyException catch (error) {
-        if (!readOnly || error.code != 'rate_limited') rethrow;
-        if (policy != null) {
-          if (rateRetries++ >= policy.rateLimitRetries) rethrow;
-          final server = error.retryAfter ?? Duration.zero;
-          rateDelay = server > policy.minimumRateLimitDelay
-              ? server
-              : policy.minimumRateLimitDelay;
-        } else if (failures++ >= 4) {
-          rethrow;
-        }
-      }
-      final backoff = Duration(seconds: 1 << max(0, min(failures - 1, 4)));
-      final cooldown = _cooldowns[origin]?.difference(DateTime.now());
-      var delay = cooldown != null && cooldown > backoff ? cooldown : backoff;
-      if (rateDelay != null && rateDelay > delay) delay = rateDelay;
-      await _retryWait(delay, policy);
-    }
+    });
   }
 
   Future<Map<String, dynamic>> _attempt(
@@ -429,8 +551,10 @@ class XmlyClient {
     bool signed,
     bool form,
     CancelToken cancel,
-    RequestDiagnostic diagnostic,
+    HttpLogAttempt diagnostic,
   ) async {
+    AppLog.instance.trace("lib/api/xmly_client.dart::XmlyClient._attempt");
+
     final responseLimit = _cachedAlbumEndpoint(method, origin, path)
         ? _maxCachedAlbumResponse
         : _maxResponse;
@@ -451,7 +575,12 @@ class XmlyClient {
           responseType: ResponseType.stream,
           followRedirects: false,
           maxRedirects: 0,
-          validateStatus: (_) => true,
+          validateStatus: (_) {
+            AppLog.instance.trace(
+              "lib/api/xmly_client.dart::XmlyClient._attempt.closure#1",
+            );
+            return true;
+          },
           receiveTimeout: const Duration(seconds: 25),
           sendTimeout: const Duration(seconds: 25),
           contentType: form
@@ -464,19 +593,29 @@ class XmlyClient {
           data: data,
           cancelToken: cancel,
           onReceiveProgress: (received, _) {
+            AppLog.instance.trace(
+              "lib/api/xmly_client.dart::XmlyClient._attempt.closure#2",
+            );
+
             if (received > responseLimit) cancel.cancel(limitError);
           },
         );
     diagnostic.url = options.uri.toString();
     diagnostic.requestHeaders = options.headers;
-    diagnostic.requestBody = data == null
-        ? '(无请求体)'
-        : form
-        ? Transformer.urlEncodeMap(data, ListFormat.multi)
-        : jsonEncode(data);
+    diagnostic.requestBodyCapture = () {
+      AppLog.instance.trace(
+        "lib/api/xmly_client.dart::XmlyClient._attempt.closure#3",
+      );
+      return data == null
+          ? '(无请求体)'
+          : form
+          ? Transformer.urlEncodeMap(data, ListFormat.multi)
+          : jsonEncode(data);
+    };
     final bytes = BytesBuilder(copy: false);
     diagnostic.responseBytes = bytes.toBytes;
     try {
+      diagnostic.started();
       final response = await _dio.fetch<ResponseBody>(options);
       final body = response.data;
       final status = response.statusCode ?? 0;
@@ -490,7 +629,11 @@ class XmlyClient {
         if (length != null && length > responseLimit) {
           diagnostic.completeness =
               '未读取响应体：声明长度 $length 超过 $responseLimit 字节上限';
-          await body.stream.listen((_) {}).cancel();
+          await body.stream.listen((_) {
+            AppLog.instance.trace(
+              "lib/api/xmly_client.dart::XmlyClient._attempt.closure#4",
+            );
+          }).cancel();
           if (status == 200) throw limitError;
         } else {
           try {
@@ -508,8 +651,15 @@ class XmlyClient {
             diagnostic.completeness = length != null && length != bytes.length
                 ? '响应体不完整：声明 $length 字节，收到 ${bytes.length} 字节'
                 : '完整（HTTP 客户端解码后的响应体）';
-          } catch (error) {
+          } catch (error, stack) {
             diagnostic.transportError = '$error';
+            if (_closed ||
+                (Zone.current[_readPolicyKey] as _ReadPolicy?)?.stopped ==
+                    true) {
+              diagnostic.cancelled(error);
+            } else {
+              await diagnostic.fail(error, stack);
+            }
             if (status == 200) rethrow;
           }
         }
@@ -537,7 +687,13 @@ class XmlyClient {
       }
       if (body == null) throw const XmlyException('invalid_json', '接口响应为空');
       final responseBytes = bytes.takeBytes();
-      diagnostic.responseBytes = () => responseBytes;
+      diagnostic.responseBytes = () {
+        AppLog.instance.trace(
+          "lib/api/xmly_client.dart::XmlyClient._attempt.closure#5",
+        );
+        return responseBytes;
+      };
+      diagnostic.succeeded();
       Map<String, dynamic> payload;
       try {
         final decoded = jsonDecode(
@@ -545,8 +701,11 @@ class XmlyClient {
         );
         if (decoded is! Map<String, dynamic>) throw const FormatException();
         payload = decoded;
-      } catch (_) {
-        throw const XmlyException('invalid_json', '接口返回无效 JSON');
+      } catch (error, stack) {
+        await diagnostic.fail(error, stack);
+        final failure = XmlyException('invalid_json', '接口返回无效 JSON');
+        AppLog.instance.linkError(failure, error);
+        throw failure;
       }
       final code = '${payload['ret'] ?? 0}';
       if (code != (origin == searchOrigin ? '200' : '0')) {
@@ -568,13 +727,31 @@ class XmlyClient {
         throw const XmlyException('rejected', '喜马拉雅拒绝了请求', definitive: true);
       }
       return payload;
-    } catch (error) {
-      await diagnostic.fail(error);
+    } catch (error, stack) {
+      if (_closed ||
+          (Zone.current[_readPolicyKey] as _ReadPolicy?)?.stopped == true) {
+        diagnostic.cancelled(error);
+      } else {
+        await diagnostic.fail(
+          error,
+          stack,
+          promptUser:
+              !(error is XmlyException &&
+                  const {
+                    'login_required',
+                    'login_expired',
+                    'permission_denied',
+                    'rate_limited',
+                  }.contains(error.code)),
+        );
+      }
       rethrow;
     }
   }
 
   static void _paging(int page, int pageSize, {int maxPageSize = 50}) {
+    AppLog.instance.trace("lib/api/xmly_client.dart::XmlyClient._paging");
+
     if (page < 1 || page > 10000 || pageSize < 1 || pageSize > maxPageSize)
       throw XmlyException(
         'invalid_page',
@@ -584,6 +761,8 @@ class XmlyClient {
   }
 
   static int _total(Object? value) {
+    AppLog.instance.trace("lib/api/xmly_client.dart::XmlyClient._total");
+
     if (value is! num ||
         !value.isFinite ||
         value < 0 ||
@@ -593,6 +772,8 @@ class XmlyClient {
   }
 
   void _remember(Track value) {
+    AppLog.instance.trace("lib/api/xmly_client.dart::XmlyClient._remember");
+
     _metadata[value.number] = value;
     while (_metadata.length > 512) {
       _metadata.remove(_metadata.keys.first);
@@ -605,6 +786,8 @@ class XmlyClient {
     int page = 1,
     int pageSize = 20,
   }) async {
+    AppLog.instance.trace("lib/api/xmly_client.dart::XmlyClient.search");
+
     if (query.trim().isEmpty ||
         query.length > 200 ||
         !['track', 'album'].contains(kind))
@@ -664,46 +847,68 @@ class XmlyClient {
 
   /// A validated ascending prefix, not necessarily a complete catalogue: the
   /// cache server can cap page one at 200 despite the requested 100000 items.
-  Future<AlbumPage> cachedAlbum(String albumId) async {
-    final number = xmlyIdentifier(albumId);
-    _requireAccount();
-    try {
-      final response = await request(
-        'GET',
-        cachedAlbumOrigin,
-        '/fmobile-album/album/track/ts-${DateTime.now().millisecondsSinceEpoch}',
-        query: {
-          'albumId': number,
-          'device': 'android',
-          'isAsc': 'true',
-          'isQueryInvitationBrand': 'true',
-          'pageId': 1,
-          'pageSize': 100000,
-        },
+  Future<AlbumPage> cachedAlbum(String albumId) {
+    AppLog.instance.trace("lib/api/xmly_client.dart::XmlyClient.cachedAlbum");
+    return AppLog.instance.runWithErrorScope(() async {
+      AppLog.instance.trace(
+        "lib/api/xmly_client.dart::XmlyClient.cachedAlbum.closure#1",
       );
-      return await _readAlbumPage(
-        response,
-        number,
-        page: 1,
-        pageSize: 100000,
-        ascending: true,
-        cached: true,
-      );
-    } on XmlyException catch (error) {
-      if (const [
-        'rate_limited',
-        'login_expired',
-        'login_required',
-        'permission_denied',
-        'client_closed',
-      ].contains(error.code))
-        rethrow;
-      throw const XmlyException('invalid_cached_catalogue', '历史目录不可用，请使用实时目录');
-    } on FormatException {
-      throw const XmlyException('invalid_cached_catalogue', '历史目录不可用，请使用实时目录');
-    } on TypeError {
-      throw const XmlyException('invalid_cached_catalogue', '历史目录不可用，请使用实时目录');
-    }
+
+      final number = xmlyIdentifier(albumId);
+      _requireAccount();
+      try {
+        final response = await request(
+          'GET',
+          cachedAlbumOrigin,
+          '/fmobile-album/album/track/ts-${DateTime.now().millisecondsSinceEpoch}',
+          query: {
+            'albumId': number,
+            'device': 'android',
+            'isAsc': 'true',
+            'isQueryInvitationBrand': 'true',
+            'pageId': 1,
+            'pageSize': 100000,
+          },
+        );
+        return await _readAlbumPage(
+          response,
+          number,
+          page: 1,
+          pageSize: 100000,
+          ascending: true,
+          cached: true,
+        );
+      } on XmlyException catch (error) {
+        if (const [
+          'rate_limited',
+          'login_expired',
+          'login_required',
+          'permission_denied',
+          'client_closed',
+        ].contains(error.code))
+          rethrow;
+        final failure = XmlyException(
+          'invalid_cached_catalogue',
+          '历史目录不可用，请使用实时目录',
+        );
+        AppLog.instance.linkError(failure, error);
+        throw failure;
+      } on FormatException catch (error) {
+        final failure = XmlyException(
+          'invalid_cached_catalogue',
+          '历史目录不可用，请使用实时目录',
+        );
+        AppLog.instance.linkError(failure, error);
+        throw failure;
+      } on TypeError catch (error) {
+        final failure = XmlyException(
+          'invalid_cached_catalogue',
+          '历史目录不可用，请使用实时目录',
+        );
+        AppLog.instance.linkError(failure, error);
+        throw failure;
+      }
+    });
   }
 
   Future<AlbumPage> album(
@@ -712,6 +917,8 @@ class XmlyClient {
     int pageSize = xmlyAlbumPageSize,
     bool ascending = true,
   }) async {
+    AppLog.instance.trace("lib/api/xmly_client.dart::XmlyClient.album");
+
     final number = xmlyIdentifier(albumId);
     _paging(page, pageSize, maxPageSize: xmlyAlbumPageSize);
     final query = <String, dynamic>{
@@ -771,6 +978,8 @@ class XmlyClient {
   static const _albumOrderKeys = ['orderNo', 'orderNum', 'order_no'];
 
   static int? _albumOrder(Map<String, dynamic> raw) {
+    AppLog.instance.trace("lib/api/xmly_client.dart::XmlyClient._albumOrder");
+
     int? order;
     for (final key in _albumOrderKeys) {
       final value = xmlyPositive(raw[key]);
@@ -785,7 +994,17 @@ class XmlyClient {
     Map<String, dynamic> preferred,
     Map<String, dynamic> other,
   ) {
-    bool present(Object? value) => value != null && value != '';
+    AppLog.instance.trace(
+      "lib/api/xmly_client.dart::XmlyClient._albumMetadata",
+    );
+
+    bool present(Object? value) {
+      AppLog.instance.trace(
+        "lib/api/xmly_client.dart::XmlyClient._albumMetadata.present",
+      );
+      return value != null && value != '';
+    }
+
     final result = <String, dynamic>{
       ...other,
       for (final entry in preferred.entries)
@@ -807,7 +1026,14 @@ class XmlyClient {
       ],
     ]) {
       for (final source in [preferred, other]) {
-        final values = keys.map((key) => source[key]).where(present);
+        final values = keys
+            .map((key) {
+              AppLog.instance.trace(
+                "lib/api/xmly_client.dart::XmlyClient._albumMetadata.closure#1",
+              );
+              return source[key];
+            })
+            .where(present);
         if (values.isEmpty) continue;
         for (final key in keys) result[key] = values.first;
         break;
@@ -841,6 +1067,10 @@ class XmlyClient {
     int pageSize,
     bool ascending,
   ) {
+    AppLog.instance.trace(
+      "lib/api/xmly_client.dart::XmlyClient._mergeAlbumPages",
+    );
+
     final sources = [
       _albumPageData(authenticated, number, page, pageSize, ascending),
       _albumPageData(public, number, page, pageSize, ascending),
@@ -855,6 +1085,10 @@ class XmlyClient {
     final successors = <String, Set<String>>{};
     final incoming = <String, int>{};
     void before(String left, String right) {
+      AppLog.instance.trace(
+        "lib/api/xmly_client.dart::XmlyClient._mergeAlbumPages.before",
+      );
+
       if (successors[left]!.add(right)) incoming[right] = incoming[right]! + 1;
     }
 
@@ -869,8 +1103,18 @@ class XmlyClient {
         final existing = items[id];
         final order = _albumOrder(item);
         items[id] = existing == null ? item : _albumMetadata(existing, item);
-        successors.putIfAbsent(id, () => <String>{});
-        incoming.putIfAbsent(id, () => 0);
+        successors.putIfAbsent(id, () {
+          AppLog.instance.trace(
+            "lib/api/xmly_client.dart::XmlyClient._mergeAlbumPages.closure#1",
+          );
+          return <String>{};
+        });
+        incoming.putIfAbsent(id, () {
+          AppLog.instance.trace(
+            "lib/api/xmly_client.dart::XmlyClient._mergeAlbumPages.closure#2",
+          );
+          return 0;
+        });
         if (order != null) {
           if ((itemOrders.containsKey(id) && itemOrders[id] != order) ||
               (orders.containsKey(order) && orders[order] != id) ||
@@ -883,9 +1127,12 @@ class XmlyClient {
           itemOrders[id] = order;
           orders[order] = id;
           previousOrder = order;
-        } else if (_albumOrderKeys.any(
-          (key) => xmlyPositive(item[key]) != null,
-        )) {
+        } else if (_albumOrderKeys.any((key) {
+          AppLog.instance.trace(
+            "lib/api/xmly_client.dart::XmlyClient._mergeAlbumPages.closure#3",
+          );
+          return xmlyPositive(item[key]) != null;
+        })) {
           reliableOrders = false;
         }
         if (previous != null) before(previous, id);
@@ -902,7 +1149,12 @@ class XmlyClient {
           before(orders[ordinals[index - 1]]!, orders[ordinals[index]]!);
       }
     }
-    final ready = incoming.keys.where((id) => incoming[id] == 0).toSet();
+    final ready = incoming.keys.where((id) {
+      AppLog.instance.trace(
+        "lib/api/xmly_client.dart::XmlyClient._mergeAlbumPages.closure#4",
+      );
+      return incoming[id] == 0;
+    }).toSet();
     final merged = <Map<String, dynamic>>[];
     while (ready.isNotEmpty) {
       if (ready.length != 1)
@@ -935,6 +1187,10 @@ class XmlyClient {
     bool ascending, {
     bool cached = false,
   }) {
+    AppLog.instance.trace(
+      "lib/api/xmly_client.dart::XmlyClient._albumPageData",
+    );
+
     if (response['data'] is! Map)
       throw const XmlyException('invalid_catalogue', '专辑列表无效');
     final data = xmlyMap(response['data']);
@@ -993,6 +1249,10 @@ class XmlyClient {
     required bool ascending,
     bool cached = false,
   }) async {
+    AppLog.instance.trace(
+      "lib/api/xmly_client.dart::XmlyClient._readAlbumPage",
+    );
+
     final data = _albumPageData(
       response,
       number,
@@ -1083,6 +1343,8 @@ class XmlyClient {
   }
 
   Future<Quota> _activity(String name, [int? seconds]) async {
+    AppLog.instance.trace("lib/api/xmly_client.dart::XmlyClient._activity");
+
     final value = _requireAccount();
     final params = <String, String>{
       'deviceId': value.deviceId,
@@ -1101,6 +1363,10 @@ class XmlyClient {
     );
     final data = xmlyMap(result['data']);
     String decode(String field) {
+      AppLog.instance.trace(
+        "lib/api/xmly_client.dart::XmlyClient._activity.decode",
+      );
+
       try {
         if (data[field] is! String) throw const FormatException();
         final plaintext = XmlyCrypto.decrypt(
@@ -1113,8 +1379,10 @@ class XmlyClient {
         if ((DateTime.now().millisecondsSinceEpoch - stamp).abs() >= 180000)
           throw const FormatException();
         return plaintext.substring(0, divider);
-      } catch (_) {
-        throw const XmlyException('invalid_quota', '听时信息缺失或已过期');
+      } catch (error) {
+        final failure = XmlyException('invalid_quota', '听时信息缺失或已过期');
+        AppLog.instance.linkError(failure, error);
+        throw failure;
       }
     }
 
@@ -1137,8 +1405,14 @@ class XmlyClient {
     );
   }
 
-  Future<Quota> queryQuota() => _activity('config');
+  Future<Quota> queryQuota() {
+    AppLog.instance.trace("lib/api/xmly_client.dart::XmlyClient.queryQuota");
+    return _activity('config');
+  }
+
   Future<Quota> debitSeconds(int seconds) {
+    AppLog.instance.trace("lib/api/xmly_client.dart::XmlyClient.debitSeconds");
+
     if (seconds < 1 || seconds > 2147483647)
       throw const XmlyException(
         'invalid_duration',
@@ -1149,6 +1423,8 @@ class XmlyClient {
   }
 
   Future<Map<String, dynamic>> _info(String number, [Quota? reward]) async {
+    AppLog.instance.trace("lib/api/xmly_client.dart::XmlyClient._info");
+
     if (accountAvailable) {
       final params = <String, dynamic>{'device': 'android', 'trackId': number};
       if (reward != null)
@@ -1184,8 +1460,10 @@ class XmlyClient {
         if (info is String) info = jsonDecode(info);
         if (info is! Map) throw const FormatException();
         return xmlyMap(info);
-      } catch (_) {
-        throw const XmlyException('invalid_authorization', '授权声音信息无效');
+      } catch (error) {
+        final failure = XmlyException('invalid_authorization', '授权声音信息无效');
+        AppLog.instance.linkError(failure, error);
+        throw failure;
       }
     }
     return request(
@@ -1198,6 +1476,8 @@ class XmlyClient {
   }
 
   static void _matchingId(Map<String, dynamic> info, String number) {
+    AppLog.instance.trace("lib/api/xmly_client.dart::XmlyClient._matchingId");
+
     if ('${info['trackId'] ?? info['id'] ?? ''}' != number)
       throw const XmlyException(
         'id_mismatch',
@@ -1207,6 +1487,10 @@ class XmlyClient {
   }
 
   Track _withCatalogueMetadata(Track value) {
+    AppLog.instance.trace(
+      "lib/api/xmly_client.dart::XmlyClient._withCatalogueMetadata",
+    );
+
     final previous = _metadata[value.number];
     final sameAlbum =
         value.albumId.isNotEmpty && previous?.albumId == value.albumId;
@@ -1230,6 +1514,10 @@ class XmlyClient {
   /// Official sound manuscript only, never the track's promotional introduction.
   /// Public web reads must not carry this client's mobile account credentials.
   Future<String?> fetchManuscript(String trackId) async {
+    AppLog.instance.trace(
+      "lib/api/xmly_client.dart::XmlyClient.fetchManuscript",
+    );
+
     final number = xmlyIdentifier(trackId);
     final response = await request(
       'GET',
@@ -1257,6 +1545,8 @@ class XmlyClient {
   }
 
   Future<Track> track(String trackId, {bool force = false}) async {
+    AppLog.instance.trace("lib/api/xmly_client.dart::XmlyClient.track");
+
     final number = xmlyIdentifier(trackId);
     final cached = _metadata[number];
     if (!force && cached != null) return cached;
@@ -1275,6 +1565,16 @@ class XmlyClient {
     required String albumId,
     required String uid,
   }) {
+    AppLog.instance.trace("lib/api/xmly_client.dart::XmlyClient.paidAudio");
+    if (AppLog.instance.level == AppLogLevel.debug) {
+      AppLog.instance.write(
+        AppLogLevel.debug,
+        'api',
+        'XmlyClient.paidAudio parameters',
+        data: {'trackId': trackId},
+      );
+    }
+
     if (metadata['ret'] != 0)
       throw const XmlyException(
         'permission_denied',
@@ -1316,6 +1616,8 @@ class XmlyClient {
     r'^/mobile/redirect/free/play/[1-9][0-9]{0,18}(?:/[01])?$',
   );
   static Uri mediaUri(Object? value) {
+    AppLog.instance.trace("lib/api/xmly_client.dart::XmlyClient.mediaUri");
+
     if (value is! String ||
         value.length > 16384 ||
         RegExp(r'[\x00-\x1f]').hasMatch(value))
@@ -1336,22 +1638,39 @@ class XmlyClient {
         return uri.replace(scheme: 'https', port: 443);
       }
       throw const FormatException();
-    } on FormatException {
-      throw const XmlyException('invalid_media', '不受支持的音频来源', definitive: true);
+    } on FormatException catch (error) {
+      final failure = XmlyException(
+        'invalid_media',
+        '不受支持的音频来源',
+        definitive: true,
+      );
+      AppLog.instance.linkError(failure, error);
+      throw failure;
     }
   }
 
-  static String _urlKey(String number, String quality) => '$number:$quality';
+  static String _urlKey(String number, String quality) {
+    AppLog.instance.trace("lib/api/xmly_client.dart::XmlyClient._urlKey");
+    return '$number:$quality';
+  }
 
   /// Attach only after a credential transaction commits. Failed candidates must
   /// never load, write or revoke another mounted client's namespace.
   void attachUrlCache(String directory) {
+    AppLog.instance.trace(
+      "lib/api/xmly_client.dart::XmlyClient.attachUrlCache",
+    );
+
     if (_closed || _expired || _urlCachePath != null) return;
     _urlCachePath = p.join(
       p.normalize(p.absolute(directory)),
       'urls.$cacheIdentity',
     );
     _urlCacheReady = _queueUrlCache(() async {
+      AppLog.instance.trace(
+        "lib/api/xmly_client.dart::XmlyClient.attachUrlCache.closure#1",
+      );
+
       try {
         await _loadUrlCache();
       } finally {
@@ -1361,16 +1680,36 @@ class XmlyClient {
     });
     if (_discardUrlCacheLoad || _urlLoadInvalidations.isNotEmpty) {
       _saveUrlCache(revoke: true);
-    } else if (_urls.values.any((entry) => entry.verified)) {
+    } else if (_urls.values.any((entry) {
+      AppLog.instance.trace(
+        "lib/api/xmly_client.dart::XmlyClient.attachUrlCache.closure#2",
+      );
+      return entry.verified;
+    })) {
       _saveUrlCache();
     }
   }
 
   Future<void> _queueUrlCache(Future<void> Function() operation) {
+    AppLog.instance.trace(
+      "lib/api/xmly_client.dart::XmlyClient._queueUrlCache",
+    );
+
     return _urlCacheWork = _urlCacheWork.then((_) async {
+      AppLog.instance.trace(
+        "lib/api/xmly_client.dart::XmlyClient._queueUrlCache.closure#1",
+      );
+
       try {
         await operation();
-      } catch (_) {
+      } catch (error, stack) {
+        AppLog.instance.write(
+          AppLogLevel.warning,
+          'url_cache',
+          'URL cache operation failed',
+          error: error,
+          stackTrace: stack,
+        );
         // Signed URLs are regenerable. Cache I/O must not damage app state or
         // turn an authorized download into a failed payment/playback operation.
       }
@@ -1378,17 +1717,27 @@ class XmlyClient {
   }
 
   /// Await pending local reads/writes before handing off a namespace or its lock.
-  Future<void> flushUrlCache() => _urlCacheWork;
+  Future<void> flushUrlCache() {
+    AppLog.instance.trace("lib/api/xmly_client.dart::XmlyClient.flushUrlCache");
+    return _urlCacheWork;
+  }
 
   /// Explicit revocation, unlike close(). Safe to await after closing the client.
   Future<void> clearUrlCache() {
+    AppLog.instance.trace("lib/api/xmly_client.dart::XmlyClient.clearUrlCache");
+
     _invalidateUrls(null);
     return flushUrlCache();
   }
 
-  File _urlCacheFile(int slot) => File('$_urlCachePath.$slot.json');
+  File _urlCacheFile(int slot) {
+    AppLog.instance.trace("lib/api/xmly_client.dart::XmlyClient._urlCacheFile");
+    return File('$_urlCachePath.$slot.json');
+  }
 
   Future<void> _loadUrlCache() async {
+    AppLog.instance.trace("lib/api/xmly_client.dart::XmlyClient._loadUrlCache");
+
     Map<String, _CachedAudioUrl>? latest;
     var revision = 0;
     final now = DateTime.now();
@@ -1461,7 +1810,14 @@ class XmlyClient {
           latest = entries;
           revision = value['revision'] as int;
         }
-      } catch (_) {
+      } catch (error, stack) {
+        AppLog.instance.write(
+          AppLogLevel.warning,
+          'url_cache',
+          'URL cache slot unavailable',
+          error: error,
+          stackTrace: stack,
+        );
         /* Ignore either corrupt/unreadable slot independently. */
       }
     }
@@ -1471,7 +1827,12 @@ class XmlyClient {
       // Track/lease invalidations issued while this read was pending win over
       // disk. Unrelated tracks survive a concurrent force refresh.
       if (!_urlLoadInvalidations.contains(entry.key))
-        _urls.putIfAbsent(entry.key, () => entry.value);
+        _urls.putIfAbsent(entry.key, () {
+          AppLog.instance.trace(
+            "lib/api/xmly_client.dart::XmlyClient._loadUrlCache.closure#1",
+          );
+          return entry.value;
+        });
     }
     while (_urls.length > 512) {
       _urls.remove(_urls.keys.first);
@@ -1479,9 +1840,15 @@ class XmlyClient {
   }
 
   void _saveUrlCache({bool revoke = false}) {
+    AppLog.instance.trace("lib/api/xmly_client.dart::XmlyClient._saveUrlCache");
+
     if (_urlCachePath == null) return;
     unawaited(
       _queueUrlCache(() async {
+        AppLog.instance.trace(
+          "lib/api/xmly_client.dart::XmlyClient._saveUrlCache.closure#1",
+        );
+
         var removed = true;
         if (revoke) {
           // Both generations must lose revoked leases; otherwise a corrupt newest
@@ -1493,20 +1860,41 @@ class XmlyClient {
             ]) {
               try {
                 if (await file.exists()) await file.delete();
-              } catch (_) {
+              } catch (error, stack) {
+                AppLog.instance.write(
+                  AppLogLevel.warning,
+                  'url_cache',
+                  'URL cache cleanup failed',
+                  error: error,
+                  stackTrace: stack,
+                );
                 removed = false;
               }
             }
           }
         }
-        if (revoke && removed && _urls.values.every((entry) => !entry.verified))
+        if (revoke &&
+            removed &&
+            _urls.values.every((entry) {
+              AppLog.instance.trace(
+                "lib/api/xmly_client.dart::XmlyClient._saveUrlCache.closure#1.closure#1",
+              );
+              return !entry.verified;
+            }))
           return;
         // On failed deletion, empty/clean generations are also best-effort
         // tombstones. Nothing here is an entitlement or part of the usage ledger.
         for (var count = 0; count < (revoke ? 2 : 1); count++) {
           try {
             await _writeUrlCache();
-          } catch (_) {
+          } catch (error, stack) {
+            AppLog.instance.write(
+              AppLogLevel.warning,
+              'url_cache',
+              'URL cache write failed',
+              error: error,
+              stackTrace: stack,
+            );
             /* Keep the last readable slot. */
           }
         }
@@ -1515,6 +1903,10 @@ class XmlyClient {
   }
 
   Future<void> _writeUrlCache() async {
+    AppLog.instance.trace(
+      "lib/api/xmly_client.dart::XmlyClient._writeUrlCache",
+    );
+
     final revision = _urlCacheRevision + 1;
     final now = DateTime.now();
     final bytes = utf8.encode(
@@ -1552,6 +1944,8 @@ class XmlyClient {
   }
 
   static DateTime? _urlDeadline(Uri uri, [DateTime? deadline]) {
+    AppLog.instance.trace("lib/api/xmly_client.dart::XmlyClient._urlDeadline");
+
     for (final entry in uri.queryParametersAll.entries) {
       if (![
         'expires',
@@ -1583,73 +1977,115 @@ class XmlyClient {
     String? quality,
     int mediaAuthRetries = 3,
     bool Function()? isActive,
-  }) => _resolveLock.synchronized(() async {
-    if (mediaAuthRetries < 0 || mediaAuthRetries > 3)
-      throw const XmlyException('invalid_retry', '音频授权重试次数无效');
-    for (var attempt = 0; ; attempt++) {
-      if (isActive != null && !isActive())
-        throw const XmlyException('cache_source_changed', '音频来源已变化');
-      try {
-        return await _resolveOnce(
-          trackId,
-          force: force || attempt > 0,
-          preferCached: preferCached && attempt == 0,
-          quality: quality,
-        );
-      } on XmlyException catch (error) {
-        if (error.code != 'media_unauthorized' || attempt >= mediaAuthRetries)
-          rethrow;
-      }
+  }) {
+    AppLog.instance.trace("lib/api/xmly_client.dart::XmlyClient.resolve");
+    if (AppLog.instance.level == AppLogLevel.debug) {
+      AppLog.instance.write(
+        AppLogLevel.debug,
+        'api',
+        'XmlyClient.resolve parameters',
+        data: {
+          'trackId': trackId,
+          'quality': quality ?? this.quality,
+          'force': force,
+          'preferCached': preferCached,
+        },
+      );
     }
-  });
+    return AppLog.instance.runWithErrorScope(() {
+      AppLog.instance.trace(
+        "lib/api/xmly_client.dart::XmlyClient.resolve.closure#1",
+      );
+      return _resolveLock.synchronized(() async {
+        AppLog.instance.trace(
+          "lib/api/xmly_client.dart::XmlyClient.resolve.closure#1.closure#1",
+        );
+
+        if (mediaAuthRetries < 0 || mediaAuthRetries > 3)
+          throw const XmlyException('invalid_retry', '音频授权重试次数无效');
+        for (var attempt = 0; ; attempt++) {
+          if (isActive != null && !isActive())
+            throw const XmlyException('cache_source_changed', '音频来源已变化');
+          try {
+            return await _resolveOnce(
+              trackId,
+              force: force || attempt > 0,
+              preferCached: preferCached && attempt == 0,
+              quality: quality,
+            );
+          } on XmlyException catch (error) {
+            if (error.code != 'media_unauthorized' ||
+                attempt >= mediaAuthRetries)
+              rethrow;
+          }
+        }
+      });
+    });
+  }
 
   /// Only for a task with a matching, confirmed, non-historical debit receipt.
   /// Reuses an already verified lease; never obtains a new authorization.
-  Future<ResolvedAudio?> cachedPrepaidAudio(
-    String trackId, {
-    String? quality,
-  }) => _resolveLock.synchronized(() async {
-    final requestedQuality = quality ?? this.quality;
-    if (requestedQuality != 'auto' && !_qualities.contains(requestedQuality)) {
-      throw const XmlyException('invalid_quality', '音质设置无效', definitive: true);
-    }
-    final number = xmlyIdentifier(trackId);
-    final epoch = _urlEpoch;
-    await _urlCacheReady;
-    if (_closed || !accountAvailable || epoch != _urlEpoch) return null;
-    for (final candidateQuality
-        in requestedQuality == 'auto' ? _qualities : [requestedQuality]) {
-      final key = _urlKey(number, candidateQuality);
-      final entry = _urls[key];
-      if (entry == null ||
-          !entry.verified ||
-          entry.authorizedTrack == null ||
-          entry.requiresReward != true ||
-          (entry.deadline != null &&
-              !entry.deadline!.isAfter(DateTime.now()))) {
-        continue;
-      }
-      final track = entry.authorizedTrack!;
-      final ResolvedAudio audio;
-      try {
-        audio = await _resolvedAudio(entry, track, true);
-      } on XmlyException catch (error) {
-        if (error.code == 'media_unauthorized') return null;
-        rethrow;
-      }
-      if (_closed ||
-          !accountAvailable ||
-          epoch != _urlEpoch ||
-          !identical(_urls[key], entry) ||
-          (entry.deadline != null &&
-              !entry.deadline!.isAfter(DateTime.now()))) {
+  Future<ResolvedAudio?> cachedPrepaidAudio(String trackId, {String? quality}) {
+    AppLog.instance.trace(
+      "lib/api/xmly_client.dart::XmlyClient.cachedPrepaidAudio",
+    );
+    return AppLog.instance.runWithErrorScope(() {
+      AppLog.instance.trace(
+        "lib/api/xmly_client.dart::XmlyClient.cachedPrepaidAudio.closure#1",
+      );
+      return _resolveLock.synchronized(() async {
+        AppLog.instance.trace(
+          "lib/api/xmly_client.dart::XmlyClient.cachedPrepaidAudio.closure#1.closure#1",
+        );
+
+        final requestedQuality = quality ?? this.quality;
+        if (requestedQuality != 'auto' &&
+            !_qualities.contains(requestedQuality)) {
+          throw const XmlyException(
+            'invalid_quality',
+            '音质设置无效',
+            definitive: true,
+          );
+        }
+        final number = xmlyIdentifier(trackId);
+        final epoch = _urlEpoch;
+        await _urlCacheReady;
+        if (_closed || !accountAvailable || epoch != _urlEpoch) return null;
+        for (final candidateQuality
+            in requestedQuality == 'auto' ? _qualities : [requestedQuality]) {
+          final key = _urlKey(number, candidateQuality);
+          final entry = _urls[key];
+          if (entry == null ||
+              !entry.verified ||
+              entry.authorizedTrack == null ||
+              entry.requiresReward != true ||
+              (entry.deadline != null &&
+                  !entry.deadline!.isAfter(DateTime.now()))) {
+            continue;
+          }
+          final track = entry.authorizedTrack!;
+          final ResolvedAudio audio;
+          try {
+            audio = await _resolvedAudio(entry, track, true);
+          } on XmlyException catch (error) {
+            if (error.code == 'media_unauthorized') return null;
+            rethrow;
+          }
+          if (_closed ||
+              !accountAvailable ||
+              epoch != _urlEpoch ||
+              !identical(_urls[key], entry) ||
+              (entry.deadline != null &&
+                  !entry.deadline!.isAfter(DateTime.now()))) {
+            return null;
+          }
+          _remember(track);
+          return audio;
+        }
         return null;
-      }
-      _remember(track);
-      return audio;
-    }
-    return null;
-  });
+      });
+    });
+  }
 
   Future<ResolvedAudio> _resolveOnce(
     String trackId, {
@@ -1657,6 +2093,8 @@ class XmlyClient {
     required bool preferCached,
     String? quality,
   }) async {
+    AppLog.instance.trace("lib/api/xmly_client.dart::XmlyClient._resolveOnce");
+
     if (_closed)
       throw const XmlyException('client_closed', '连接已关闭', definitive: true);
     final requestedQuality = quality ?? this.quality;
@@ -1746,6 +2184,10 @@ class XmlyClient {
     final track = _withCatalogueMetadata(Track.fromApi(info));
     final candidates = <String, Uri>{};
     void add(String type, Object? value, {bool encrypted = false}) {
+      AppLog.instance.trace(
+        "lib/api/xmly_client.dart::XmlyClient._resolveOnce.add",
+      );
+
       if (value is! String || value.isEmpty || candidates.containsKey(type))
         return;
       final decoded =
@@ -1764,8 +2206,10 @@ class XmlyClient {
       if (urls is String) {
         try {
           urls = jsonDecode(urls);
-        } catch (_) {
-          throw const XmlyException('invalid_media', '音频列表格式无效');
+        } catch (error) {
+          final failure = XmlyException('invalid_media', '音频列表格式无效');
+          AppLog.instance.linkError(failure, error);
+          throw failure;
         }
       }
       if (urls != null && urls is! List)
@@ -1845,221 +2289,284 @@ class XmlyClient {
     _CachedAudioUrl entry,
     Track track,
     bool requiresReward,
-  ) async {
-    final key = _urlKey(entry.number, entry.quality);
-    final audio = ResolvedAudio(
-      uri: entry.uri,
-      expiresAt: entry.deadline,
-      requiresReward: requiresReward,
-      track: track,
-      actualQuality: entry.quality,
-      accountIdentity: identity,
-      cacheFinalUri: (finalUri) {
-        final validated = mediaUri(finalUri.toString());
-        final deadline = _urlDeadline(validated, entry.deadline);
-        if (!_closed && !_expired && identical(_urls[key], entry)) {
-          if (deadline != null && !deadline.isAfter(DateTime.now())) {
-            _invalidateLease(key, entry);
-          } else if (!entry.verified ||
-              entry.uri != validated ||
-              entry.deadline != deadline) {
-            entry.uri = validated;
-            entry.deadline = deadline;
-            entry.verified = true;
-            _saveUrlCache();
-          }
-        }
-        return deadline;
-      },
-      invalidateCachedUri: () {
-        _invalidateLease(key, entry);
-      },
+  ) {
+    AppLog.instance.trace(
+      "lib/api/xmly_client.dart::XmlyClient._resolvedAudio",
     );
-    final host = audio.uri.host.toLowerCase();
-    if (!host.startsWith('audiopay') || !host.endsWith('.xmcdn.com'))
-      return audio;
-    final policy = Zone.current[_readPolicyKey] as _ReadPolicy?;
-    await _checkRead(policy);
-    var uri = audio.uri;
-    final epoch = _urlEpoch;
-    var redirects = 0, rateRetries = 0;
-    while (true) {
-      final cancel = CancelToken();
-      final diagnostic = RequestDiagnostic(
-        account: identity,
-        method: 'GET',
-        url: uri.toString(),
+    return AppLog.instance.runWithErrorScope(() async {
+      AppLog.instance.trace(
+        "lib/api/xmly_client.dart::XmlyClient._resolvedAudio.closure#1",
       );
-      try {
-        final next = await _readAttempt(
-          Future.any<Uri?>([
-            (() async {
-              uri = mediaUri(uri.toString());
-              final options = Options(
-                method: 'GET',
-                headers: const {
-                  'User-Agent': 'XMPlus/1.0',
-                  'Accept': 'audio/*, application/octet-stream',
-                  'Accept-Encoding': 'identity',
-                  'Range': 'bytes=0-11',
-                },
-                responseType: ResponseType.stream,
-                followRedirects: false,
-                maxRedirects: 0,
-                validateStatus: (_) => true,
-                receiveTimeout: const Duration(seconds: 10),
-                sendTimeout: const Duration(seconds: 10),
-              ).compose(_dio.options, uri.toString(), cancelToken: cancel);
-              // Never reuse API cookies, tickets, or caller-supplied media headers.
-              diagnostic.requestHeaders = options.headers;
-              final response = await _dio.fetch<ResponseBody>(options);
-              final status = response.statusCode ?? 0;
-              diagnostic.status = status;
-              diagnostic.responseHeaders = response.headers.map;
-              diagnostic.completeness = '仅探测音频前缀，未下载完整响应体';
-              if ([301, 302, 303, 307, 308].contains(status)) {
-                final location = response.headers.value('location');
-                if (location == null || location.isEmpty || redirects >= 5)
-                  throw const XmlyException('invalid_media', '音频重定向过多或无效');
-                try {
-                  return mediaUri(uri.resolve(location).toString());
-                } on FormatException {
-                  throw const XmlyException('invalid_media', '音频重定向地址无效');
-                }
-              }
-              final bytes = BytesBuilder(copy: false);
-              diagnostic.responseBytes = bytes.toBytes;
-              final successful = status == 200 || status == 206;
-              final limit = successful ? 12 : 4096;
-              final body = response.data;
-              if (body != null) {
-                await for (final chunk in body.stream) {
-                  final count = min(chunk.length, limit - bytes.length);
-                  if (count > 0)
-                    bytes.add(Uint8List.sublistView(chunk, 0, count));
-                  if (bytes.length == limit) break;
-                }
-              }
-              if (status == 429) {
-                _rateLimit(
-                  uri.origin,
-                  _retryAfter(response.headers.value('retry-after')),
-                );
-              }
-              if (!successful)
-                throw XmlyException(
-                  status == 401 || status == 403
-                      ? 'media_unauthorized'
-                      : 'media_http',
-                  status == 401 || status == 403
-                      ? '音频授权已失效，请重新获取'
-                      : '音频请求返回 HTTP $status',
-                );
-              final type = (response.headers.value('content-type') ?? '')
-                  .split(';')
-                  .first
-                  .trim()
-                  .toLowerCase();
-              if (!(type.startsWith('audio/') ||
-                  type.startsWith('video/') ||
-                  type == 'application/octet-stream' ||
-                  type == 'binary/octet-stream' ||
-                  type == 'application/ogg' ||
-                  type.isEmpty))
-                throw const XmlyException('invalid_media', '响应不是音频，未缓存错误页面');
-              final prefix = bytes.takeBytes();
-              diagnostic.responseBytes = () => prefix;
-              bool text(int offset, String value) {
-                if (prefix.length < offset + value.length) return false;
-                for (var i = 0; i < value.length; i++) {
-                  if (prefix[offset + i] != value.codeUnitAt(i)) return false;
-                }
-                return true;
-              }
 
-              if (!(text(0, 'ID3') ||
-                  text(0, 'fLaC') ||
-                  text(0, 'OggS') ||
-                  (text(0, 'RIFF') && text(8, 'WAVE')) ||
-                  text(4, 'ftyp') ||
-                  (prefix.length >= 4 &&
-                      prefix[0] == 0xff &&
-                      (((prefix[1] & 0xe0) == 0xe0 &&
-                              (prefix[1] & 0x06) != 0 &&
-                              (prefix[2] & 0xf0) != 0xf0 &&
-                              (prefix[2] & 0xf0) != 0 &&
-                              (prefix[2] & 0x0c) != 0x0c) ||
-                          ((prefix[1] & 0xf6) == 0xf0 &&
-                              (prefix[2] & 0x3c) != 0x3c)))))
-                throw const XmlyException(
-                  'invalid_media',
-                  '响应不是可识别的音频，未缓存错误页面',
-                );
-              if (status == 206 &&
-                  !RegExp(r'^bytes 0-[0-9]+/(?:[0-9]+|\*)$')
-                      .hasMatch(response.headers.value('content-range') ?? ''))
-                throw const XmlyException('invalid_media', '音频范围响应无效');
-              return null;
-            })(),
-            _closeSignal.future.then<Uri?>((_) {
-              throw const XmlyException(
-                'client_closed',
-                '连接已关闭',
-                definitive: true,
-              );
-            }),
-          ]),
-          cancel,
-          policy,
-        ).timeout(const Duration(seconds: 25));
-        if (_closed)
-          throw const XmlyException('client_closed', '连接已关闭', definitive: true);
-        if (_expired || epoch != _urlEpoch || !identical(_urls[key], entry))
-          throw const XmlyException('cache_source_changed', '音频来源已变化，请重新获取');
-        if (next != null) {
-          redirects++;
-          uri = next;
-          continue;
-        }
-        audio.rememberFinalUri(uri);
+      final key = _urlKey(entry.number, entry.quality);
+      final audio = ResolvedAudio(
+        uri: entry.uri,
+        expiresAt: entry.deadline,
+        requiresReward: requiresReward,
+        track: track,
+        actualQuality: entry.quality,
+        accountIdentity: identity,
+        cacheFinalUri: (finalUri) {
+          AppLog.instance.trace(
+            "lib/api/xmly_client.dart::XmlyClient._resolvedAudio.closure#1.closure#1",
+          );
+
+          final validated = mediaUri(finalUri.toString());
+          final deadline = _urlDeadline(validated, entry.deadline);
+          if (!_closed && !_expired && identical(_urls[key], entry)) {
+            if (deadline != null && !deadline.isAfter(DateTime.now())) {
+              _invalidateLease(key, entry);
+            } else if (!entry.verified ||
+                entry.uri != validated ||
+                entry.deadline != deadline) {
+              entry.uri = validated;
+              entry.deadline = deadline;
+              entry.verified = true;
+              _saveUrlCache();
+            }
+          }
+          return deadline;
+        },
+        invalidateCachedUri: () {
+          AppLog.instance.trace(
+            "lib/api/xmly_client.dart::XmlyClient._resolvedAudio.closure#1.closure#2",
+          );
+
+          _invalidateLease(key, entry);
+        },
+      );
+      final host = audio.uri.host.toLowerCase();
+      if (!host.startsWith('audiopay') || !host.endsWith('.xmcdn.com'))
         return audio;
-      } catch (error) {
-        cancel.cancel();
-        if (error is XmlyException &&
-            error.code == 'media_unauthorized' &&
-            identical(_urls[key], entry)) {
-          // A rejected track authorization cannot fall back to a cached
-          // sibling quality. Revoke even if the caller stopped the probe.
-          _invalidateUrls(entry.number);
-        }
-        if (_closed || policy?.stopped == true) {
-          // A cancelled read must not wait for the diagnostic disk queue before
-          // releasing its caller. Preserve the failure record independently.
-          unawaited(diagnostic.fail(error));
+      final policy = Zone.current[_readPolicyKey] as _ReadPolicy?;
+      await _checkRead(policy);
+      var uri = audio.uri;
+      final epoch = _urlEpoch;
+      var redirects = 0, rateRetries = 0;
+      while (true) {
+        final cancel = CancelToken();
+        final diagnostic = HttpLogAttempt(
+          account: identity,
+          method: 'GET',
+          url: uri.toString(),
+        );
+        try {
+          final next = await _readAttempt(
+            Future.any<Uri?>([
+              (() async {
+                AppLog.instance.trace(
+                  "lib/api/xmly_client.dart::XmlyClient._resolvedAudio.closure#1.closure#3",
+                );
+
+                uri = mediaUri(uri.toString());
+                final options = Options(
+                  method: 'GET',
+                  headers: const {
+                    'User-Agent': 'XMPlus/1.0',
+                    'Accept': 'audio/*, application/octet-stream',
+                    'Accept-Encoding': 'identity',
+                    'Range': 'bytes=0-11',
+                  },
+                  responseType: ResponseType.stream,
+                  followRedirects: false,
+                  maxRedirects: 0,
+                  validateStatus: (_) {
+                    AppLog.instance.trace(
+                      "lib/api/xmly_client.dart::XmlyClient._resolvedAudio.closure#1.closure#3.closure#1",
+                    );
+                    return true;
+                  },
+                  receiveTimeout: const Duration(seconds: 10),
+                  sendTimeout: const Duration(seconds: 10),
+                ).compose(_dio.options, uri.toString(), cancelToken: cancel);
+                // Never reuse API cookies, tickets, or caller-supplied media headers.
+                diagnostic.requestHeaders = options.headers;
+                diagnostic.started();
+                final response = await _dio.fetch<ResponseBody>(options);
+                final status = response.statusCode ?? 0;
+                diagnostic.status = status;
+                diagnostic.responseHeaders = response.headers.map;
+                diagnostic.completeness = '仅探测音频前缀，未下载完整响应体';
+                diagnostic.responseIsBinary = true;
+                diagnostic.responseByteCount = 0;
+                if ([301, 302, 303, 307, 308].contains(status)) {
+                  final location = response.headers.value('location');
+                  if (location == null || location.isEmpty || redirects >= 5)
+                    throw const XmlyException('invalid_media', '音频重定向过多或无效');
+                  try {
+                    final next = mediaUri(uri.resolve(location).toString());
+                    diagnostic.succeeded();
+                    return next;
+                  } on FormatException catch (error, stack) {
+                    await diagnostic.fail(error, stack);
+                    final failure = XmlyException('invalid_media', '音频重定向地址无效');
+                    AppLog.instance.linkError(failure, error);
+                    throw failure;
+                  }
+                }
+                final bytes = BytesBuilder(copy: false);
+                diagnostic.responseBytes = bytes.toBytes;
+                final successful = status == 200 || status == 206;
+                final limit = successful ? 12 : 4096;
+                final body = response.data;
+                if (body != null) {
+                  await for (final chunk in body.stream) {
+                    final count = min(chunk.length, limit - bytes.length);
+                    if (count > 0)
+                      bytes.add(Uint8List.sublistView(chunk, 0, count));
+                    if (bytes.length == limit) break;
+                  }
+                }
+                if (status == 429) {
+                  _rateLimit(
+                    uri.origin,
+                    _retryAfter(response.headers.value('retry-after')),
+                  );
+                }
+                if (!successful)
+                  throw XmlyException(
+                    status == 401 || status == 403
+                        ? 'media_unauthorized'
+                        : 'media_http',
+                    status == 401 || status == 403
+                        ? '音频授权已失效，请重新获取'
+                        : '音频请求返回 HTTP $status',
+                  );
+                final type = (response.headers.value('content-type') ?? '')
+                    .split(';')
+                    .first
+                    .trim()
+                    .toLowerCase();
+                if (!(type.startsWith('audio/') ||
+                    type.startsWith('video/') ||
+                    type == 'application/octet-stream' ||
+                    type == 'binary/octet-stream' ||
+                    type == 'application/ogg' ||
+                    type.isEmpty))
+                  throw const XmlyException('invalid_media', '响应不是音频，未缓存错误页面');
+                final prefix = bytes.takeBytes();
+                diagnostic.responseBytes = () {
+                  AppLog.instance.trace(
+                    "lib/api/xmly_client.dart::XmlyClient._resolvedAudio.closure#1.closure#3.closure#2",
+                  );
+                  return prefix;
+                };
+                diagnostic.responseByteCount = prefix.length;
+                bool text(int offset, String value) {
+                  AppLog.instance.trace(
+                    "lib/api/xmly_client.dart::XmlyClient._resolvedAudio.closure#1.closure#3.text",
+                  );
+
+                  if (prefix.length < offset + value.length) return false;
+                  for (var i = 0; i < value.length; i++) {
+                    if (prefix[offset + i] != value.codeUnitAt(i)) return false;
+                  }
+                  return true;
+                }
+
+                if (!(text(0, 'ID3') ||
+                    text(0, 'fLaC') ||
+                    text(0, 'OggS') ||
+                    (text(0, 'RIFF') && text(8, 'WAVE')) ||
+                    text(4, 'ftyp') ||
+                    (prefix.length >= 4 &&
+                        prefix[0] == 0xff &&
+                        (((prefix[1] & 0xe0) == 0xe0 &&
+                                (prefix[1] & 0x06) != 0 &&
+                                (prefix[2] & 0xf0) != 0xf0 &&
+                                (prefix[2] & 0xf0) != 0 &&
+                                (prefix[2] & 0x0c) != 0x0c) ||
+                            ((prefix[1] & 0xf6) == 0xf0 &&
+                                (prefix[2] & 0x3c) != 0x3c)))))
+                  throw const XmlyException(
+                    'invalid_media',
+                    '响应不是可识别的音频，未缓存错误页面',
+                  );
+                if (status == 206 &&
+                    !RegExp(
+                      r'^bytes 0-[0-9]+/(?:[0-9]+|\*)$',
+                    ).hasMatch(response.headers.value('content-range') ?? ''))
+                  throw const XmlyException('invalid_media', '音频范围响应无效');
+                diagnostic.succeeded();
+                return null;
+              })(),
+              _closeSignal.future.then<Uri?>((_) {
+                AppLog.instance.trace(
+                  "lib/api/xmly_client.dart::XmlyClient._resolvedAudio.closure#1.closure#4",
+                );
+
+                throw const XmlyException(
+                  'client_closed',
+                  '连接已关闭',
+                  definitive: true,
+                );
+              }),
+            ]),
+            cancel,
+            policy,
+          ).timeout(const Duration(seconds: 25));
+          if (_closed)
+            throw const XmlyException(
+              'client_closed',
+              '连接已关闭',
+              definitive: true,
+            );
+          if (_expired || epoch != _urlEpoch || !identical(_urls[key], entry))
+            throw const XmlyException('cache_source_changed', '音频来源已变化，请重新获取');
+          if (next != null) {
+            redirects++;
+            uri = next;
+            continue;
+          }
+          audio.rememberFinalUri(uri);
+          return audio;
+        } catch (error, stack) {
+          cancel.cancel();
+          if (error is XmlyException &&
+              error.code == 'media_unauthorized' &&
+              identical(_urls[key], entry)) {
+            // A rejected track authorization cannot fall back to a cached
+            // sibling quality. Revoke even if the caller stopped the probe.
+            _invalidateUrls(entry.number);
+          }
+          if (_closed || policy?.stopped == true) {
+            diagnostic.cancelled(error);
+            await _checkRead(policy);
+          }
+          if (error is XmlyException && error.code == 'rate_limited') {
+            await diagnostic.fail(error, stack, promptUser: false);
+            if (rateRetries++ >= (policy?.rateLimitRetries ?? 4)) rethrow;
+            final server = error.retryAfter ?? Duration.zero;
+            final minimum = policy?.minimumRateLimitDelay ?? Duration.zero;
+            await _retryWait(server > minimum ? server : minimum, policy);
+            continue;
+          }
+          _invalidateLease(key, entry);
+          if (error is! XmlyException) diagnostic.transportError = '$error';
+          await diagnostic.fail(
+            error,
+            stack,
+            promptUser:
+                !(error is XmlyException && error.code == 'media_unauthorized'),
+          );
           await _checkRead(policy);
+          if (error is XmlyException) rethrow;
+          final failure = XmlyException('network', '音频地址请求失败或超时');
+          AppLog.instance.linkError(failure, error);
+          throw failure;
+        } finally {
+          // Dio's stream wrapper must also cancel its underlying HTTP response.
+          cancel.cancel();
         }
-        if (error is XmlyException && error.code == 'rate_limited') {
-          await diagnostic.fail(error);
-          if (rateRetries++ >= (policy?.rateLimitRetries ?? 4)) rethrow;
-          final server = error.retryAfter ?? Duration.zero;
-          final minimum = policy?.minimumRateLimitDelay ?? Duration.zero;
-          await _retryWait(server > minimum ? server : minimum, policy);
-          continue;
-        }
-        _invalidateLease(key, entry);
-        if (error is! XmlyException) diagnostic.transportError = '$error';
-        await diagnostic.fail(error);
-        await _checkRead(policy);
-        if (error is XmlyException) rethrow;
-        throw const XmlyException('network', '音频地址请求失败或超时');
-      } finally {
-        // Dio's stream wrapper must also cancel its underlying HTTP response.
-        cancel.cancel();
       }
-    }
+    });
   }
 
   void _invalidateLease(String key, _CachedAudioUrl entry) {
+    AppLog.instance.trace(
+      "lib/api/xmly_client.dart::XmlyClient._invalidateLease",
+    );
+
     if (_closed || !identical(_urls[key], entry)) return;
     _urlEpoch++;
     _urls.remove(key);
@@ -2068,17 +2575,23 @@ class XmlyClient {
   }
 
   void _invalidateUrls(String? number, {String? quality}) {
+    AppLog.instance.trace(
+      "lib/api/xmly_client.dart::XmlyClient._invalidateUrls",
+    );
+
     _urlEpoch++;
     if (number == null) {
       _urls.clear();
       _discardUrlCacheLoad = true;
       _urlLoadInvalidations.clear();
     } else {
-      _urls.removeWhere(
-        (_, entry) =>
-            entry.number == number &&
-            (quality == null || entry.quality == quality),
-      );
+      _urls.removeWhere((_, entry) {
+        AppLog.instance.trace(
+          "lib/api/xmly_client.dart::XmlyClient._invalidateUrls.closure#1",
+        );
+        return entry.number == number &&
+            (quality == null || entry.quality == quality);
+      });
       if (!_urlCacheLoaded) {
         for (final candidate in quality == null ? _qualities : [quality]) {
           _urlLoadInvalidations.add(_urlKey(number, candidate));
@@ -2089,6 +2602,8 @@ class XmlyClient {
   }
 
   void invalidate([String? trackId]) {
+    AppLog.instance.trace("lib/api/xmly_client.dart::XmlyClient.invalidate");
+
     if (_closed) return;
     _invalidateUrls(
       trackId == null || trackId.isEmpty ? null : xmlyIdentifier(trackId),
@@ -2096,6 +2611,8 @@ class XmlyClient {
   }
 
   void close() {
+    AppLog.instance.trace("lib/api/xmly_client.dart::XmlyClient.close");
+
     if (_closed) return;
     _closed = true;
     if (!_closeSignal.isCompleted) _closeSignal.complete();
@@ -2115,7 +2632,13 @@ class _ReadPolicy {
     Future<void>? cancelled,
     this.checkpoint,
   ) {
+    AppLog.instance.trace("lib/api/xmly_client.dart::_ReadPolicy.new");
+
     this.cancelled = cancelled?.then((_) {
+      AppLog.instance.trace(
+        "lib/api/xmly_client.dart::_ReadPolicy.new.closure#1",
+      );
+
       stopped = true;
     });
   }
@@ -2146,7 +2669,9 @@ class _CachedAudioUrl {
     this.verified = false,
     this.authorizedTrack,
     this.requiresReward,
-  });
+  }) {
+    AppLog.instance.trace("lib/api/xmly_client.dart::_CachedAudioUrl.new");
+  }
 }
 
 class _RetryableStatus implements Exception {}

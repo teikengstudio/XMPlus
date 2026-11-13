@@ -10,6 +10,7 @@ import '../api/xmly_history.dart';
 import '../models/xmly_models.dart';
 import '../storage/app_storage.dart';
 import 'account_service.dart';
+import 'app_log.dart';
 import 'audio_cache.dart';
 import 'audio_driver.dart';
 import 'close_sequence.dart';
@@ -35,6 +36,10 @@ class PlaybackSource {
     bool supportsRanges = true,
     this.cache,
   }) : _supportsRanges = supportsRanges {
+    AppLog.instance.trace(
+      "lib/services/player_service.dart::PlaybackSource.new",
+    );
+
     requireLocalAudio(uri);
     if (!const {'online', 'local', 'prepaid'}.contains(kind)) {
       throw ArgumentError('无效播放来源');
@@ -44,7 +49,13 @@ class PlaybackSource {
   final String identity, kind;
   final bool requiresReward, _supportsRanges;
   final AudioCache? cache;
-  bool get supportsRanges => cache?.supportsRanges ?? _supportsRanges;
+  bool get supportsRanges {
+    AppLog.instance.trace(
+      "lib/services/player_service.dart::PlaybackSource.supportsRanges.get",
+    );
+    return cache?.supportsRanges ?? _supportsRanges;
+  }
+
   final String? taskId;
   final Future<void> Function()? release;
 }
@@ -65,7 +76,15 @@ class PlayerService {
   }) : _driver = driver ?? MediaKitAudioDriver(),
        _clock = clock ?? DateTime.now,
        policy = PlaybackPolicy(clock: clock) {
+    AppLog.instance.trace(
+      "lib/services/player_service.dart::PlayerService.new",
+    );
+
     _driverEvents = _driver.snapshots.listen((snapshot) {
+      AppLog.instance.trace(
+        "lib/services/player_service.dart::PlayerService.new.closure#1",
+      );
+
       final seekRevision = _seekRevision;
       final recorded =
           !_closed &&
@@ -85,33 +104,73 @@ class PlayerService {
           speed: rate,
         );
       }
-      _background(
-        () => _commands.synchronized(
-          () => _observe(
+      _background(() {
+        AppLog.instance.trace(
+          "lib/services/player_service.dart::PlayerService.new.closure#1.closure#1",
+        );
+        return _commands.synchronized(() {
+          AppLog.instance.trace(
+            "lib/services/player_service.dart::PlayerService.new.closure#1.closure#1.closure#1",
+          );
+          return _observe(
             snapshot,
             seekRevision: seekRevision,
             stateAlreadyRecorded: recorded,
-          ),
-        ),
-      );
+          );
+        });
+      }, recordedFailure: snapshot.failureRecorded ? snapshot.failure : null);
     });
     _downloadEvents = downloads.changes.listen((_) {
-      _background(() => _commands.synchronized(_downloadChanged));
+      AppLog.instance.trace(
+        "lib/services/player_service.dart::PlayerService.new.closure#2",
+      );
+
+      _background(() {
+        AppLog.instance.trace(
+          "lib/services/player_service.dart::PlayerService.new.closure#2.closure#1",
+        );
+        return _commands.synchronized(_downloadChanged);
+      });
     });
     _official = OfficialProgress(
-      client: () => _historyClient,
-      readPending: (identity) =>
-          xmlyMap((storage.state['officialProgress'] as Map)[identity]),
-      savePending: (identity, pending) => storage.transaction((state) {
-        (state['officialProgress'] as Map)[identity] = pending;
-      }),
-      enabled: () => _syncHistory,
+      client: () {
+        AppLog.instance.trace(
+          "lib/services/player_service.dart::PlayerService.new.closure#3",
+        );
+        return _historyClient;
+      },
+      readPending: (identity) {
+        AppLog.instance.trace(
+          "lib/services/player_service.dart::PlayerService.new.closure#4",
+        );
+        return xmlyMap((storage.state['officialProgress'] as Map)[identity]);
+      },
+      savePending: (identity, pending) {
+        AppLog.instance.trace(
+          "lib/services/player_service.dart::PlayerService.new.closure#5",
+        );
+        return storage.transaction((state) {
+          AppLog.instance.trace(
+            "lib/services/player_service.dart::PlayerService.new.closure#5.closure#1",
+          );
+
+          (state['officialProgress'] as Map)[identity] = pending;
+        });
+      },
+      enabled: () {
+        AppLog.instance.trace(
+          "lib/services/player_service.dart::PlayerService.new.closure#6",
+        );
+        return _syncHistory;
+      },
       clock: _clock,
     );
-    _timer = Timer.periodic(
-      const Duration(seconds: 1),
-      (_) => _background(tick),
-    );
+    _timer = Timer.periodic(const Duration(seconds: 1), (_) {
+      AppLog.instance.trace(
+        "lib/services/player_service.dart::PlayerService.new.closure#7",
+      );
+      _background(tick);
+    });
   }
 
   final AppStorage storage;
@@ -132,6 +191,9 @@ class PlayerService {
   late final StreamSubscription<AudioSnapshot> _driverEvents;
   late final StreamSubscription<void> _downloadEvents;
   Timer? _timer;
+  int _sleepRevision = 0;
+  // A queued expiry blocks advancement, but cancellation can still revoke it.
+  int? _pendingSleepRevision;
   AudioProxy? _proxy;
   Future<AudioProxy>? _proxyOpening;
   PlaybackSource? _source;
@@ -142,12 +204,24 @@ class PlayerService {
   String sourceAlbumId = '';
   int? albumPage, albumTotal, albumPageSize;
   String queueSource = 'custom';
-  String get queueSourceLabel => queueSource == 'updates'
-      ? '听更新'
-      : queueSource == 'album'
-      ? '专辑 $sourceAlbumId'
-      : '自选队列';
-  String get queueOrderLabel => queueSource == 'updates' ? '倒序（由旧到新）' : '队列顺序';
+  String get queueSourceLabel {
+    AppLog.instance.trace(
+      "lib/services/player_service.dart::PlayerService.queueSourceLabel.get",
+    );
+    return queueSource == 'updates'
+        ? '听更新'
+        : queueSource == 'album'
+        ? '专辑 $sourceAlbumId'
+        : '自选队列';
+  }
+
+  String get queueOrderLabel {
+    AppLog.instance.trace(
+      "lib/services/player_service.dart::PlayerService.queueOrderLabel.get",
+    );
+    return queueSource == 'updates' ? '倒序（由旧到新）' : '队列顺序';
+  }
+
   bool playing = false, buffering = false;
   double position = 0, duration = 0, rate = 1, volume = 100;
   double? _startSeekPosition;
@@ -157,9 +231,11 @@ class PlayerService {
   int _observedAt = 0;
   String? error, status;
   String? _sourceWarning;
-  bool _closed = false, _loaded = false, _actual = false, _atEnd = false;
+  bool _closed = false, _loaded = false, _actual = false;
+  String? _completedTrackId;
   CloseSequence? _closeSteps;
-  bool _awaitingDuration = false, _manualChapterPosition = false;
+  double? _pendingDurationPosition;
+  bool _manualChapterPosition = false;
   bool _sleepStopped = false, _manualPaused = false;
   int _savedAt = 0;
   Future<void>? _tailFlight;
@@ -172,23 +248,112 @@ class PlayerService {
   int? _cloudResumeEpoch;
   int _playbackRecoveryRevision = 0;
 
-  Stream<void> get changes => _changes.stream;
-  List<Track> get queue => List.unmodifiable(_queue);
-  Track? get current =>
-      cursor >= 0 && cursor < _queue.length ? _queue[cursor] : null;
-  String get sourceKind => _source?.kind ?? '';
-  bool get loading => _loading;
+  Stream<void> get changes {
+    AppLog.instance.trace(
+      "lib/services/player_service.dart::PlayerService.changes.get",
+    );
+    return _changes.stream;
+  }
+
+  bool get _sleepStopping {
+    AppLog.instance.trace(
+      "lib/services/player_service.dart::PlayerService._sleepStopping.get",
+    );
+    return _sleepStopped || _pendingSleepRevision != null;
+  }
+
+  List<Track> get queue {
+    AppLog.instance.trace(
+      "lib/services/player_service.dart::PlayerService.queue.get",
+    );
+    return List.unmodifiable(_queue);
+  }
+
+  Track? get current {
+    AppLog.instance.trace(
+      "lib/services/player_service.dart::PlayerService.current.get",
+    );
+    return cursor >= 0 && cursor < _queue.length ? _queue[cursor] : null;
+  }
+
+  bool get _atEnd {
+    AppLog.instance.trace(
+      "lib/services/player_service.dart::PlayerService._atEnd.get",
+    );
+    return _completedTrackId != null && _completedTrackId == current?.id;
+  }
+
+  String get sourceKind {
+    AppLog.instance.trace(
+      "lib/services/player_service.dart::PlayerService.sourceKind.get",
+    );
+    return _source?.kind ?? '';
+  }
+
+  bool get loading {
+    AppLog.instance.trace(
+      "lib/services/player_service.dart::PlayerService.loading.get",
+    );
+    return _loading;
+  }
+
   // Policy warnings describe the current settings/duration. Do not retain one
   // after its condition clears or while a new source is still being prepared.
-  String? get warning =>
-      (_source != null && !_loading ? policy.warning : null) ?? _sourceWarning;
-  int get seekRevision => _seekRevision;
-  int get playbackEpoch => _epoch;
-  int get playbackRecoveryRevision => _playbackRecoveryRevision;
-  String? get currentTaskId => _source?.taskId;
-  String get libraryIdentity => accounts.activeClient?.identity ?? 'anonymous';
-  String get _progressIdentity => _source?.identity ?? libraryIdentity;
+  String? get warning {
+    AppLog.instance.trace(
+      "lib/services/player_service.dart::PlayerService.warning.get",
+    );
+    return (_source != null && !_loading ? policy.warning : null) ??
+        _sourceWarning;
+  }
+
+  int get seekRevision {
+    AppLog.instance.trace(
+      "lib/services/player_service.dart::PlayerService.seekRevision.get",
+    );
+    return _seekRevision;
+  }
+
+  int get playbackEpoch {
+    AppLog.instance.trace(
+      "lib/services/player_service.dart::PlayerService.playbackEpoch.get",
+    );
+    return _epoch;
+  }
+
+  int get playbackRecoveryRevision {
+    AppLog.instance.trace(
+      "lib/services/player_service.dart::PlayerService.playbackRecoveryRevision.get",
+    );
+    return _playbackRecoveryRevision;
+  }
+
+  String? get currentTaskId {
+    AppLog.instance.trace(
+      "lib/services/player_service.dart::PlayerService.currentTaskId.get",
+    );
+    return _source?.taskId;
+  }
+
+  String get libraryIdentity {
+    AppLog.instance.trace(
+      "lib/services/player_service.dart::PlayerService.libraryIdentity.get",
+    );
+    return accounts.activeClient?.identity ?? 'anonymous';
+  }
+
+  String get _progressIdentity {
+    AppLog.instance.trace(
+      "lib/services/player_service.dart::PlayerService._progressIdentity.get",
+    );
+    return _source?.identity ?? libraryIdentity;
+  }
+
   XmlyClient? get _historyClient {
+    AppLog.instance.trace(
+      "lib/services/player_service.dart::PlayerService._historyClient.get",
+    );
+
     final identity = _source?.identity ?? accounts.activeClient?.identity;
     if (identity == null || identity == 'anonymous') return null;
     try {
@@ -198,34 +363,168 @@ class PlayerService {
     }
   }
 
-  Map get _settings => storage.state['settings'] as Map;
-  bool get _syncHistory =>
-      (_settings['playback'] as Map?)?['syncHistory'] == true;
-  PlaybackSettings get effectiveSettings => PlaybackSettings.resolve(
-    _settings['playback'] as Map? ?? const {},
-    (_settings['albumOverrides'] as Map?)?[current?.albumId] as Map? ??
-        const {},
-  );
+  Map get _settings {
+    AppLog.instance.trace(
+      "lib/services/player_service.dart::PlayerService._settings.get",
+    );
+    return storage.state['settings'] as Map;
+  }
+
+  bool get _syncHistory {
+    AppLog.instance.trace(
+      "lib/services/player_service.dart::PlayerService._syncHistory.get",
+    );
+    return (_settings['playback'] as Map?)?['syncHistory'] == true;
+  }
+
+  PlaybackSettings get effectiveSettings {
+    AppLog.instance.trace(
+      "lib/services/player_service.dart::PlayerService.effectiveSettings.get",
+    );
+    return PlaybackSettings.resolve(
+      _settings['playback'] as Map? ?? const {},
+      (_settings['albumOverrides'] as Map?)?[current?.albumId] as Map? ??
+          const {},
+    );
+  }
 
   void _notify() {
+    AppLog.instance.trace(
+      "lib/services/player_service.dart::PlayerService._notify",
+    );
+
     if (!_changes.isClosed) _changes.add(null);
   }
 
-  void _background(Future<void> Function() action) {
+  void _setPlaying(bool value) {
+    AppLog.instance.trace(
+      "lib/services/player_service.dart::PlayerService._setPlaying",
+    );
+
+    if (playing == value) return;
+    playing = value;
+    AppLog.instance.write(
+      AppLogLevel.info,
+      'player',
+      value ? 'Playback playing' : 'Playback paused',
+      data: {'trackId': current?.id, 'epoch': _epoch},
+    );
+  }
+
+  void _command(String command, [Map<String, Object?>? parameters]) {
+    AppLog.instance.trace(
+      "lib/services/player_service.dart::PlayerService._command",
+    );
+
+    if (AppLog.instance.level != AppLogLevel.debug) return;
+    AppLog.instance.write(
+      AppLogLevel.debug,
+      'player',
+      'Playback command',
+      data: {
+        'command': command,
+        'trackId': current?.id,
+        'albumId': current?.albumId,
+        'account': libraryIdentity,
+        'taskId': currentTaskId,
+        'position': position,
+        'speed': rate,
+        'volume': volume,
+        'quality': (_settings['download'] as Map?)?['quality'],
+        'loopMode': (_settings['playback'] as Map?)?['loopMode'],
+        'autoNext': (_settings['playback'] as Map?)?['autoNext'],
+        'listenAndDownload':
+            (_settings['playback'] as Map?)?['listenAndDownload'],
+        ...?parameters,
+      },
+    );
+  }
+
+  void _background(Future<void> Function() action, {Object? recordedFailure}) {
+    AppLog.instance.trace(
+      "lib/services/player_service.dart::PlayerService._background",
+    );
+
     if (_closed) return;
     unawaited(
-      action().catchError((Object failure) async {
-        if (failure is DownloadStopped || _closed) return;
-        error = _message(failure);
-        // A failed journal or admission must never leave audio consuming time.
-        await _driver.pause();
-        playing = false;
-        _notify();
+      AppLog.instance.runWithErrorScope(() async {
+        AppLog.instance.trace(
+          "lib/services/player_service.dart::PlayerService._background.closure#1",
+        );
+
+        try {
+          await action();
+        } catch (failure, stack) {
+          if (failure is DownloadStopped || _closed) return;
+          if (!identical(failure, recordedFailure)) {
+            _recordFailure(failure, stack);
+          }
+          error = _message(failure);
+          // Recovery must not replace the fault that stopped playback.
+          try {
+            await _driver.pause();
+          } catch (pauseFailure, pauseStack) {
+            _recordFailure(pauseFailure, pauseStack);
+          }
+          _setPlaying(false);
+          _notify();
+        }
       }),
     );
   }
 
+  void _recordFailure(Object failure, StackTrace stack) {
+    AppLog.instance.trace(
+      "lib/services/player_service.dart::PlayerService._recordFailure",
+    );
+
+    final expected =
+        failure is DownloadStopped ||
+        failure is ArgumentError ||
+        failure is FormatException ||
+        failure is XmlyException &&
+            const {
+              'cancelled',
+              'download_stopped',
+              'client_closed',
+              'login_required',
+              'login_expired',
+              'confirmation_required',
+              'usage_uncertain',
+              'insufficient_quota',
+              'invalid_album',
+              'invalid_page',
+              'invalid_feed',
+              'missing_track',
+              'catalogue_limit',
+              'duplicate_page',
+              'catalogue_changed',
+              'queue_full',
+            }.contains(failure.code);
+    if (expected) return;
+    AppLog.instance.requestUploadPrompt();
+    if (AppLog.instance.errorWasRecorded(failure)) return;
+    AppLog.instance.write(
+      AppLogLevel.error,
+      'player',
+      'Playback operation failed',
+      data: {
+        'trackId': current?.id,
+        'account': libraryIdentity,
+        'taskId': currentTaskId,
+        'epoch': _epoch,
+      },
+      error: failure,
+      stackTrace: stack,
+      promptUser: true,
+    );
+  }
+
   static String _message(Object failure) {
+    AppLog.instance.trace(
+      "lib/services/player_service.dart::PlayerService._message",
+    );
+
     if (failure is XmlyException) {
       switch (failure.code) {
         case 'file_missing':
@@ -251,6 +550,10 @@ class PlayerService {
   }
 
   int _newRequest({bool keepStartPosition = false}) {
+    AppLog.instance.trace(
+      "lib/services/player_service.dart::PlayerService._newRequest",
+    );
+
     if (!keepStartPosition) _startSeekPosition = null;
     ++_advanceIntent;
     final previous = _requestChanged;
@@ -267,9 +570,17 @@ class PlayerService {
     Future<T> Function() action, {
     Future<void> Function(T)? discard,
   }) async {
+    AppLog.instance.trace(
+      "lib/services/player_service.dart::PlayerService._admission",
+    );
+
     if (request != _request) throw const DownloadStopped();
     final cancelled = _requestChanged.future;
     final result = action().then((value) async {
+      AppLog.instance.trace(
+        "lib/services/player_service.dart::PlayerService._admission.closure#1",
+      );
+
       if (request != _request) {
         await discard?.call(value);
         throw const DownloadStopped();
@@ -279,27 +590,51 @@ class PlayerService {
     // Future.any observes late errors too; a cancelled admission is not replayed.
     return Future.any([
       result,
-      cancelled.then<T>((_) => throw const DownloadStopped()),
+      cancelled.then<T>((_) {
+        AppLog.instance.trace(
+          "lib/services/player_service.dart::PlayerService._admission.closure#2",
+        );
+        return throw const DownloadStopped();
+      }),
     ]);
   }
 
-  Future<void> _run(Future<void> Function() operation) async {
-    if (_closed) throw StateError('播放器已关闭');
-    try {
-      await operation();
-    } catch (failure) {
-      if (failure is DownloadStopped) return;
-      error = _message(failure);
-      _notify();
-      rethrow;
-    }
+  Future<void> _run(Future<void> Function() operation) {
+    AppLog.instance.trace(
+      "lib/services/player_service.dart::PlayerService._run",
+    );
+    return AppLog.instance.runWithErrorScope(() async {
+      AppLog.instance.trace(
+        "lib/services/player_service.dart::PlayerService._run.closure#1",
+      );
+
+      if (_closed) throw StateError('播放器已关闭');
+      try {
+        await operation();
+      } catch (failure, stack) {
+        if (failure is DownloadStopped) return;
+        _recordFailure(failure, stack);
+        error = _message(failure);
+        _notify();
+        rethrow;
+      }
+    });
   }
 
   Future<void> load() async {
+    AppLog.instance.trace(
+      "lib/services/player_service.dart::PlayerService.load",
+    );
+
     if (_loaded) return;
     final restored = PlaybackQueue.fromJson(storage.state['queue']);
     if (restored.needsRepair) {
-      await storage.transaction((state) => state['queue'] = restored.toJson());
+      await storage.transaction((state) {
+        AppLog.instance.trace(
+          "lib/services/player_service.dart::PlayerService.load.closure#1",
+        );
+        state['queue'] = restored.toJson();
+      });
     }
     _queue = restored.tracks;
     cursor = restored.cursor;
@@ -308,10 +643,10 @@ class PlayerService {
     albumPage = restored.albumPage;
     albumTotal = restored.albumTotal;
     albumPageSize = restored.albumPageSize;
-    playing = false;
+    _setPlaying(false);
     buffering = false;
     _actual = false;
-    _atEnd = false;
+    _completedTrackId = null;
     _endSeekPosition = null;
     _startSeekPosition = null;
     _sleepStopped = false;
@@ -325,6 +660,10 @@ class PlayerService {
   /// Restore has already atomically committed queue data. Do not save the old
   /// in-memory queue or touch media/network while reading that committed state.
   Future<void> reload() async {
+    AppLog.instance.trace(
+      "lib/services/player_service.dart::PlayerService.reload",
+    );
+
     if (_closed || _source != null || playing) {
       throw StateError('请先暂停并释放播放来源');
     }
@@ -344,6 +683,10 @@ class PlayerService {
     String album,
     int page,
   ) async {
+    AppLog.instance.trace(
+      "lib/services/player_service.dart::PlayerService._albumPage",
+    );
+
     if (page < 1 || page > 5000 ~/ xmlyAlbumPageSize) {
       throw const XmlyException('catalogue_limit', '专辑播放队列最多 5000 集');
     }
@@ -361,8 +704,22 @@ class PlayerService {
         result.pageSize != xmlyAlbumPageSize ||
         result.album.id != album ||
         tracks.length > xmlyAlbumPageSize ||
-        tracks.any((track) => track.albumId != album) ||
-        tracks.map((track) => track.id).toSet().length != tracks.length ||
+        tracks.any((track) {
+          AppLog.instance.trace(
+            "lib/services/player_service.dart::PlayerService._albumPage.closure#1",
+          );
+          return track.albumId != album;
+        }) ||
+        tracks
+                .map((track) {
+                  AppLog.instance.trace(
+                    "lib/services/player_service.dart::PlayerService._albumPage.closure#2",
+                  );
+                  return track.id;
+                })
+                .toSet()
+                .length !=
+            tracks.length ||
         (tracks.isNotEmpty &&
             result.total > 0 &&
             result.total < offset + tracks.length) ||
@@ -391,6 +748,23 @@ class PlayerService {
     int? total,
     int pageSize = xmlyAlbumPageSize,
   }) async {
+    AppLog.instance.trace(
+      "lib/services/player_service.dart::PlayerService._saveQueue",
+    );
+
+    var changed =
+        cursor != index ||
+        sourceAlbumId != album ||
+        queueSource != (source ?? (album.isEmpty ? 'custom' : 'album')) ||
+        _queue.length != tracks.length;
+    if (!changed) {
+      for (var i = 0; i < tracks.length; i++) {
+        if (_queue[i].id != tracks[i].id) {
+          changed = true;
+          break;
+        }
+      }
+    }
     final next = PlaybackQueue(
       tracks: tracks,
       cursor: index,
@@ -400,11 +774,29 @@ class PlayerService {
       albumTotal: total,
       albumPageSize: page == null ? null : pageSize,
     );
-    await storage.transaction((state) => state['queue'] = next.toJson());
+    await storage.transaction((state) {
+      AppLog.instance.trace(
+        "lib/services/player_service.dart::PlayerService._saveQueue.closure#1",
+      );
+      state['queue'] = next.toJson();
+    });
     queueSource = next.source;
     albumPage = next.albumPage;
     albumTotal = next.albumTotal;
     albumPageSize = next.albumPageSize;
+    if (changed) {
+      AppLog.instance.write(
+        AppLogLevel.info,
+        'player',
+        'Playback queue changed',
+        data: {
+          'count': tracks.length,
+          'cursor': index,
+          'albumId': album,
+          'source': next.source,
+        },
+      );
+    }
   }
 
   Future<void> playAlbum(
@@ -413,119 +805,246 @@ class PlayerService {
     int? page,
     Track? track,
     double? resumePosition,
-  }) => _run(() async {
-    final album = xmlyIdentifier(albumId),
-        id = 'xmly:${xmlyIdentifier(trackId)}';
-    if (page != null && (page < 1 || page > 5000 ~/ xmlyAlbumPageSize)) {
-      throw XmlyException(
-        'invalid_page',
-        '播放页码范围为 1 到 ${5000 ~/ xmlyAlbumPageSize}',
-      );
-    }
-    final intent = ++generation, request = _newRequest();
-    final client = accounts.activeClient ?? anonymous;
-    int? ordinalFor(Track? hint) {
-      if (hint != null &&
-          (hint.id != id || hint.albumId.isNotEmpty && hint.albumId != album)) {
-        throw const XmlyException('missing_track', '声音与专辑不匹配，请刷新重试');
-      }
-      return hint?.officialPosition ?? xmlyPositive(hint?.orderNo);
-    }
-
-    var ordinal = ordinalFor(track);
-    if (page == null && ordinal == null) {
-      ordinal = ordinalFor(await _admission(request, () => client.track(id)));
-    }
-    final selectedPage =
-        page ?? (ordinal == null ? 1 : (ordinal - 1) ~/ xmlyAlbumPageSize + 1);
-    final result = await _admission(
-      request,
-      () => _albumPage(client, album, selectedPage),
+  }) {
+    AppLog.instance.trace(
+      "lib/services/player_service.dart::PlayerService.playAlbum",
     );
-    final tracks = result.tracks,
-        index = result.tracks.indexWhere((track) => track.id == id);
-    if (index < 0) {
-      throw const XmlyException('missing_track', '此页没有找到所选声音，请刷新专辑后重试');
-    }
-    await _commands.synchronized(() async {
-      if (intent != generation ||
-          request != _request ||
-          accounts.admissionPaused ||
-          !identical(client, accounts.activeClient ?? anonymous))
-        return;
-      await _stopSource(localTarget: tracks[index]);
-      await _saveQueue(
-        tracks,
-        index,
-        album,
-        page: selectedPage,
-        total: result.total,
+    return _run(() async {
+      AppLog.instance.trace(
+        "lib/services/player_service.dart::PlayerService.playAlbum.closure#1",
       );
-      _queue = tracks;
-      cursor = index;
-      sourceAlbumId = album;
-      await _openCurrent(request, resumePosition: resumePosition);
+
+      if (AppLog.instance.level == AppLogLevel.debug) {
+        _command('playAlbum', {
+          'albumId': albumId,
+          'trackId': trackId,
+          'page': page,
+          'hintTrackId': track?.id,
+          'resumePosition': resumePosition,
+        });
+      }
+      final album = xmlyIdentifier(albumId),
+          id = 'xmly:${xmlyIdentifier(trackId)}';
+      if (page != null && (page < 1 || page > 5000 ~/ xmlyAlbumPageSize)) {
+        throw XmlyException(
+          'invalid_page',
+          '播放页码范围为 1 到 ${5000 ~/ xmlyAlbumPageSize}',
+        );
+      }
+      final intent = ++generation, request = _newRequest();
+      final client = accounts.activeClient ?? anonymous;
+      int? ordinalFor(Track? hint) {
+        AppLog.instance.trace(
+          "lib/services/player_service.dart::PlayerService.playAlbum.closure#1.ordinalFor",
+        );
+
+        if (hint != null &&
+            (hint.id != id ||
+                hint.albumId.isNotEmpty && hint.albumId != album)) {
+          throw const XmlyException('missing_track', '声音与专辑不匹配，请刷新重试');
+        }
+        return hint?.officialPosition ?? xmlyPositive(hint?.orderNo);
+      }
+
+      var ordinal = ordinalFor(track);
+      if (page == null && ordinal == null) {
+        ordinal = ordinalFor(
+          await _admission(request, () {
+            AppLog.instance.trace(
+              "lib/services/player_service.dart::PlayerService.playAlbum.closure#1.closure#1",
+            );
+            return client.track(id);
+          }),
+        );
+      }
+      final selectedPage =
+          page ??
+          (ordinal == null ? 1 : (ordinal - 1) ~/ xmlyAlbumPageSize + 1);
+      final result = await _admission(request, () {
+        AppLog.instance.trace(
+          "lib/services/player_service.dart::PlayerService.playAlbum.closure#1.closure#2",
+        );
+        return _albumPage(client, album, selectedPage);
+      });
+      final tracks = result.tracks,
+          index = result.tracks.indexWhere((track) {
+            AppLog.instance.trace(
+              "lib/services/player_service.dart::PlayerService.playAlbum.closure#1.closure#3",
+            );
+            return track.id == id;
+          });
+      if (index < 0) {
+        throw const XmlyException('missing_track', '此页没有找到所选声音，请刷新专辑后重试');
+      }
+      await _commands.synchronized(() async {
+        AppLog.instance.trace(
+          "lib/services/player_service.dart::PlayerService.playAlbum.closure#1.closure#4",
+        );
+
+        if (intent != generation ||
+            request != _request ||
+            accounts.admissionPaused ||
+            !identical(client, accounts.activeClient ?? anonymous))
+          return;
+        await _stopSource(localTarget: tracks[index]);
+        await _saveQueue(
+          tracks,
+          index,
+          album,
+          page: selectedPage,
+          total: result.total,
+        );
+        _queue = tracks;
+        cursor = index;
+        sourceAlbumId = album;
+        await _openCurrent(request, resumePosition: resumePosition);
+      });
     });
-  });
+  }
 
   /// The visible feed is newest-first. Reverse that exact snapshot, preserving
   /// timestamp ties and mixed-album order; never reload an album to build it.
-  Future<void> playUpdates(List<Track> displayedLatestFirst, String trackId) =>
-      _run(() async {
-        final tracks = displayedLatestFirst.reversed.toList(growable: false);
-        final id = 'xmly:${xmlyIdentifier(trackId)}';
-        final index = tracks.indexWhere((track) => track.id == id);
-        if (tracks.isEmpty ||
-            tracks.length > 5000 ||
-            index < 0 ||
-            tracks.map((track) => track.id).toSet().length != tracks.length) {
-          throw const XmlyException('invalid_feed', '更新列表无效，请刷新后重试');
-        }
-        final request = _newRequest();
-        ++generation;
-        await _commands.synchronized(() async {
-          if (request != _request) return;
-          await _stopSource(localTarget: tracks[index]);
-          await _saveQueue(tracks, index, '', source: 'updates');
-          _queue = tracks;
-          cursor = index;
-          sourceAlbumId = '';
-          await _openCurrent(request);
+  Future<void> playUpdates(List<Track> displayedLatestFirst, String trackId) {
+    AppLog.instance.trace(
+      "lib/services/player_service.dart::PlayerService.playUpdates",
+    );
+    return _run(() async {
+      AppLog.instance.trace(
+        "lib/services/player_service.dart::PlayerService.playUpdates.closure#1",
+      );
+
+      if (AppLog.instance.level == AppLogLevel.debug) {
+        _command('playUpdates', {
+          'trackId': trackId,
+          'count': displayedLatestFirst.length,
+          'trackIds': [for (final track in displayedLatestFirst) track.id],
         });
+      }
+      final tracks = displayedLatestFirst.reversed.toList(growable: false);
+      final id = 'xmly:${xmlyIdentifier(trackId)}';
+      final index = tracks.indexWhere((track) {
+        AppLog.instance.trace(
+          "lib/services/player_service.dart::PlayerService.playUpdates.closure#1.closure#1",
+        );
+        return track.id == id;
       });
+      if (tracks.isEmpty ||
+          tracks.length > 5000 ||
+          index < 0 ||
+          tracks
+                  .map((track) {
+                    AppLog.instance.trace(
+                      "lib/services/player_service.dart::PlayerService.playUpdates.closure#1.closure#2",
+                    );
+                    return track.id;
+                  })
+                  .toSet()
+                  .length !=
+              tracks.length) {
+        throw const XmlyException('invalid_feed', '更新列表无效，请刷新后重试');
+      }
+      final request = _newRequest();
+      ++generation;
+      await _commands.synchronized(() async {
+        AppLog.instance.trace(
+          "lib/services/player_service.dart::PlayerService.playUpdates.closure#1.closure#3",
+        );
+
+        if (request != _request) return;
+        await _stopSource(localTarget: tracks[index]);
+        await _saveQueue(tracks, index, '', source: 'updates');
+        _queue = tracks;
+        cursor = index;
+        sourceAlbumId = '';
+        await _openCurrent(request);
+      });
+    });
+  }
 
   Future<void> playTrack(
     Track track, {
     double? resumePosition,
     bool manualPosition = false,
-  }) => _run(() async {
-    final request = _newRequest();
-    ++generation;
-    await _commands.synchronized(() async {
-      if (request != _request) return;
-      await _stopSource(localTarget: track);
-      await _saveQueue([track], 0, '');
-      _queue = [track];
-      cursor = 0;
-      sourceAlbumId = '';
-      await _openCurrent(
-        request,
-        resumePosition: resumePosition,
-        // Bookmarks bypass chapter skipping just like a manual seek.
-        manualReplay: manualPosition,
+  }) {
+    AppLog.instance.trace(
+      "lib/services/player_service.dart::PlayerService.playTrack",
+    );
+    return _run(() async {
+      AppLog.instance.trace(
+        "lib/services/player_service.dart::PlayerService.playTrack.closure#1",
       );
+
+      if (AppLog.instance.level == AppLogLevel.debug) {
+        _command('playTrack', {
+          'trackId': track.id,
+          'albumId': track.albumId,
+          'resumePosition': resumePosition,
+          'manualPosition': manualPosition,
+        });
+      }
+      final request = _newRequest();
+      ++generation;
+      await _commands.synchronized(() async {
+        AppLog.instance.trace(
+          "lib/services/player_service.dart::PlayerService.playTrack.closure#1.closure#1",
+        );
+
+        if (request != _request) return;
+        await _stopSource(localTarget: track);
+        await _saveQueue([track], 0, '');
+        _queue = [track];
+        cursor = 0;
+        sourceAlbumId = '';
+        await _openCurrent(
+          request,
+          resumePosition: resumePosition,
+          // Bookmarks bypass chapter skipping just like a manual seek.
+          manualReplay: manualPosition,
+        );
+      });
     });
-  });
-  Future<void> playQueueItem(int index) => _run(() async {
-    RangeError.checkValidIndex(index, _queue);
-    final trackId = _queue[index].id;
-    final request = _newRequest();
-    await _commands.synchronized(() async {
-      index = _queue.indexWhere((track) => track.id == trackId);
-      if (index >= 0) await _select(index, request);
+  }
+
+  Future<void> playQueueItem(int index) {
+    AppLog.instance.trace(
+      "lib/services/player_service.dart::PlayerService.playQueueItem",
+    );
+    return _run(() async {
+      AppLog.instance.trace(
+        "lib/services/player_service.dart::PlayerService.playQueueItem.closure#1",
+      );
+
+      if (AppLog.instance.level == AppLogLevel.debug) {
+        _command('playQueueItem', {
+          'index': index,
+          if (index >= 0 && index < _queue.length)
+            'targetTrackId': _queue[index].id,
+        });
+      }
+      RangeError.checkValidIndex(index, _queue);
+      final trackId = _queue[index].id;
+      final request = _newRequest();
+      await _commands.synchronized(() async {
+        AppLog.instance.trace(
+          "lib/services/player_service.dart::PlayerService.playQueueItem.closure#1.closure#1",
+        );
+
+        index = _queue.indexWhere((track) {
+          AppLog.instance.trace(
+            "lib/services/player_service.dart::PlayerService.playQueueItem.closure#1.closure#1.closure#1",
+          );
+          return track.id == trackId;
+        });
+        if (index >= 0) await _select(index, request);
+      });
     });
-  });
+  }
+
   Future<void> _select(int index, int request) async {
+    AppLog.instance.trace(
+      "lib/services/player_service.dart::PlayerService._select",
+    );
+
     if (request != _request) return;
     RangeError.checkValidIndex(index, _queue);
     await _stopSource(localTarget: _queue[index]);
@@ -542,175 +1061,264 @@ class PlayerService {
     await _openCurrent(request);
   }
 
-  Future<void> playCurrent() => _run(() async {
-    final request = _newRequest(keepStartPosition: true);
-    await _commands.synchronized(() => _openCurrent(request));
-  });
-  Future<void> previous() => _run(() async {
-    if (cursor > 0) {
-      await playQueueItem(cursor - 1);
-      return;
-    }
-    final first = current;
-    if (first == null) return;
-    if (queueSource != 'album' ||
-        sourceAlbumId.isEmpty ||
-        first.officialPosition == 1) {
-      await replay();
-      return;
-    }
-    final candidate = first.officialPosition ?? xmlyPositive(first.orderNo);
-    if (candidate == null || candidate > 5000) {
-      throw const XmlyException('invalid_album', '队列缺少专辑页码，请从专辑页重新选择声音');
-    }
-    final request = _newRequest(), intent = _advanceIntent;
-    final expectedGeneration = generation, epoch = _epoch;
-    final album = sourceAlbumId, client = accounts.activeClient ?? anonymous;
-    final snapshot = _queue;
-    bool active() =>
-        !_closed &&
-        request == _request &&
-        intent == _advanceIntent &&
-        expectedGeneration == generation &&
-        epoch == _epoch &&
-        cursor == 0 &&
-        current?.id == first.id &&
-        queueSource == 'album' &&
-        sourceAlbumId == album &&
-        !accounts.admissionPaused &&
-        identical(client, accounts.activeClient ?? anonymous);
-    Future<AlbumPage> loadPage(int page) async {
-      try {
-        return await _admission(request, () => _albumPage(client, album, page));
-      } catch (_) {
-        if (!active()) throw const DownloadStopped();
-        rethrow;
-      }
-    }
-
-    // Locate the current head first, including queues restored with 50-row pages.
-    final page = (candidate - 1) ~/ xmlyAlbumPageSize + 1;
-    final anchorPage = await loadPage(page);
-    if (!active()) return;
-    final anchor = anchorPage.tracks.indexWhere(
-      (track) => track.id == first.id,
+  Future<void> playCurrent() {
+    AppLog.instance.trace(
+      "lib/services/player_service.dart::PlayerService.playCurrent",
     );
-    if (anchor < 0 ||
-        (first.officialPosition != null &&
-            anchorPage.tracks[anchor].officialPosition !=
-                first.officialPosition)) {
-      throw const XmlyException('catalogue_changed', '专辑首页发生变化，请从专辑页重新选择声音');
-    }
-    final overlap = anchorPage.tracks
-        .skip(anchor)
-        .take(snapshot.length)
-        .toList();
-    for (var index = 0; index < overlap.length; index++) {
-      if (overlap[index].id != snapshot[index].id) {
-        throw const XmlyException('catalogue_changed', '专辑顺序已变化，请从专辑页重新选择声音');
-      }
-    }
-    var added = anchorPage.tracks.take(anchor).toList();
-    if (added.isEmpty && page > 1) {
-      final preceding = await loadPage(page - 1);
-      if (!active()) return;
-      added = preceding.tracks;
-      if (added.isEmpty ||
-          added.last.officialPosition !=
-              anchorPage.tracks.first.officialPosition! - 1) {
-        throw const XmlyException('invalid_album', '专辑前页不完整，请刷新后重试');
-      }
-    }
-    if (added.isEmpty) {
-      await replay();
-      return;
-    }
-    final previousOrder = xmlyPositive(added.last.orderNo);
-    final firstOrder = xmlyPositive(first.orderNo);
-    if (previousOrder != null &&
-        firstOrder != null &&
-        previousOrder >= firstOrder) {
-      throw const XmlyException('duplicate_page', '专辑分页重复或倒退，请刷新后重试');
-    }
-    await _commands.synchronized(() async {
-      if (!active()) return;
-      final known = _queue.map((track) => track.id).toSet();
-      if (added.any((track) => !known.add(track.id))) {
-        throw const XmlyException('duplicate_page', '专辑分页重复，请刷新后重试');
-      }
-      if (_queue.length + added.length > 5000) {
-        throw const XmlyException('catalogue_limit', '专辑播放队列最多 5000 集');
-      }
-      // Keep any tail appended while loading, and keep its last-page metadata.
-      final next = [...added, ..._queue];
-      ++generation;
-      await _saveQueue(
-        next,
-        added.length,
-        album,
-        page: albumPage,
-        total: albumTotal,
-        pageSize: albumPageSize ?? xmlyAlbumPageSize,
+    return _run(() async {
+      AppLog.instance.trace(
+        "lib/services/player_service.dart::PlayerService.playCurrent.closure#1",
       );
-      _queue = next;
-      cursor = added.length;
-      _notify();
-      if (request == _request && intent == _advanceIntent) {
-        await _select(cursor - 1, request);
-      }
-    });
-  });
 
-  Future<void> next() => _run(() async {
-    if (cursor + 1 < _queue.length) {
-      await playQueueItem(cursor + 1);
-      return;
-    }
-    if (current == null) return;
-    if (queueSource != 'album' || sourceAlbumId.isEmpty) {
-      await pause();
-      status = '已听到最新一集';
-      _notify();
-      return;
-    }
-    final intent = ++_advanceIntent,
-        expectedGeneration = generation,
-        epoch = _epoch;
-    final id = current!.id, album = sourceAlbumId;
-    // The tail commits under _commands; never join its network work under that lock.
-    await refreshAlbumTail(album);
-    await _commands.synchronized(() async {
-      // A later sleep changes _advanceIntent; a consumed earlier sleep must not
-      // suppress this explicit next command after its catalogue request returns.
-      if (intent != _advanceIntent ||
-          expectedGeneration != generation ||
-          epoch != _epoch ||
-          current?.id != id)
-        return;
-      // Fetching the next page is not a chapter-completion event. Match the
-      // in-page manual next path while still honoring an elapsed countdown.
-      final sleep = policy.pollSleep();
-      if (sleep != null) {
-        await _sleep(sleep);
+      if (AppLog.instance.level == AppLogLevel.debug) _command('playCurrent');
+      final request = _newRequest(keepStartPosition: true);
+      await _commands.synchronized(() {
+        AppLog.instance.trace(
+          "lib/services/player_service.dart::PlayerService.playCurrent.closure#1.closure#1",
+        );
+        return _openCurrent(request);
+      });
+    });
+  }
+
+  Future<void> previous() {
+    AppLog.instance.trace(
+      "lib/services/player_service.dart::PlayerService.previous",
+    );
+    return _run(() async {
+      AppLog.instance.trace(
+        "lib/services/player_service.dart::PlayerService.previous.closure#1",
+      );
+
+      if (AppLog.instance.level == AppLogLevel.debug) _command('previous');
+      if (cursor > 0) {
+        await playQueueItem(cursor - 1);
         return;
       }
-      if (cursor + 1 < _queue.length)
-        await _select(cursor + 1, _newRequest());
-      else {
-        await _pause();
+      final first = current;
+      if (first == null) return;
+      if (queueSource != 'album' ||
+          sourceAlbumId.isEmpty ||
+          first.officialPosition == 1) {
+        await replay();
+        return;
+      }
+      final candidate = first.officialPosition ?? xmlyPositive(first.orderNo);
+      if (candidate == null || candidate > 5000) {
+        throw const XmlyException('invalid_album', '队列缺少专辑页码，请从专辑页重新选择声音');
+      }
+      final request = _newRequest(), intent = _advanceIntent;
+      final expectedGeneration = generation, epoch = _epoch;
+      final album = sourceAlbumId, client = accounts.activeClient ?? anonymous;
+      final snapshot = _queue;
+      bool active() {
+        AppLog.instance.trace(
+          "lib/services/player_service.dart::PlayerService.previous.closure#1.active",
+        );
+        return !_closed &&
+            request == _request &&
+            intent == _advanceIntent &&
+            expectedGeneration == generation &&
+            epoch == _epoch &&
+            cursor == 0 &&
+            current?.id == first.id &&
+            queueSource == 'album' &&
+            sourceAlbumId == album &&
+            !accounts.admissionPaused &&
+            identical(client, accounts.activeClient ?? anonymous);
+      }
+
+      Future<AlbumPage> loadPage(int page) async {
+        AppLog.instance.trace(
+          "lib/services/player_service.dart::PlayerService.previous.closure#1.loadPage",
+        );
+
+        try {
+          return await _admission(request, () {
+            AppLog.instance.trace(
+              "lib/services/player_service.dart::PlayerService.previous.closure#1.loadPage.closure#1",
+            );
+            return _albumPage(client, album, page);
+          });
+        } catch (_) {
+          if (!active()) throw const DownloadStopped();
+          rethrow;
+        }
+      }
+
+      // Locate the current head first, including queues restored with 50-row pages.
+      final page = (candidate - 1) ~/ xmlyAlbumPageSize + 1;
+      final anchorPage = await loadPage(page);
+      if (!active()) return;
+      final anchor = anchorPage.tracks.indexWhere((track) {
+        AppLog.instance.trace(
+          "lib/services/player_service.dart::PlayerService.previous.closure#1.closure#1",
+        );
+        return track.id == first.id;
+      });
+      if (anchor < 0 ||
+          (first.officialPosition != null &&
+              anchorPage.tracks[anchor].officialPosition !=
+                  first.officialPosition)) {
+        throw const XmlyException('catalogue_changed', '专辑首页发生变化，请从专辑页重新选择声音');
+      }
+      final overlap = anchorPage.tracks
+          .skip(anchor)
+          .take(snapshot.length)
+          .toList();
+      for (var index = 0; index < overlap.length; index++) {
+        if (overlap[index].id != snapshot[index].id) {
+          throw const XmlyException('catalogue_changed', '专辑顺序已变化，请从专辑页重新选择声音');
+        }
+      }
+      var added = anchorPage.tracks.take(anchor).toList();
+      if (added.isEmpty && page > 1) {
+        final preceding = await loadPage(page - 1);
+        if (!active()) return;
+        added = preceding.tracks;
+        if (added.isEmpty ||
+            added.last.officialPosition !=
+                anchorPage.tracks.first.officialPosition! - 1) {
+          throw const XmlyException('invalid_album', '专辑前页不完整，请刷新后重试');
+        }
+      }
+      if (added.isEmpty) {
+        await replay();
+        return;
+      }
+      final previousOrder = xmlyPositive(added.last.orderNo);
+      final firstOrder = xmlyPositive(first.orderNo);
+      if (previousOrder != null &&
+          firstOrder != null &&
+          previousOrder >= firstOrder) {
+        throw const XmlyException('duplicate_page', '专辑分页重复或倒退，请刷新后重试');
+      }
+      await _commands.synchronized(() async {
+        AppLog.instance.trace(
+          "lib/services/player_service.dart::PlayerService.previous.closure#1.closure#2",
+        );
+
+        if (!active()) return;
+        final known = _queue.map((track) {
+          AppLog.instance.trace(
+            "lib/services/player_service.dart::PlayerService.previous.closure#1.closure#2.closure#1",
+          );
+          return track.id;
+        }).toSet();
+        if (added.any((track) {
+          AppLog.instance.trace(
+            "lib/services/player_service.dart::PlayerService.previous.closure#1.closure#2.closure#2",
+          );
+          return !known.add(track.id);
+        })) {
+          throw const XmlyException('duplicate_page', '专辑分页重复，请刷新后重试');
+        }
+        if (_queue.length + added.length > 5000) {
+          throw const XmlyException('catalogue_limit', '专辑播放队列最多 5000 集');
+        }
+        // Keep any tail appended while loading, and keep its last-page metadata.
+        final next = [...added, ..._queue];
+        ++generation;
+        await _saveQueue(
+          next,
+          added.length,
+          album,
+          page: albumPage,
+          total: albumTotal,
+          pageSize: albumPageSize ?? xmlyAlbumPageSize,
+        );
+        _queue = next;
+        cursor = added.length;
+        _notify();
+        if (request == _request && intent == _advanceIntent) {
+          await _select(cursor - 1, request);
+        }
+      });
+    });
+  }
+
+  Future<void> next() {
+    AppLog.instance.trace(
+      "lib/services/player_service.dart::PlayerService.next",
+    );
+    return _run(() async {
+      AppLog.instance.trace(
+        "lib/services/player_service.dart::PlayerService.next.closure#1",
+      );
+
+      if (AppLog.instance.level == AppLogLevel.debug) _command('next');
+      if (cursor + 1 < _queue.length) {
+        await playQueueItem(cursor + 1);
+        return;
+      }
+      if (current == null) return;
+      if (queueSource != 'album' || sourceAlbumId.isEmpty) {
+        await pause();
         status = '已听到最新一集';
         _notify();
+        return;
       }
+      final intent = ++_advanceIntent,
+          expectedGeneration = generation,
+          epoch = _epoch;
+      final id = current!.id, album = sourceAlbumId;
+      // The tail commits under _commands; never join its network work under that lock.
+      await refreshAlbumTail(album);
+      await _commands.synchronized(() async {
+        AppLog.instance.trace(
+          "lib/services/player_service.dart::PlayerService.next.closure#1.closure#1",
+        );
+
+        // A later sleep changes _advanceIntent; a consumed earlier sleep must not
+        // suppress this explicit next command after its catalogue request returns.
+        if (intent != _advanceIntent ||
+            expectedGeneration != generation ||
+            epoch != _epoch ||
+            current?.id != id)
+          return;
+        // Fetching the next page is not a chapter-completion event. Match the
+        // in-page manual next path while still honoring an elapsed countdown.
+        final sleep = policy.pollSleep();
+        if (sleep != null) {
+          await _sleep(sleep);
+          return;
+        }
+        if (cursor + 1 < _queue.length)
+          await _select(cursor + 1, _newRequest());
+        else {
+          await _pause();
+          status = '已听到最新一集';
+          _notify();
+        }
+      });
     });
-  });
-  Future<void> replay() => _run(() async {
-    final request = _newRequest();
-    await _commands.synchronized(
-      () => _openCurrent(request, resumePosition: 0, manualReplay: true),
+  }
+
+  Future<void> replay() {
+    AppLog.instance.trace(
+      "lib/services/player_service.dart::PlayerService.replay",
     );
-  });
+    return _run(() async {
+      AppLog.instance.trace(
+        "lib/services/player_service.dart::PlayerService.replay.closure#1",
+      );
+
+      if (AppLog.instance.level == AppLogLevel.debug) _command('replay');
+      final request = _newRequest();
+      await _commands.synchronized(() {
+        AppLog.instance.trace(
+          "lib/services/player_service.dart::PlayerService.replay.closure#1.closure#1",
+        );
+        return _openCurrent(request, resumePosition: 0, manualReplay: true);
+      });
+    });
+  }
 
   ({double position, int updatedAt})? _localProgress(Track track) {
+    AppLog.instance.trace(
+      "lib/services/player_service.dart::PlayerService._localProgress",
+    );
+
     final library = (storage.state['library'] as Map)[_progressIdentity];
     final progress = library is Map ? library['playbackProgress'] : null;
     final entry = progress is Map ? progress[track.id] : null;
@@ -734,23 +1342,37 @@ class PlayerService {
     ({double position, int updatedAt})? local, {
     required bool preservePosition,
   }) async {
+    AppLog.instance.trace(
+      "lib/services/player_service.dart::PlayerService._restoreCloudProgress",
+    );
+
     final client = _historyClient;
     if (client == null || !client.accountAvailable) return;
     final identity = client.cacheIdentity;
     final listener = accounts.activeClient;
     final revision = _seekRevision;
-    bool sameSource() =>
-        !_closed && epoch == _epoch && identical(source, _source);
+    bool sameSource() {
+      AppLog.instance.trace(
+        "lib/services/player_service.dart::PlayerService._restoreCloudProgress.sameSource",
+      );
+      return !_closed && epoch == _epoch && identical(source, _source);
+    }
+
     // Editing other queue entries does not replace this source or its progress.
-    bool active() =>
-        sameSource() &&
-        request == _request &&
-        current?.id == track.id &&
-        revision == _seekRevision &&
-        !accounts.admissionPaused &&
-        identical(listener, accounts.activeClient) &&
-        identical(client, _historyClient) &&
-        identity == client.cacheIdentity;
+    bool active() {
+      AppLog.instance.trace(
+        "lib/services/player_service.dart::PlayerService._restoreCloudProgress.active",
+      );
+      return sameSource() &&
+          request == _request &&
+          current?.id == track.id &&
+          revision == _seekRevision &&
+          !accounts.admissionPaused &&
+          identical(listener, accounts.activeClient) &&
+          identical(client, _historyClient) &&
+          identity == client.cacheIdentity;
+    }
+
     // Local samples and billing continue, but the initial fallback must not
     // overwrite the remote position before this source's read has settled.
     _cloudResumeEpoch = epoch;
@@ -768,6 +1390,10 @@ class PlayerService {
         failed = true;
       }
       await _commands.synchronized(() async {
+        AppLog.instance.trace(
+          "lib/services/player_service.dart::PlayerService._restoreCloudProgress.closure#1",
+        );
+
         try {
           if (!active() || preservePosition || _atEnd) return;
           final remote = cloud;
@@ -783,6 +1409,9 @@ class PlayerService {
             if (!active()) return;
             ++_seekRevision;
             position = restored;
+            if (_pendingDurationPosition != null) {
+              _pendingDurationPosition = restored;
+            }
             // Only a subsequent device observation may persist the restored
             // position; the pre-seek fallback is not an official observation.
             _actual = false;
@@ -815,6 +1444,10 @@ class PlayerService {
     bool startPlaying = true,
     String? localTaskId,
   }) async {
+    AppLog.instance.trace(
+      "lib/services/player_service.dart::PlayerService._openCurrent",
+    );
+
     if (current == null || request != _request) return;
     final selectedStart = _source == null && resumePosition == null
         ? _startSeekPosition
@@ -842,6 +1475,10 @@ class PlayerService {
     bool startPlaying = true,
     String? localTaskId,
   }) async {
+    AppLog.instance.trace(
+      "lib/services/player_service.dart::PlayerService._openCurrentSource",
+    );
+
     final track = current;
     if (track == null || request != _request) return;
     final saved = resumePosition;
@@ -867,15 +1504,24 @@ class PlayerService {
     final settings = effectiveSettings;
     final source = await _admission(
       request,
-      () => localTaskId != null
-          ? _local(downloads.task(localTaskId))
-          : _prepare(
-              track,
-              settings.listenAndDownload,
-              request,
-              existingTaskId: preferredPrepaid,
-            ),
+      () {
+        AppLog.instance.trace(
+          "lib/services/player_service.dart::PlayerService._openCurrentSource.closure#1",
+        );
+        return localTaskId != null
+            ? _local(downloads.task(localTaskId))
+            : _prepare(
+                track,
+                settings.listenAndDownload,
+                request,
+                existingTaskId: preferredPrepaid,
+              );
+      },
       discard: (source) async {
+        AppLog.instance.trace(
+          "lib/services/player_service.dart::PlayerService._openCurrentSource.closure#2",
+        );
+
         await source.release?.call();
       },
     );
@@ -887,11 +1533,6 @@ class PlayerService {
     final local = _localProgress(track);
     try {
       final resume = saved ?? local?.position ?? 0.0;
-      if (source.requiresReward &&
-          source.kind == 'online' &&
-          ledger.isBlocked(source.identity)) {
-        throw const XmlyException('usage_uncertain', '请先核对听时');
-      }
       await ledger.startWatch(
         identity: source.identity,
         trackId: track.id,
@@ -899,7 +1540,7 @@ class PlayerService {
         prepaid: source.kind != 'online',
         speed: settings.speed,
       );
-      _atEnd = false;
+      _completedTrackId = null;
       _endSeekPosition = null;
       _actual = false;
       _observedAt = 0;
@@ -908,7 +1549,6 @@ class PlayerService {
       _checkedEpochs.clear();
       final epoch = ++_epoch;
       duration = track.duration;
-      _awaitingDuration = duration <= 0;
       _manualChapterPosition = manualReplay;
       position = policy.start(
         duration: duration,
@@ -916,6 +1556,7 @@ class PlayerService {
         settings: settings,
         manualReplay: manualReplay,
       );
+      _pendingDurationPosition = duration <= 0 ? position : null;
       rate = settings.speed;
       volume = settings.outputVolume;
       await _driver.open(source.uri, epoch: epoch);
@@ -947,15 +1588,39 @@ class PlayerService {
         ++_playbackRecoveryRevision;
       }
       status = source.supportsRanges ? null : '此音频暂不支持快速跳转，跳转时可能需要等待';
+      AppLog.instance.write(
+        AppLogLevel.info,
+        'player',
+        'Playback source opened',
+        data: {
+          'trackId': track.id,
+          'account': source.identity,
+          'taskId': source.taskId,
+          'kind': source.kind,
+          'epoch': epoch,
+        },
+      );
       _notify();
-    } catch (_) {
-      await _driver.stop();
-      await _release();
-      rethrow;
+    } catch (failure, stack) {
+      try {
+        await _driver.stop();
+      } catch (stopFailure, stopStack) {
+        _recordFailure(stopFailure, stopStack);
+      }
+      try {
+        await _release();
+      } catch (releaseFailure, releaseStack) {
+        _recordFailure(releaseFailure, releaseStack);
+      }
+      Error.throwWithStackTrace(failure, stack);
     }
   }
 
   Future<PlaybackSource> _local(DownloadTask task) async {
+    AppLog.instance.trace(
+      "lib/services/player_service.dart::PlayerService._local",
+    );
+
     if (task.state != DownloadState.completed ||
         task.finalPath == null ||
         !await File(task.finalPath!).exists()) {
@@ -973,6 +1638,10 @@ class PlayerService {
   }
 
   Future<DownloadTask?> _downloaded(Track track) async {
+    AppLog.instance.trace(
+      "lib/services/player_service.dart::PlayerService._downloaded",
+    );
+
     for (final task in downloads.tasks) {
       if (task.track.id == track.id &&
           task.state == DownloadState.completed &&
@@ -984,12 +1653,20 @@ class PlayerService {
   }
 
   Future<AudioProxy> _playbackProxy() {
+    AppLog.instance.trace(
+      "lib/services/player_service.dart::PlayerService._playbackProxy",
+    );
+
     if (_closed) throw const DownloadStopped();
     final ready = _proxy;
     if (ready != null) return Future.value(ready);
     // Cancelled admissions can still finish alongside a newer preparation.
     // Keep one owner for their shared listener, including during shutdown.
     return _proxyOpening ??= () async {
+      AppLog.instance.trace(
+        "lib/services/player_service.dart::PlayerService._playbackProxy.closure#1",
+      );
+
       try {
         final proxy = await AudioProxy.start();
         if (_closed) {
@@ -1010,20 +1687,31 @@ class PlayerService {
     int request, {
     String? existingTaskId,
   }) async {
+    AppLog.instance.trace(
+      "lib/services/player_service.dart::PlayerService._prepare",
+    );
+
     final identity = libraryIdentity;
     final local = await _downloaded(track);
     if (_closed || request != _request) throw const DownloadStopped();
     if (local != null) return _local(local);
-    final missingDownload = downloads.tasks.any(
-      (task) =>
-          task.track.id == track.id && task.state == DownloadState.completed,
-    );
+    final missingDownload = downloads.tasks.any((task) {
+      AppLog.instance.trace(
+        "lib/services/player_service.dart::PlayerService._prepare.closure#1",
+      );
+      return task.track.id == track.id && task.state == DownloadState.completed;
+    });
     if (!missingDownload && (save || existingTaskId != null)) {
       return _prepareDownload(track, request, existingTaskId: existingTaskId);
     }
     final quality = (_settings['download'] as Map?)?['quality'] as String?;
-    Future<ResolvedAudio> resolve(XmlyClient client) =>
-        client.resolve(track.id, quality: quality, preferCached: true);
+    Future<ResolvedAudio> resolve(XmlyClient client) {
+      AppLog.instance.trace(
+        "lib/services/player_service.dart::PlayerService._prepare.resolve",
+      );
+      return client.resolve(track.id, quality: quality, preferCached: true);
+    }
+
     final audio = identity == 'anonymous'
         ? await resolve(anonymous)
         : await accounts.runWithAccount(identity, resolve);
@@ -1032,9 +1720,6 @@ class PlayerService {
       throw const XmlyException('identity_mismatch', '声音授权与账号不符');
     }
     final reward = audio.requiresReward;
-    if (reward && ledger.isBlocked(identity)) {
-      throw const XmlyException('usage_uncertain', '请先核对听时');
-    }
     final directory = p.join(
       storage.directory,
       'playback-cache',
@@ -1046,7 +1731,15 @@ class PlayerService {
       directory: directory,
       audio: audio,
       refresh: (isActive) {
+        AppLog.instance.trace(
+          "lib/services/player_service.dart::PlayerService._prepare.closure#2",
+        );
+
         Future<ResolvedAudio> refresh(XmlyClient client) {
+          AppLog.instance.trace(
+            "lib/services/player_service.dart::PlayerService._prepare.closure#2.refresh",
+          );
+
           // Pause/resume can supersede the opening request while retaining this
           // source. The cache lifetime decides whether a refresh is still valid.
           if (!isActive() || _closed) {
@@ -1075,15 +1768,23 @@ class PlayerService {
         requiresReward: reward,
         cache: cache,
         release: () async {
+          AppLog.instance.trace(
+            "lib/services/player_service.dart::PlayerService._prepare.closure#3",
+          );
+
           await proxy.unmount(cache);
           await cache.close();
           final folder = Directory(directory);
           if (await folder.exists()) await folder.delete(recursive: true);
         },
       );
-    } catch (_) {
-      await cache.close();
-      rethrow;
+    } catch (failure, stack) {
+      try {
+        await cache.close();
+      } catch (closeFailure, closeStack) {
+        _recordFailure(closeFailure, closeStack);
+      }
+      Error.throwWithStackTrace(failure, stack);
     }
   }
 
@@ -1092,18 +1793,22 @@ class PlayerService {
     int request, {
     String? existingTaskId,
   }) async {
+    AppLog.instance.trace(
+      "lib/services/player_service.dart::PlayerService._prepareDownload",
+    );
+
     String? retained;
     try {
       var task = existingTaskId != null
           ? downloads.task(existingTaskId)
-          : downloads.tasks
-                .where(
-                  (item) =>
-                      item.accountIdentity == libraryIdentity &&
-                      item.track.id == track.id &&
-                      item.deduplicates,
-                )
-                .firstOrNull;
+          : downloads.tasks.where((item) {
+              AppLog.instance.trace(
+                "lib/services/player_service.dart::PlayerService._prepareDownload.closure#1",
+              );
+              return item.accountIdentity == libraryIdentity &&
+                  item.track.id == track.id &&
+                  item.deduplicates;
+            }).firstOrNull;
       if (task == null) {
         final prepare = prepareDownload;
         final confirm = confirmDownload;
@@ -1120,10 +1825,17 @@ class PlayerService {
           batch,
           confirmed: true,
           beforeStart: (items) async {
+            AppLog.instance.trace(
+              "lib/services/player_service.dart::PlayerService._prepareDownload.closure#2",
+            );
+
             if (request != _request) throw const DownloadStopped();
-            final selected = items
-                .where((item) => item.track.id == track.id)
-                .firstOrNull;
+            final selected = items.where((item) {
+              AppLog.instance.trace(
+                "lib/services/player_service.dart::PlayerService._prepareDownload.closure#2.closure#1",
+              );
+              return item.track.id == track.id;
+            }).firstOrNull;
             if (selected != null) {
               retained = selected.id;
               pipeline.retainTask(selected.id);
@@ -1133,20 +1845,25 @@ class PlayerService {
         // Preview polling may select a different account for this track.
         final selectedIdentity =
             batch.items
-                .where((item) => item.track.id == track.id)
+                .where((item) {
+                  AppLog.instance.trace(
+                    "lib/services/player_service.dart::PlayerService._prepareDownload.closure#3",
+                  );
+                  return item.track.id == track.id;
+                })
                 .firstOrNull
                 ?.accountIdentity ??
             batch.accountIdentity;
         task = retained != null
             ? downloads.task(retained!)
-            : downloads.tasks
-                  .where(
-                    (item) =>
-                        item.accountIdentity == selectedIdentity &&
-                        item.track.id == track.id &&
-                        item.deduplicates,
-                  )
-                  .firstOrNull;
+            : downloads.tasks.where((item) {
+                AppLog.instance.trace(
+                  "lib/services/player_service.dart::PlayerService._prepareDownload.closure#4",
+                );
+                return item.accountIdentity == selectedIdentity &&
+                    item.track.id == track.id &&
+                    item.deduplicates;
+              }).firstOrNull;
       }
       if (task == null) throw const XmlyException('task_missing', '没有可用的下载任务');
       if (retained == null) {
@@ -1163,7 +1880,12 @@ class PlayerService {
       if (!task.active) {
         await downloads.resume(
           task.id,
-          isActive: () => !_closed && request == _request,
+          isActive: () {
+            AppLog.instance.trace(
+              "lib/services/player_service.dart::PlayerService._prepareDownload.closure#5",
+            );
+            return !_closed && request == _request;
+          },
         );
       }
       AudioCache? cache;
@@ -1192,6 +1914,10 @@ class PlayerService {
         taskId: task.id,
         cache: mounted,
         release: () async {
+          AppLog.instance.trace(
+            "lib/services/player_service.dart::PlayerService._prepareDownload.closure#6",
+          );
+
           await proxy.unmount(mounted);
           await pipeline.releaseTask(leased);
         },
@@ -1203,32 +1929,72 @@ class PlayerService {
     }
   }
 
-  Future<void> playLocal(String taskId) => _run(() async {
-    final task = downloads.task(taskId);
-    final request = _newRequest();
-    // Check before replacing the user's queue.
-    await _admission(request, () => _local(task));
-    ++generation;
-    await _commands.synchronized(() async {
-      if (request != _request) return;
-      await _stopSource(localTarget: task.track);
-      await _saveQueue([task.track], 0, '');
-      _queue = [task.track];
-      cursor = 0;
-      sourceAlbumId = '';
-      await _openCurrent(request, localTaskId: taskId);
+  Future<void> playLocal(String taskId) {
+    AppLog.instance.trace(
+      "lib/services/player_service.dart::PlayerService.playLocal",
+    );
+    return _run(() async {
+      AppLog.instance.trace(
+        "lib/services/player_service.dart::PlayerService.playLocal.closure#1",
+      );
+
+      if (AppLog.instance.level == AppLogLevel.debug) {
+        _command('playLocal', {'taskId': taskId});
+      }
+      final task = downloads.task(taskId);
+      final request = _newRequest();
+      // Check before replacing the user's queue.
+      await _admission(request, () {
+        AppLog.instance.trace(
+          "lib/services/player_service.dart::PlayerService.playLocal.closure#1.closure#1",
+        );
+        return _local(task);
+      });
+      ++generation;
+      await _commands.synchronized(() async {
+        AppLog.instance.trace(
+          "lib/services/player_service.dart::PlayerService.playLocal.closure#1.closure#2",
+        );
+
+        if (request != _request) return;
+        await _stopSource(localTarget: task.track);
+        await _saveQueue([task.track], 0, '');
+        _queue = [task.track];
+        cursor = 0;
+        sourceAlbumId = '';
+        await _openCurrent(request, localTaskId: taskId);
+      });
     });
-  });
+  }
 
   Future<void> pause() {
+    AppLog.instance.trace(
+      "lib/services/player_service.dart::PlayerService.pause",
+    );
+
+    if (AppLog.instance.level == AppLogLevel.debug) _command('pause');
     _newRequest();
     _manualPaused = true;
-    return _run(() => _commands.synchronized(() => _pause()));
+    return _run(() {
+      AppLog.instance.trace(
+        "lib/services/player_service.dart::PlayerService.pause.closure#1",
+      );
+      return _commands.synchronized(() {
+        AppLog.instance.trace(
+          "lib/services/player_service.dart::PlayerService.pause.closure#1.closure#1",
+        );
+        return _pause();
+      });
+    });
   }
 
   Future<void> _pause({bool sleep = false}) async {
+    AppLog.instance.trace(
+      "lib/services/player_service.dart::PlayerService._pause",
+    );
+
     await _driver.pause();
-    playing = false;
+    _setPlaying(false);
     await ledger.observe(playing: false, buffering: buffering, speed: rate);
     await _saveProgress(terminal: true);
     final task = currentTaskId;
@@ -1241,66 +2007,95 @@ class PlayerService {
     _notify();
   }
 
-  Future<void> resume() => _run(() async {
-    final request = _newRequest(keepStartPosition: true);
-    await _commands.synchronized(() async {
-      if (request != _request) return;
-      if (_source == null || _atEnd) {
-        final selectedPosition = _atEnd ? _endSeekPosition : null;
-        await _openCurrent(
-          request,
-          // Completed chapters restart instead of restoring their end marker.
-          resumePosition: _atEnd ? selectedPosition ?? 0 : null,
-          manualReplay: selectedPosition != null,
-        );
-        return;
-      }
-      if (sourceKind != 'local' &&
-          (ledger.needsRestart ||
-              _source!.taskId != null ||
-              await _admission(request, () => _downloaded(current!)) != null)) {
-        final saved = position;
-        await _openCurrent(
-          request,
-          resumePosition: saved,
-          manualReplay: _manualChapterPosition,
-        );
-        return;
-      }
-      _official.start('player', current!, _progressIdentity);
-      _sleepStopped = false;
-      _manualPaused = false;
-      await _driver.play();
-      ++_playbackRecoveryRevision;
-      error = null;
-      _notify();
-    });
-  });
-  Future<void> switchToLocal() => _run(() async {
-    final track = current;
-    if (track == null) return;
-    final request = _newRequest(keepStartPosition: true);
-    final task = await _admission(request, () => _downloaded(track));
-    if (task == null) throw const XmlyException('file_missing', '请先下载本集');
-    await _commands.synchronized(
-      () => _openCurrent(
-        request,
-        resumePosition: position,
-        manualReplay: _manualChapterPosition || _startSeekPosition != null,
-        startPlaying: playing,
-        localTaskId: task.id,
-      ),
+  Future<void> resume() {
+    AppLog.instance.trace(
+      "lib/services/player_service.dart::PlayerService.resume",
     );
-  });
-  Future<void> seek(double seconds, {int? expectedEpoch}) =>
-      _seekTo(() => seconds, expectedEpoch: expectedEpoch);
+    return _run(() async {
+      AppLog.instance.trace(
+        "lib/services/player_service.dart::PlayerService.resume.closure#1",
+      );
+
+      if (AppLog.instance.level == AppLogLevel.debug) _command('resume');
+      final request = _newRequest(keepStartPosition: true);
+      await _commands.synchronized(() async {
+        AppLog.instance.trace(
+          "lib/services/player_service.dart::PlayerService.resume.closure#1.closure#1",
+        );
+
+        if (request != _request) return;
+        if (_source == null || _atEnd) {
+          final selectedPosition = _atEnd ? _endSeekPosition : null;
+          await _openCurrent(
+            request,
+            // Completed chapters restart instead of restoring their end marker.
+            resumePosition: _atEnd ? selectedPosition ?? 0 : null,
+            manualReplay: selectedPosition != null,
+          );
+          return;
+        }
+        if (sourceKind != 'local' &&
+            (ledger.needsRestart ||
+                _source!.taskId != null ||
+                await _admission(request, () {
+                      AppLog.instance.trace(
+                        "lib/services/player_service.dart::PlayerService.resume.closure#1.closure#1.closure#1",
+                      );
+                      return _downloaded(current!);
+                    }) !=
+                    null)) {
+          final saved = position;
+          await _openCurrent(
+            request,
+            resumePosition: saved,
+            manualReplay: _manualChapterPosition,
+          );
+          return;
+        }
+        _official.start('player', current!, _progressIdentity);
+        _sleepStopped = false;
+        _manualPaused = false;
+        await _driver.play();
+        ++_playbackRecoveryRevision;
+        error = null;
+        _notify();
+      });
+    });
+  }
+
+  Future<void> seek(double seconds, {int? expectedEpoch}) {
+    AppLog.instance.trace(
+      "lib/services/player_service.dart::PlayerService.seek",
+    );
+
+    if (AppLog.instance.level == AppLogLevel.debug) {
+      _command('seek', {'seconds': seconds, 'expectedEpoch': expectedEpoch});
+    }
+    return _seekTo(() {
+      AppLog.instance.trace(
+        "lib/services/player_service.dart::PlayerService.seek.closure#1",
+      );
+      return seconds;
+    }, expectedEpoch: expectedEpoch);
+  }
 
   Future<void> _seekTo(double Function() target, {int? expectedEpoch}) {
+    AppLog.instance.trace(
+      "lib/services/player_service.dart::PlayerService._seekTo",
+    );
+
     if (expectedEpoch != null && expectedEpoch != _epoch) return Future.value();
     final request = _request, trackId = current?.id;
     ++_advanceIntent;
-    return _run(
-      () => _commands.synchronized(() async {
+    return _run(() {
+      AppLog.instance.trace(
+        "lib/services/player_service.dart::PlayerService._seekTo.closure#1",
+      );
+      return _commands.synchronized(() async {
+        AppLog.instance.trace(
+          "lib/services/player_service.dart::PlayerService._seekTo.closure#1.closure#1",
+        );
+
         if (expectedEpoch != null && expectedEpoch != _epoch) return;
         if (request != _request || trackId != current?.id) return;
         final seconds = target();
@@ -1320,6 +2115,9 @@ class PlayerService {
         }
         _manualChapterPosition = true;
         position = policy.manualSeek(seconds);
+        if (_pendingDurationPosition != null) {
+          _pendingDurationPosition = position;
+        }
         await _driver.seek(position);
         if (_atEnd) {
           // Reopen a completed device at the user's selection on resume.
@@ -1332,23 +2130,59 @@ class PlayerService {
         _cloudResumeEpoch = null;
         // Seeking itself is never an actual listening observation or history POST.
         _notify();
-      }),
-    );
+      });
+    });
   }
 
-  Future<void> seekBackward() => _seekTo(
-    () => (position - effectiveSettings.seekBackwardSeconds)
-        .clamp(0, double.infinity)
-        .toDouble(),
-  );
-  Future<void> seekForward() =>
-      _seekTo(() => position + effectiveSettings.seekForwardSeconds);
+  Future<void> seekBackward() {
+    AppLog.instance.trace(
+      "lib/services/player_service.dart::PlayerService.seekBackward",
+    );
+
+    if (AppLog.instance.level == AppLogLevel.debug) {
+      _command('seekBackward', {
+        'position': position,
+        'seconds': effectiveSettings.seekBackwardSeconds,
+      });
+    }
+    return _seekTo(() {
+      AppLog.instance.trace(
+        "lib/services/player_service.dart::PlayerService.seekBackward.closure#1",
+      );
+      return (position - effectiveSettings.seekBackwardSeconds)
+          .clamp(0, double.infinity)
+          .toDouble();
+    });
+  }
+
+  Future<void> seekForward() {
+    AppLog.instance.trace(
+      "lib/services/player_service.dart::PlayerService.seekForward",
+    );
+
+    if (AppLog.instance.level == AppLogLevel.debug) {
+      _command('seekForward', {
+        'position': position,
+        'seconds': effectiveSettings.seekForwardSeconds,
+      });
+    }
+    return _seekTo(() {
+      AppLog.instance.trace(
+        "lib/services/player_service.dart::PlayerService.seekForward.closure#1",
+      );
+      return position + effectiveSettings.seekForwardSeconds;
+    });
+  }
 
   void _prefetchNext(AudioSnapshot snapshot) {
+    AppLog.instance.trace(
+      "lib/services/player_service.dart::PlayerService._prefetchNext",
+    );
+
     final source = _source;
     if (source == null ||
         _atEnd ||
-        _sleepStopped ||
+        _sleepStopping ||
         !snapshot.playing ||
         snapshot.buffering ||
         snapshot.duration <= 0 ||
@@ -1366,18 +2200,27 @@ class PlayerService {
     final quality = (_settings['download'] as Map?)?['quality'] as String?;
     _prefetchEpoch = epoch;
     _prefetchGeneration = expectedGeneration;
-    bool active() =>
-        !_closed &&
-        !_atEnd &&
-        !_sleepStopped &&
-        playing &&
-        request == _request &&
-        epoch == _epoch &&
-        advanceIntent == _advanceIntent &&
-        expectedGeneration == generation &&
-        identical(_source, source) &&
-        !accounts.admissionPaused;
+    bool active() {
+      AppLog.instance.trace(
+        "lib/services/player_service.dart::PlayerService._prefetchNext.active",
+      );
+      return !_closed &&
+          !_atEnd &&
+          !_sleepStopping &&
+          playing &&
+          request == _request &&
+          epoch == _epoch &&
+          advanceIntent == _advanceIntent &&
+          expectedGeneration == generation &&
+          identical(_source, source) &&
+          !accounts.admissionPaused;
+    }
+
     final flight = () async {
+      AppLog.instance.trace(
+        "lib/services/player_service.dart::PlayerService._prefetchNext.closure#1",
+      );
+
       try {
         if (cursor + 1 >= _queue.length &&
             queueSource == 'album' &&
@@ -1392,6 +2235,10 @@ class PlayerService {
         final next = _queue[cursor + 1];
         if (await _downloaded(next) != null || !active()) return;
         Future<void> resolve(XmlyClient client) async {
+          AppLog.instance.trace(
+            "lib/services/player_service.dart::PlayerService._prefetchNext.closure#1.resolve",
+          );
+
           if (active())
             await client.resolve(next.id, quality: quality, preferCached: true);
         }
@@ -1409,6 +2256,10 @@ class PlayerService {
     _prefetchFlight = flight;
     unawaited(
       flight.whenComplete(() {
+        AppLog.instance.trace(
+          "lib/services/player_service.dart::PlayerService._prefetchNext.closure#2",
+        );
+
         if (identical(_prefetchFlight, flight)) _prefetchFlight = null;
       }),
     );
@@ -1419,9 +2270,21 @@ class PlayerService {
     required int seekRevision,
     bool stateAlreadyRecorded = false,
   }) async {
+    AppLog.instance.trace(
+      "lib/services/player_service.dart::PlayerService._observe",
+    );
+
     if (_closed || _source == null || snapshot.epoch != _epoch) return;
-    if (snapshot.error != null)
+    if (snapshot.error != null) {
+      final failure = snapshot.failure;
+      if (failure != null) {
+        Error.throwWithStackTrace(
+          failure,
+          snapshot.stackTrace ?? StackTrace.current,
+        );
+      }
       throw const XmlyException('audio_device', '音频播放失败');
+    }
     // Billing captured the event at arrival; stale pre-seek positions must not
     // become fresh local/cloud progress when the command queue catches up.
     if (seekRevision != _seekRevision) return;
@@ -1430,7 +2293,7 @@ class PlayerService {
         !snapshot.duration.isFinite ||
         snapshot.duration < 0)
       return;
-    playing = snapshot.playing;
+    _setPlaying(snapshot.playing);
     buffering = snapshot.buffering;
     position = snapshot.position;
     if ((playing && !buffering) ||
@@ -1439,18 +2302,20 @@ class PlayerService {
     }
     _observedPosition = snapshot.position;
     if (snapshot.duration > 0) duration = snapshot.duration;
-    if (_awaitingDuration && duration > 0) {
-      _awaitingDuration = false;
+    final pendingPosition = _pendingDurationPosition;
+    if (pendingPosition != null && duration > 0) {
+      _pendingDurationPosition = null;
+      // Opening may report zero after the requested resume seek was issued.
+      // Keep that target, or newer playback progress, when applying chapter skips.
+      final resume = position < pendingPosition ? pendingPosition : position;
       final initial = policy.start(
         duration: duration,
-        resumePosition: position,
+        resumePosition: resume,
         settings: effectiveSettings,
         manualReplay: _manualChapterPosition,
       );
-      if (initial != position) {
-        position = initial;
-        await _driver.seek(initial);
-      }
+      position = initial;
+      if (initial != resume) await _driver.seek(initial);
     }
     if (playing && !buffering) _actual = true;
     await ledger.observe(
@@ -1487,15 +2352,26 @@ class PlayerService {
 
   /// Polls sleep deadlines and persists actual listening progress.
   Future<void> tick() async {
+    AppLog.instance.trace(
+      "lib/services/player_service.dart::PlayerService.tick",
+    );
+
     if (_closed) return;
     // Authorization can be waiting inside _commands. Expiry must cancel that
     // admission now, so it cannot start audio before the queued sleep action.
     final expired = policy.pollSleep();
     if (expired != null) {
+      final revision = _sleepRevision;
       _newRequest();
-      _sleepStopped = true;
+      _pendingSleepRevision = revision;
       await _commands.synchronized(() async {
-        if (!_closed) await _sleep(expired, invalidateRequest: false);
+        AppLog.instance.trace(
+          "lib/services/player_service.dart::PlayerService.tick.closure#1",
+        );
+
+        if (_closed || revision != _sleepRevision) return;
+        _pendingSleepRevision = null;
+        await _sleep(expired, invalidateRequest: false);
       });
       return;
     }
@@ -1503,6 +2379,10 @@ class PlayerService {
   }
 
   Future<void> _tick() async {
+    AppLog.instance.trace(
+      "lib/services/player_service.dart::PlayerService._tick",
+    );
+
     if (_closed) return;
     final sleep = policy.pollSleep();
     if (sleep != null) {
@@ -1520,7 +2400,11 @@ class PlayerService {
   }
 
   Future<void> _finish() async {
-    _atEnd = true;
+    AppLog.instance.trace(
+      "lib/services/player_service.dart::PlayerService._finish",
+    );
+
+    _completedTrackId = current?.id;
     // Completion owns advancement even when its page was prefetched before a seek.
     final intent = _advanceIntent;
     _endAdvanceIntent = intent;
@@ -1531,7 +2415,7 @@ class PlayerService {
       return;
     }
     await _pause();
-    if (_manualPaused || intent != _advanceIntent) return;
+    if (_manualPaused || _sleepStopping || intent != _advanceIntent) return;
     if (effectiveSettings.loopMode == 'single') {
       await _openCurrent(_newRequest(), resumePosition: 0);
       return;
@@ -1549,6 +2433,10 @@ class PlayerService {
         final epoch = _epoch, request = _request;
         final expectedGeneration = generation, album = sourceAlbumId;
         unawaited(() async {
+          AppLog.instance.trace(
+            "lib/services/player_service.dart::PlayerService._finish.closure#1",
+          );
+
           try {
             await refreshAlbumTail(album);
           } catch (_) {
@@ -1557,7 +2445,7 @@ class PlayerService {
                 _closed ||
                 !_atEnd ||
                 _manualPaused ||
-                _sleepStopped ||
+                _sleepStopping ||
                 epoch != _epoch ||
                 request != _request ||
                 intent != _advanceIntent ||
@@ -1581,6 +2469,16 @@ class PlayerService {
   }
 
   Future<void> refreshAlbumTail(String albumId, {bool speculative = false}) {
+    AppLog.instance.trace(
+      "lib/services/player_service.dart::PlayerService.refreshAlbumTail",
+    );
+
+    if (AppLog.instance.level == AppLogLevel.debug) {
+      _command('refreshAlbumTail', {
+        'albumId': albumId,
+        'speculative': speculative,
+      });
+    }
     final album = xmlyIdentifier(albumId),
         expectedGeneration = generation,
         request = _request;
@@ -1596,18 +2494,27 @@ class PlayerService {
     final savedPage = albumPage, savedTotal = albumTotal;
     final savedSize = albumPageSize;
     if (current?.id == snapshot.last.id) _checkedEpochs.add(endEpoch);
-    bool active() =>
-        !_closed &&
-        generation == expectedGeneration &&
-        request == _request &&
-        queueSource == 'album' &&
-        sourceAlbumId == album &&
-        !accounts.admissionPaused &&
-        identical(client, accounts.activeClient ?? anonymous);
+    bool active() {
+      AppLog.instance.trace(
+        "lib/services/player_service.dart::PlayerService.refreshAlbumTail.active",
+      );
+      return !_closed &&
+          generation == expectedGeneration &&
+          request == _request &&
+          queueSource == 'album' &&
+          sourceAlbumId == album &&
+          !accounts.admissionPaused &&
+          identical(client, accounts.activeClient ?? anonymous);
+    }
+
     _tailGeneration = expectedGeneration;
     _tailRequest = request;
     var committed = false;
-    final flight = () async {
+    final flight = AppLog.instance.runWithErrorScope(() async {
+      AppLog.instance.trace(
+        "lib/services/player_service.dart::PlayerService.refreshAlbumTail.closure#1",
+      );
+
       try {
         if (!active()) return;
         final last = snapshot.last;
@@ -1617,13 +2524,20 @@ class PlayerService {
           throw const XmlyException('invalid_album', '队列缺少专辑页码，请从专辑页重新选择声音');
         }
         void validateBoundary(int position) {
+          AppLog.instance.trace(
+            "lib/services/player_service.dart::PlayerService.refreshAlbumTail.closure#1.validateBoundary",
+          );
+
           if ((savedPage != null &&
                   (savedSize == null ||
                       position <= (savedPage - 1) * savedSize ||
                       position > savedPage * savedSize)) ||
-              snapshot.any(
-                (track) => (track.officialPosition ?? 0) > position,
-              )) {
+              snapshot.any((track) {
+                AppLog.instance.trace(
+                  "lib/services/player_service.dart::PlayerService.refreshAlbumTail.closure#1.validateBoundary.closure#1",
+                );
+                return (track.officialPosition ?? 0) > position;
+              })) {
             throw const XmlyException(
               'catalogue_changed',
               '队列顺序已变化，请从专辑页重新选择声音',
@@ -1636,15 +2550,27 @@ class PlayerService {
         var loadedPage = (candidate - 1) ~/ xmlyAlbumPageSize + 1;
         var loadedCount = (candidate - 1) % xmlyAlbumPageSize + 1;
         var total = savedTotal ?? 0;
-        final known = snapshot.map((track) => track.id).toSet(),
+        final known = snapshot.map((track) {
+              AppLog.instance.trace(
+                "lib/services/player_service.dart::PlayerService.refreshAlbumTail.closure#1.closure#1",
+              );
+              return track.id;
+            }).toSet(),
             added = <Track>[];
         var previousOrder = xmlyPositive(last.orderNo);
         void append(AlbumPage result, {required bool samePage}) {
+          AppLog.instance.trace(
+            "lib/services/player_service.dart::PlayerService.refreshAlbumTail.closure#1.append",
+          );
+
           var start = 0;
           if (samePage) {
-            final anchor = result.tracks.indexWhere(
-              (track) => track.id == last.id,
-            );
+            final anchor = result.tracks.indexWhere((track) {
+              AppLog.instance.trace(
+                "lib/services/player_service.dart::PlayerService.refreshAlbumTail.closure#1.append.closure#1",
+              );
+              return track.id == last.id;
+            });
             if (anchor != loadedCount - 1) {
               throw const XmlyException('catalogue_changed', '专辑末页发生变化，请刷新后重试');
             }
@@ -1687,15 +2613,20 @@ class PlayerService {
             loadedCount < xmlyAlbumPageSize ||
             loadedPage == 5000 ~/ xmlyAlbumPageSize;
         final page = samePage ? loadedPage : loadedPage + 1;
-        final result = await _admission(
-          request,
-          () => _albumPage(client, album, page),
-        );
+        final result = await _admission(request, () {
+          AppLog.instance.trace(
+            "lib/services/player_service.dart::PlayerService.refreshAlbumTail.closure#1.closure#2",
+          );
+          return _albumPage(client, album, page);
+        });
         if (!active()) return;
         if (officialPosition == null) {
-          final anchor = result.tracks.indexWhere(
-            (track) => track.id == last.id,
-          );
+          final anchor = result.tracks.indexWhere((track) {
+            AppLog.instance.trace(
+              "lib/services/player_service.dart::PlayerService.refreshAlbumTail.closure#1.closure#3",
+            );
+            return track.id == last.id;
+          });
           if (anchor < 0) {
             throw const XmlyException(
               'catalogue_changed',
@@ -1709,10 +2640,12 @@ class PlayerService {
         if (samePage &&
             result.tracks.length == xmlyAlbumPageSize &&
             result.total > page * xmlyAlbumPageSize) {
-          final following = await _admission(
-            request,
-            () => _albumPage(client, album, page + 1),
-          );
+          final following = await _admission(request, () {
+            AppLog.instance.trace(
+              "lib/services/player_service.dart::PlayerService.refreshAlbumTail.closure#1.closure#4",
+            );
+            return _albumPage(client, album, page + 1);
+          });
           if (!active()) return;
           if (following.tracks.isEmpty && following.total == 0) {
             throw const XmlyException('invalid_album', '专辑分页未能继续，请刷新后重试');
@@ -1720,6 +2653,10 @@ class PlayerService {
           append(following, samePage: false);
         }
         await _commands.synchronized(() async {
+          AppLog.instance.trace(
+            "lib/services/player_service.dart::PlayerService.refreshAlbumTail.closure#1.closure#5",
+          );
+
           if (!active()) return;
           final next = added.isEmpty ? snapshot : [...snapshot, ...added];
           if (added.isNotEmpty ||
@@ -1745,7 +2682,7 @@ class PlayerService {
               _endAdvanceIntent == _advanceIntent &&
               current?.id == last.id &&
               cursor + 1 < _queue.length &&
-              !_sleepStopped &&
+              !_sleepStopping &&
               !_manualPaused &&
               effectiveSettings.autoNext &&
               effectiveSettings.loopMode != 'single') {
@@ -1754,10 +2691,15 @@ class PlayerService {
               await _sleep(sleep);
               return;
             }
-            await _run(() => _select(cursor + 1, _newRequest()));
+            await _run(() {
+              AppLog.instance.trace(
+                "lib/services/player_service.dart::PlayerService.refreshAlbumTail.closure#1.closure#5.closure#1",
+              );
+              return _select(cursor + 1, _newRequest());
+            });
           }
         });
-      } catch (failure) {
+      } catch (failure, stack) {
         if (_epoch == endEpoch &&
             _tailGeneration == expectedGeneration &&
             _tailRequest == request)
@@ -1766,10 +2708,11 @@ class PlayerService {
         if (speculative &&
             (!_atEnd ||
                 _manualPaused ||
-                _sleepStopped ||
+                _sleepStopping ||
                 endEpoch != _epoch ||
                 advanceIntent != _advanceIntent))
           rethrow;
+        _recordFailure(failure, stack);
         error = _message(failure);
         status = '检查更新失败，请重试';
         _notify();
@@ -1783,14 +2726,22 @@ class PlayerService {
             _tailRequest == request)
           _checkedEpochs.remove(endEpoch);
       }
-    }();
+    });
     _tailFlight = flight;
     unawaited(
       flight.then(
         (_) {
+          AppLog.instance.trace(
+            "lib/services/player_service.dart::PlayerService.refreshAlbumTail.closure#2",
+          );
+
           if (identical(_tailFlight, flight)) _tailFlight = null;
         },
         onError: (Object _, StackTrace __) {
+          AppLog.instance.trace(
+            "lib/services/player_service.dart::PlayerService.refreshAlbumTail.closure#3",
+          );
+
           if (identical(_tailFlight, flight)) _tailFlight = null;
         },
       ),
@@ -1799,11 +2750,31 @@ class PlayerService {
   }
 
   void setSleep(SleepRequest request) {
+    AppLog.instance.trace(
+      "lib/services/player_service.dart::PlayerService.setSleep",
+    );
+
+    if (AppLog.instance.level == AppLogLevel.debug) {
+      _command('setSleep', {
+        'mode': request.mode.name,
+        'minutes': request.minutes,
+        'action': request.action.name,
+      });
+    }
+    ++_sleepRevision;
+    _pendingSleepRevision = null;
     policy.armSleep(request);
     _notify();
   }
 
   void cancelSleep() {
+    AppLog.instance.trace(
+      "lib/services/player_service.dart::PlayerService.cancelSleep",
+    );
+
+    if (AppLog.instance.level == AppLogLevel.debug) _command('cancelSleep');
+    ++_sleepRevision;
+    _pendingSleepRevision = null;
     policy.cancelSleep();
     _notify();
   }
@@ -1812,28 +2783,36 @@ class PlayerService {
     SleepAction action, {
     bool invalidateRequest = true,
   }) async {
+    AppLog.instance.trace(
+      "lib/services/player_service.dart::PlayerService._sleep",
+    );
+
+    final revision = _sleepRevision;
     if (invalidateRequest) _newRequest();
     _sleepStopped = true;
-    try {
-      await _pause(sleep: true);
-    } on XmlyException catch (error) {
-      if (action != SleepAction.exit ||
-          error.code != 'usage_uncertain' ||
-          !ledger.hasUnverifiableReport(_progressIdentity)) {
-        rethrow;
-      }
-    }
+    await _pause(sleep: true);
+    // Cancellation or replacement revokes an expiry still saving its pause.
+    if (revision != _sleepRevision) return;
     status = '定时已结束';
     _notify();
     if (action == SleepAction.exit) {
       // Called outside the command lock: normal application close quiesces us.
       final exit = exitApplication;
       if (exit == null) throw StateError('未配置应用退出处理');
-      scheduleMicrotask(() => _background(exit));
+      scheduleMicrotask(() {
+        AppLog.instance.trace(
+          "lib/services/player_service.dart::PlayerService._sleep.closure#1",
+        );
+        if (revision == _sleepRevision) _background(exit);
+      });
     }
   }
 
   Future<void> _saveProgress({bool terminal = false, bool sync = true}) async {
+    AppLog.instance.trace(
+      "lib/services/player_service.dart::PlayerService._saveProgress",
+    );
+
     final track = current;
     if (track == null || _source == null || !_actual) return;
     final actualPosition = _observedPosition;
@@ -1846,10 +2825,16 @@ class PlayerService {
         (previous?.position != actualPosition ||
             previous?.updatedAt != observedAt)) {
       await storage.transaction((state) {
-        final library = (state['library'] as Map).putIfAbsent(
-          identity,
-          () => <String, dynamic>{},
-        ) as Map;
+        AppLog.instance.trace(
+          "lib/services/player_service.dart::PlayerService._saveProgress.closure#1",
+        );
+
+        final library = (state['library'] as Map).putIfAbsent(identity, () {
+          AppLog.instance.trace(
+            "lib/services/player_service.dart::PlayerService._saveProgress.closure#1.closure#1",
+          );
+          return <String, dynamic>{};
+        }) as Map;
         final existing = library['playbackProgress'];
         final progress = existing is Map
             ? Map<String, dynamic>.from(existing)
@@ -1872,6 +2857,10 @@ class PlayerService {
   }
 
   Future<void> retryHistory() async {
+    AppLog.instance.trace(
+      "lib/services/player_service.dart::PlayerService.retryHistory",
+    );
+
     try {
       await _official.flush(retry: true);
     } finally {
@@ -1879,191 +2868,405 @@ class PlayerService {
     }
   }
 
-  Future<void> setMasterVolume(double value) =>
-      _updateMasterVolume(value: value, muted: false);
+  Future<void> setMasterVolume(double value) {
+    AppLog.instance.trace(
+      "lib/services/player_service.dart::PlayerService.setMasterVolume",
+    );
 
-  Future<void> setMasterMuted(bool value) => _updateMasterVolume(muted: value);
+    if (AppLog.instance.level == AppLogLevel.debug) {
+      _command('setMasterVolume', {'volume': value});
+    }
+    return _updateMasterVolume(value: value, muted: false);
+  }
 
-  Future<void> _updateMasterVolume({double? value, required bool muted}) =>
-      _commands.synchronized(() async {
-        if (_closed) throw StateError('播放器已关闭');
-        if (value != null && (!value.isFinite || value < 0 || value > 100)) {
-          throw const FormatException('主音量必须在 0–100 之间');
-        }
-        await storage.transaction((state) {
-          final settings = state['settings'] as Map;
-          final playback = settings.putIfAbsent(
-            'playback',
-            () => <String, dynamic>{},
-          ) as Map;
-          if (value != null) playback['masterVolume'] = value;
-          playback['masterMuted'] = muted;
-        });
+  Future<void> setMasterMuted(bool value) {
+    AppLog.instance.trace(
+      "lib/services/player_service.dart::PlayerService.setMasterMuted",
+    );
+
+    if (AppLog.instance.level == AppLogLevel.debug) {
+      _command('setMasterMuted', {'muted': value});
+    }
+    return _updateMasterVolume(muted: value);
+  }
+
+  Future<void> _updateMasterVolume({double? value, required bool muted}) {
+    AppLog.instance.trace(
+      "lib/services/player_service.dart::PlayerService._updateMasterVolume",
+    );
+    return _commands.synchronized(() async {
+      AppLog.instance.trace(
+        "lib/services/player_service.dart::PlayerService._updateMasterVolume.closure#1",
+      );
+
+      if (_closed) throw StateError('播放器已关闭');
+      if (value != null && (!value.isFinite || value < 0 || value > 100)) {
+        throw const FormatException('主音量必须在 0–100 之间');
+      }
+      await storage.transaction((state) {
+        AppLog.instance.trace(
+          "lib/services/player_service.dart::PlayerService._updateMasterVolume.closure#1.closure#1",
+        );
+
+        final settings = state['settings'] as Map;
+        final playback = settings.putIfAbsent('playback', () {
+          AppLog.instance.trace(
+            "lib/services/player_service.dart::PlayerService._updateMasterVolume.closure#1.closure#1.closure#1",
+          );
+          return <String, dynamic>{};
+        }) as Map;
+        if (value != null) playback['masterVolume'] = value;
+        playback['masterMuted'] = muted;
+      });
+      final settings = effectiveSettings;
+      policy.updateSettings(settings);
+      final nextVolume = settings.outputVolume;
+      await _driver.setVolume(nextVolume);
+      volume = nextVolume;
+      _notify();
+    });
+  }
+
+  Future<void> applySettings({bool updateSource = true}) {
+    AppLog.instance.trace(
+      "lib/services/player_service.dart::PlayerService.applySettings",
+    );
+    return _run(() {
+      AppLog.instance.trace(
+        "lib/services/player_service.dart::PlayerService.applySettings.closure#1",
+      );
+      return _commands.synchronized(() async {
+        AppLog.instance.trace(
+          "lib/services/player_service.dart::PlayerService.applySettings.closure#1.closure#1",
+        );
+
         final settings = effectiveSettings;
+        if (AppLog.instance.level == AppLogLevel.debug) {
+          _command('applySettings', {
+            'updateSource': updateSource,
+            'speed': settings.speed,
+            'volume': settings.outputVolume,
+            'listenAndDownload': settings.listenAndDownload,
+            'loopMode': settings.loopMode,
+            'autoNext': settings.autoNext,
+            'quality': (_settings['download'] as Map?)?['quality'],
+          });
+        }
+        final wasDownload = sourceKind == 'prepaid' || sourceKind == 'local';
         policy.updateSettings(settings);
-        final nextVolume = settings.outputVolume;
-        await _driver.setVolume(nextVolume);
-        volume = nextVolume;
+        await ledger.sampleCurrentState();
+        await _driver.setRate(settings.speed);
+        rate = settings.speed;
+        await ledger.sampleCurrentState(speed: rate);
+        volume = settings.outputVolume;
+        await _driver.setVolume(volume);
+        if (updateSource &&
+            _source != null &&
+            settings.listenAndDownload &&
+            !wasDownload) {
+          final saved = position, wasPlaying = playing;
+          await _pause();
+          await ledger.stopWatch();
+          await _openCurrent(
+            _newRequest(),
+            resumePosition: saved,
+            manualReplay: _manualChapterPosition,
+            startPlaying: wasPlaying,
+          );
+        }
         _notify();
       });
+    });
+  }
 
-  Future<void> applySettings({bool updateSource = true}) => _run(
-    () => _commands.synchronized(() async {
-      final settings = effectiveSettings;
-      final wasDownload = sourceKind == 'prepaid' || sourceKind == 'local';
-      policy.updateSettings(settings);
-      await ledger.sampleCurrentState();
-      await _driver.setRate(settings.speed);
-      rate = settings.speed;
-      await ledger.sampleCurrentState(speed: rate);
-      volume = settings.outputVolume;
-      await _driver.setVolume(volume);
-      if (updateSource &&
-          _source != null &&
-          settings.listenAndDownload &&
-          !wasDownload) {
-        final saved = position, wasPlaying = playing;
-        await _pause();
-        await ledger.stopWatch();
-        await _openCurrent(
-          _newRequest(),
-          resumePosition: saved,
-          manualReplay: _manualChapterPosition,
-          startPlaying: wasPlaying,
+  Future<void> playNext(Track track) {
+    AppLog.instance.trace(
+      "lib/services/player_service.dart::PlayerService.playNext",
+    );
+    return _run(() {
+      AppLog.instance.trace(
+        "lib/services/player_service.dart::PlayerService.playNext.closure#1",
+      );
+      return _commands.synchronized(() async {
+        AppLog.instance.trace(
+          "lib/services/player_service.dart::PlayerService.playNext.closure#1.closure#1",
         );
-      }
-      _notify();
-    }),
-  );
 
-  Future<void> playNext(Track track) => _run(
-    () => _commands.synchronized(() async {
-      final selected = current?.id;
-      if (track.id == selected) return;
-      final next = List<Track>.from(_queue);
-      final existing = next.indexWhere((item) => item.id == track.id);
-      if (existing < 0 && next.length >= 5000) {
-        throw const XmlyException('queue_full', '队列最多 5000 集');
-      }
-      final target = existing < 0 ? track : next.removeAt(existing);
-      final index = next.indexWhere((item) => item.id == selected);
-      next.insert(index + 1, target);
-      final cursorIndex = index < 0 ? 0 : index;
-      await _saveQueue(next, cursorIndex, '');
-      _queue = next;
-      cursor = cursorIndex;
-      if (selected == null) duration = current?.duration ?? 0;
-      sourceAlbumId = '';
-      ++generation;
-      _notify();
-    }),
-  );
+        if (AppLog.instance.level == AppLogLevel.debug) {
+          _command('playNext', {'trackId': track.id, 'albumId': track.albumId});
+        }
+        final selected = current?.id;
+        if (track.id == selected) return;
+        final next = List<Track>.from(_queue);
+        final existing = next.indexWhere((item) {
+          AppLog.instance.trace(
+            "lib/services/player_service.dart::PlayerService.playNext.closure#1.closure#1.closure#1",
+          );
+          return item.id == track.id;
+        });
+        if (existing < 0 && next.length >= 5000) {
+          throw const XmlyException('queue_full', '队列最多 5000 集');
+        }
+        final target = existing < 0 ? track : next.removeAt(existing);
+        final index = next.indexWhere((item) {
+          AppLog.instance.trace(
+            "lib/services/player_service.dart::PlayerService.playNext.closure#1.closure#1.closure#2",
+          );
+          return item.id == selected;
+        });
+        next.insert(index + 1, target);
+        final cursorIndex = index < 0 ? 0 : index;
+        await _saveQueue(next, cursorIndex, '');
+        _queue = next;
+        cursor = cursorIndex;
+        if (selected == null) duration = current?.duration ?? 0;
+        sourceAlbumId = '';
+        ++generation;
+        _notify();
+      });
+    });
+  }
 
-  Future<void> addToQueue(Track track) => _run(
-    () => _commands.synchronized(() async {
-      final selected = current?.id;
-      if (_queue.any((item) => item.id == track.id)) return;
-      if (_queue.length >= 5000)
-        throw const XmlyException('queue_full', '队列最多 5000 集');
-      final next = [..._queue, track], index = cursor < 0 ? 0 : cursor;
-      await _saveQueue(next, index, '');
-      _queue = next;
-      cursor = index;
-      if (selected == null) duration = current?.duration ?? 0;
-      sourceAlbumId = '';
-      ++generation;
-      _notify();
-    }),
-  );
-  Future<void> removeQueueItem(int index) => _run(() async {
-    RangeError.checkValidIndex(index, _queue);
-    final trackId = _queue[index].id;
-    // Only removing the current track cancels its pending admission. Editing
-    // another row must not abandon a valid automatic or manual track load.
-    if (trackId == current?.id) _newRequest();
-    await _commands.synchronized(() async {
-      index = _queue.indexWhere((track) => track.id == trackId);
-      if (index < 0) return;
-      final next = List<Track>.from(_queue)..removeAt(index);
-      final removedCurrent = index == cursor;
-      var selected = cursor;
-      if (removedCurrent) {
+  Future<void> addToQueue(Track track) {
+    AppLog.instance.trace(
+      "lib/services/player_service.dart::PlayerService.addToQueue",
+    );
+    return _run(() {
+      AppLog.instance.trace(
+        "lib/services/player_service.dart::PlayerService.addToQueue.closure#1",
+      );
+      return _commands.synchronized(() async {
+        AppLog.instance.trace(
+          "lib/services/player_service.dart::PlayerService.addToQueue.closure#1.closure#1",
+        );
+
+        if (AppLog.instance.level == AppLogLevel.debug) {
+          _command('addToQueue', {
+            'trackId': track.id,
+            'albumId': track.albumId,
+          });
+        }
+        final selected = current?.id;
+        if (_queue.any((item) {
+          AppLog.instance.trace(
+            "lib/services/player_service.dart::PlayerService.addToQueue.closure#1.closure#1.closure#1",
+          );
+          return item.id == track.id;
+        }))
+          return;
+        if (_queue.length >= 5000)
+          throw const XmlyException('queue_full', '队列最多 5000 集');
+        final next = [..._queue, track], index = cursor < 0 ? 0 : cursor;
+        await _saveQueue(next, index, '');
+        _queue = next;
+        cursor = index;
+        if (selected == null) duration = current?.duration ?? 0;
+        sourceAlbumId = '';
+        ++generation;
+        _notify();
+      });
+    });
+  }
+
+  Future<void> removeQueueItem(int index) {
+    AppLog.instance.trace(
+      "lib/services/player_service.dart::PlayerService.removeQueueItem",
+    );
+    return _run(() async {
+      AppLog.instance.trace(
+        "lib/services/player_service.dart::PlayerService.removeQueueItem.closure#1",
+      );
+
+      if (AppLog.instance.level == AppLogLevel.debug) {
+        _command('removeQueueItem', {
+          'index': index,
+          if (index >= 0 && index < _queue.length)
+            'targetTrackId': _queue[index].id,
+        });
+      }
+      RangeError.checkValidIndex(index, _queue);
+      final trackId = _queue[index].id;
+      // Only removing the current track cancels its pending admission. Editing
+      // another row must not abandon a valid automatic or manual track load.
+      if (trackId == current?.id) _newRequest();
+      await _commands.synchronized(() async {
+        AppLog.instance.trace(
+          "lib/services/player_service.dart::PlayerService.removeQueueItem.closure#1.closure#1",
+        );
+
+        index = _queue.indexWhere((track) {
+          AppLog.instance.trace(
+            "lib/services/player_service.dart::PlayerService.removeQueueItem.closure#1.closure#1.closure#1",
+          );
+          return track.id == trackId;
+        });
+        if (index < 0) return;
+        final next = List<Track>.from(_queue)..removeAt(index);
+        final removedCurrent = index == cursor;
+        var selected = cursor;
+        if (removedCurrent) {
+          await _stopSource();
+          selected = index
+              .clamp(0, next.length - 1 < 0 ? 0 : next.length - 1)
+              .toInt();
+        } else if (index < cursor) {
+          selected--;
+        }
+        if (next.isEmpty) selected = -1;
+        await _saveQueue(next, selected, '');
+        _queue = next;
+        cursor = selected;
+        sourceAlbumId = '';
+        if (removedCurrent) {
+          _completedTrackId = null;
+          position = 0;
+          duration = current?.duration ?? 0;
+        }
+        ++generation;
+        _notify();
+      });
+    });
+  }
+
+  Future<void> moveQueueItem(int from, int to) {
+    AppLog.instance.trace(
+      "lib/services/player_service.dart::PlayerService.moveQueueItem",
+    );
+    return _run(() async {
+      AppLog.instance.trace(
+        "lib/services/player_service.dart::PlayerService.moveQueueItem.closure#1",
+      );
+
+      if (AppLog.instance.level == AppLogLevel.debug) {
+        _command('moveQueueItem', {
+          'from': from,
+          'to': to,
+          if (from >= 0 && from < _queue.length)
+            'targetTrackId': _queue[from].id,
+          if (to >= 0 && to < _queue.length) 'anchorTrackId': _queue[to].id,
+        });
+      }
+      RangeError.checkValidIndex(from, _queue);
+      RangeError.checkValidIndex(to, _queue);
+      if (from == to) return;
+      final trackId = _queue[from].id, anchorId = _queue[to].id;
+      final insertAfter = from < to;
+      await _commands.synchronized(() async {
+        AppLog.instance.trace(
+          "lib/services/player_service.dart::PlayerService.moveQueueItem.closure#1.closure#1",
+        );
+
+        from = _queue.indexWhere((track) {
+          AppLog.instance.trace(
+            "lib/services/player_service.dart::PlayerService.moveQueueItem.closure#1.closure#1.closure#1",
+          );
+          return track.id == trackId;
+        });
+        if (from < 0 ||
+            !_queue.any((track) {
+              AppLog.instance.trace(
+                "lib/services/player_service.dart::PlayerService.moveQueueItem.closure#1.closure#1.closure#2",
+              );
+              return track.id == anchorId;
+            }))
+          return;
+        final selected = current?.id;
+        final next = List<Track>.from(_queue);
+        final moved = next.removeAt(from);
+        final anchor = next.indexWhere((track) {
+          AppLog.instance.trace(
+            "lib/services/player_service.dart::PlayerService.moveQueueItem.closure#1.closure#1.closure#3",
+          );
+          return track.id == anchorId;
+        });
+        next.insert(anchor + (insertAfter ? 1 : 0), moved);
+        final index = next.indexWhere((item) {
+          AppLog.instance.trace(
+            "lib/services/player_service.dart::PlayerService.moveQueueItem.closure#1.closure#1.closure#4",
+          );
+          return item.id == selected;
+        });
+        await _saveQueue(next, index, '');
+        _queue = next;
+        cursor = index;
+        sourceAlbumId = '';
+        ++generation;
+        _notify();
+      });
+    });
+  }
+
+  Future<void> clearQueue() {
+    AppLog.instance.trace(
+      "lib/services/player_service.dart::PlayerService.clearQueue",
+    );
+    return _run(() async {
+      AppLog.instance.trace(
+        "lib/services/player_service.dart::PlayerService.clearQueue.closure#1",
+      );
+
+      if (AppLog.instance.level == AppLogLevel.debug) _command('clearQueue');
+      _newRequest();
+      await _commands.synchronized(() async {
+        AppLog.instance.trace(
+          "lib/services/player_service.dart::PlayerService.clearQueue.closure#1.closure#1",
+        );
+
         await _stopSource();
-        selected = index
-            .clamp(0, next.length - 1 < 0 ? 0 : next.length - 1)
-            .toInt();
-      } else if (index < cursor) {
-        selected--;
-      }
-      if (next.isEmpty) selected = -1;
-      await _saveQueue(next, selected, '');
-      _queue = next;
-      cursor = selected;
-      sourceAlbumId = '';
-      if (removedCurrent) {
+        await _saveQueue([], -1, '');
+        _queue = [];
+        cursor = -1;
+        sourceAlbumId = '';
+        ++generation;
+        _completedTrackId = null;
         position = 0;
-        duration = current?.duration ?? 0;
-      }
-      ++generation;
-      _notify();
+        duration = 0;
+        _notify();
+      });
     });
-  });
-  Future<void> moveQueueItem(int from, int to) => _run(() async {
-    RangeError.checkValidIndex(from, _queue);
-    RangeError.checkValidIndex(to, _queue);
-    if (from == to) return;
-    final trackId = _queue[from].id, anchorId = _queue[to].id;
-    final insertAfter = from < to;
-    await _commands.synchronized(() async {
-      from = _queue.indexWhere((track) => track.id == trackId);
-      if (from < 0 || !_queue.any((track) => track.id == anchorId)) return;
-      final selected = current?.id;
-      final next = List<Track>.from(_queue);
-      final moved = next.removeAt(from);
-      final anchor = next.indexWhere((track) => track.id == anchorId);
-      next.insert(anchor + (insertAfter ? 1 : 0), moved);
-      final index = next.indexWhere((item) => item.id == selected);
-      await _saveQueue(next, index, '');
-      _queue = next;
-      cursor = index;
-      sourceAlbumId = '';
-      ++generation;
-      _notify();
-    });
-  });
-  Future<void> clearQueue() => _run(() async {
-    _newRequest();
-    await _commands.synchronized(() async {
-      await _stopSource();
-      await _saveQueue([], -1, '');
-      _queue = [];
-      cursor = -1;
-      sourceAlbumId = '';
-      ++generation;
-      position = 0;
-      duration = 0;
-      _notify();
-    });
-  });
+  }
 
   Future<void> _library(void Function(Map library) update) async {
+    AppLog.instance.trace(
+      "lib/services/player_service.dart::PlayerService._library",
+    );
+
     final identity = libraryIdentity;
     await storage.transaction((state) {
-      final library = (state['library'] as Map).putIfAbsent(
-        identity,
-        () => <String, dynamic>{},
-      ) as Map;
+      AppLog.instance.trace(
+        "lib/services/player_service.dart::PlayerService._library.closure#1",
+      );
+
+      final library = (state['library'] as Map).putIfAbsent(identity, () {
+        AppLog.instance.trace(
+          "lib/services/player_service.dart::PlayerService._library.closure#1.closure#1",
+        );
+        return <String, dynamic>{};
+      }) as Map;
       update(library);
     });
     _notify();
   }
 
   Future<void> bookmark() async {
+    AppLog.instance.trace(
+      "lib/services/player_service.dart::PlayerService.bookmark",
+    );
+
     final track = current;
     if (track == null) return;
     final savedPosition = position;
     await _library((library) {
-      (library.putIfAbsent('bookmarks', () => <dynamic>[]) as List).add({
+      AppLog.instance.trace(
+        "lib/services/player_service.dart::PlayerService.bookmark.closure#1",
+      );
+
+      (library.putIfAbsent('bookmarks', () {
+        AppLog.instance.trace(
+          "lib/services/player_service.dart::PlayerService.bookmark.closure#1.closure#1",
+        );
+        return <dynamic>[];
+      }) as List).add({
         'track': track.toJson(),
         'position': savedPosition,
         'createdAt': _clock().millisecondsSinceEpoch,
@@ -2072,6 +3275,10 @@ class PlayerService {
   }
 
   Future<void> _downloadChanged() async {
+    AppLog.instance.trace(
+      "lib/services/player_service.dart::PlayerService._downloadChanged",
+    );
+
     final id = currentTaskId;
     if (id == null || sourceKind == 'local') return;
     final task = downloads.task(id);
@@ -2083,7 +3290,7 @@ class PlayerService {
     if (task.state == DownloadState.paused ||
         task.state == DownloadState.failed) {
       await _driver.pause();
-      playing = false;
+      _setPlaying(false);
       await ledger.observe(playing: false, buffering: buffering, speed: rate);
       await _saveProgress(terminal: true);
       _notify();
@@ -2091,6 +3298,10 @@ class PlayerService {
   }
 
   Future<void> _release() async {
+    AppLog.instance.trace(
+      "lib/services/player_service.dart::PlayerService._release",
+    );
+
     final source = _source;
     _source = null;
     _cloudResumeEpoch = null;
@@ -2099,12 +3310,15 @@ class PlayerService {
 
   Future<void> _stopSource({
     bool preserveUnknown = false,
-    bool exiting = false,
     Track? localTarget,
   }) async {
+    AppLog.instance.trace(
+      "lib/services/player_service.dart::PlayerService._stopSource",
+    );
+
     _endSeekPosition = null;
     await _driver.pause();
-    playing = false;
+    _setPlaying(false);
     if (preserveUnknown ||
         (ledger.needsRestart &&
             localTarget != null &&
@@ -2117,36 +3331,51 @@ class PlayerService {
         await _saveProgress(terminal: true);
         await ledger.stopWatch();
       } on XmlyException catch (error) {
-        final preserveOnExit =
-            exiting &&
-            error.code == 'usage_uncertain' &&
-            ledger.hasUnverifiableReport(_progressIdentity);
-        if (!preserveOnExit &&
-            (!const {
-                  'usage_uncertain',
-                  'insufficient_quota',
-                }.contains(error.code) ||
-                localTarget == null ||
-                await _downloaded(localTarget) == null)) {
+        if (!const {
+              'usage_uncertain',
+              'insufficient_quota',
+            }.contains(error.code) ||
+            localTarget == null ||
+            await _downloaded(localTarget) == null) {
           rethrow;
         }
-        // Exit or a verified local source needs no new debit. Save the watch
-        // without changing any pending operation or receipt.
+        // A verified local source needs no new debit. Save the watch without
+        // changing any pending operation or receipt.
         await ledger.captureForRestore();
-        await _saveProgress(terminal: true, sync: preserveOnExit);
+        await _saveProgress(terminal: true, sync: false);
       }
     }
     await _driver.stop();
+    if (_source != null) {
+      AppLog.instance.write(
+        AppLogLevel.info,
+        'player',
+        'Playback stopped',
+        data: {'trackId': current?.id, 'epoch': _epoch},
+      );
+    }
     ++_epoch;
     await _release();
     buffering = false;
     _actual = false;
+    _pendingDurationPosition = null;
   }
 
   Future<void> stopTaskReference(String taskId) async {
+    AppLog.instance.trace(
+      "lib/services/player_service.dart::PlayerService.stopTaskReference",
+    );
+
+    if (AppLog.instance.level == AppLogLevel.debug) {
+      _command('stopTaskReference', {'taskId': taskId});
+    }
     if (currentTaskId != taskId) return;
     _newRequest();
     await _commands.synchronized(() async {
+      AppLog.instance.trace(
+        "lib/services/player_service.dart::PlayerService.stopTaskReference.closure#1",
+      );
+
       if (currentTaskId == taskId) {
         await _stopSource();
         _notify();
@@ -2154,21 +3383,40 @@ class PlayerService {
     });
   }
 
-  Future<void> quiesce({
-    bool preserveUnknown = false,
-    bool exiting = false,
-  }) async {
+  Future<void> quiesce({bool preserveUnknown = false}) async {
+    AppLog.instance.trace(
+      "lib/services/player_service.dart::PlayerService.quiesce",
+    );
+
+    if (AppLog.instance.level == AppLogLevel.debug) {
+      _command('quiesce', {'preserveUnknown': preserveUnknown});
+    }
     if (_closed) return;
     _newRequest();
     await _commands.synchronized(() async {
-      await _stopSource(preserveUnknown: preserveUnknown, exiting: exiting);
+      AppLog.instance.trace(
+        "lib/services/player_service.dart::PlayerService.quiesce.closure#1",
+      );
+
+      await _stopSource(preserveUnknown: preserveUnknown);
       _notify();
     });
   }
 
   Future<void> close({bool quiesced = false}) {
+    AppLog.instance.trace(
+      "lib/services/player_service.dart::PlayerService.close",
+    );
+
+    if (AppLog.instance.level == AppLogLevel.debug) {
+      _command('close', {'quiesced': quiesced});
+    }
     final steps = _closeSteps ??= CloseSequence([
       () async {
+        AppLog.instance.trace(
+          "lib/services/player_service.dart::PlayerService.close.closure#1",
+        );
+
         if (!quiesced) await quiesce();
         _timer?.cancel();
         await _official.close();
@@ -2178,6 +3426,10 @@ class PlayerService {
       _downloadEvents.cancel,
       _driver.close,
       () async {
+        AppLog.instance.trace(
+          "lib/services/player_service.dart::PlayerService.close.closure#2",
+        );
+
         try {
           await _proxyOpening;
         } catch (_) {
@@ -2186,6 +3438,10 @@ class PlayerService {
         await _proxy?.close();
       },
       () async {
+        AppLog.instance.trace(
+          "lib/services/player_service.dart::PlayerService.close.closure#3",
+        );
+
         await _changes.close();
       },
     ]);

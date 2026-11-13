@@ -11,6 +11,7 @@ import android.os.Looper
 import android.os.PowerManager
 import android.os.ResultReceiver
 import android.provider.Settings
+import android.provider.DocumentsContract
 import android.widget.Toast
 import android.content.Intent
 import android.os.StatFs
@@ -25,10 +26,26 @@ import io.flutter.plugin.common.MethodChannel
 import io.flutter.plugin.common.StandardMethodCodec
 import java.io.File
 import java.io.FileDescriptor
+import java.io.EOFException
+import java.io.FileInputStream
+import java.io.OutputStream
+import java.util.concurrent.atomic.AtomicBoolean
 
 class MainActivity : AudioServiceActivity() {
     private var notificationPermissionResult: MethodChannel.Result? = null
     private val notificationPermissionRequest = 2102
+    private val logExportRequest = 2103
+    private var pendingLogExport: LogExport? = null
+
+    private class LogExport(
+        val result: MethodChannel.Result,
+        val sourcePath: String?,
+        val length: Long,
+        val tailPath: String?,
+        val warningPrefix: ByteArray
+    ) {
+        val cancelled = AtomicBoolean(false)
+    }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -63,6 +80,37 @@ class MainActivity : AudioServiceActivity() {
                             }
                             startActivity(Intent.createChooser(intent, "打开音频"))
                             result.success(null)
+                        }
+                        "claimLogUploadPrompt" -> result.success(XMPlusApplication.claimLogUploadPrompt())
+                        "exportLogSnapshot" -> {
+                            if (pendingLogExport != null) {
+                                result.error("log_export_pending", "日志导出尚未结束", null)
+                            } else {
+                                val sourcePath = call.argument<String>("sourcePath")
+                                val tailPath = call.argument<String>("tailPath")
+                                val lengthValue = requireNotNull(call.argument<Number>("length"))
+                                require(lengthValue is Int || lengthValue is Long) { "Invalid snapshot length" }
+                                val length = lengthValue.toLong()
+                                require(length >= 0 && (sourcePath != null || length == 0L))
+                                sourcePath?.let { require(length <= checkedLogFile(it, false).length()) }
+                                tailPath?.let { checkedLogFile(it, true) }
+                                val fileName = requireNotNull(call.argument<String>("fileName"))
+                                require(fileName.matches(Regex("XMPlus-[A-Za-z0-9_-]+\\.log"))) { "Invalid log filename" }
+                                val warning = (call.argument<String>("warningPrefix") ?: "").toByteArray(Charsets.UTF_8)
+                                require(warning.size <= 64 * 1024) { "Log warning exceeds 64 KiB" }
+                                val pending = LogExport(result, sourcePath, length, tailPath, warning)
+                                pendingLogExport = pending
+                                try {
+                                    startActivityForResult(Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+                                        addCategory(Intent.CATEGORY_OPENABLE)
+                                        type = "text/plain"
+                                        putExtra(Intent.EXTRA_TITLE, fileName)
+                                    }, logExportRequest)
+                                } catch (error: Exception) {
+                                    pendingLogExport = null
+                                    throw error
+                                }
+                            }
                         }
                         else -> result.notImplemented()
                     }
@@ -244,6 +292,109 @@ class MainActivity : AudioServiceActivity() {
         }
     }
 
+    /** Only app-owned ordinary files directly below the two fixed roots. */
+    private fun checkedLogFile(path: String, tail: Boolean): File {
+        val directory = if (tail) cacheDir else File(filesDir, "logs")
+        require(OsConstants.S_ISDIR(Os.lstat(directory.path).st_mode)) { "Invalid log directory" }
+        val file = File(path)
+        require(file.isAbsolute &&
+            (file.parentFile == directory.absoluteFile || file.parentFile == directory.canonicalFile) &&
+            file.canonicalFile == File(directory.canonicalFile, file.name)) { "Log path is outside its allowed directory" }
+        require(OsConstants.S_ISREG(Os.lstat(file.path).st_mode)) { "Log path must be an ordinary file, not a link" }
+        if (tail) {
+            require(file.name.matches(Regex("xmplus-log-export-[A-Za-z0-9_-]+\\.tmp"))) { "Invalid log tail filename" }
+            require(file.length() <= 1024 * 1024 + 64 * 1024) { "Log tail exceeds its bounded size" }
+        } else {
+            require(file.name.matches(Regex("XMPlus-[A-Za-z0-9_-]+\\.log"))) { "Invalid source log filename" }
+        }
+        return file
+    }
+
+    private fun copyLogFile(path: String, tail: Boolean, length: Long?, output: OutputStream,
+                            buffer: ByteArray, pending: LogExport) {
+        val file = checkedLogFile(path, tail)
+        val fd = Os.open(file.path, OsConstants.O_RDONLY or OsConstants.O_NOFOLLOW, 0)
+        try {
+            FileInputStream(fd).use { input ->
+                val stat = Os.fstat(fd)
+                require(OsConstants.S_ISREG(stat.st_mode)) { "Log source is not a regular file" }
+                val count = length ?: stat.st_size
+                require(count >= 0 && count <= stat.st_size) { "Log snapshot length exceeds source" }
+                if (tail) require(count <= 1024 * 1024 + 64 * 1024)
+                var remaining = count
+                while (remaining > 0) {
+                    check(!pending.cancelled.get()) { "Log export cancelled" }
+                    val read = input.read(buffer, 0, minOf(remaining, buffer.size.toLong()).toInt())
+                    if (read < 0) throw EOFException("Log snapshot source was truncated")
+                    if (read == 0) continue
+                    output.write(buffer, 0, read)
+                    remaining -= read
+                }
+            }
+        } finally {
+            // Android's FileInputStream(FileDescriptor) does not own the fd.
+            if (fd.valid()) Os.close(fd)
+        }
+    }
+
+    private fun deleteIncompleteLog(uri: Uri) {
+        try {
+            DocumentsContract.deleteDocument(contentResolver, uri)
+        } catch (_: Exception) {
+            // Some providers cannot delete; never touch the source session log.
+        }
+    }
+
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        if (requestCode != logExportRequest) {
+            super.onActivityResult(requestCode, resultCode, data)
+            return
+        }
+        val pending = pendingLogExport
+        val uri = data?.data
+        if (pending == null) {
+            if (resultCode == RESULT_OK && uri != null) Thread { deleteIncompleteLog(uri) }.start()
+            return
+        }
+        if (resultCode != RESULT_OK) {
+            pendingLogExport = null
+            pending.result.success(null)
+            return
+        }
+        if (uri == null || uri.scheme != "content") {
+            pendingLogExport = null
+            pending.result.error("log_export", "文档提供方未返回有效的 content URI", null)
+            return
+        }
+        Thread {
+            var failure: Exception? = null
+            try {
+                check(!pending.cancelled.get()) { "Log export cancelled" }
+                requireNotNull(contentResolver.openOutputStream(uri, "wt")) { "Cannot open document output" }.use { output ->
+                    val buffer = ByteArray(64 * 1024)
+                    output.write(pending.warningPrefix)
+                    pending.sourcePath?.let { copyLogFile(it, false, pending.length, output, buffer, pending) }
+                    pending.tailPath?.let { copyLogFile(it, true, null, output, buffer, pending) }
+                    check(!pending.cancelled.get()) { "Log export cancelled" }
+                    output.flush()
+                }
+            } catch (error: Exception) {
+                failure = error
+            }
+            if (failure != null || pending.cancelled.get()) deleteIncompleteLog(uri)
+            val error = failure
+            runOnUiThread {
+                if (pendingLogExport === pending) {
+                    pendingLogExport = null
+                    if (error == null && !pending.cancelled.get()) pending.result.success(uri.toString())
+                    else pending.result.error("log_export", error?.message ?: "日志导出已取消", null)
+                } else {
+                    Thread { deleteIncompleteLog(uri) }.start()
+                }
+            }
+        }.start()
+    }
+
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         if (requestCode == notificationPermissionRequest) {
@@ -257,6 +408,11 @@ class MainActivity : AudioServiceActivity() {
     override fun onDestroy() {
         notificationPermissionResult?.success(false)
         notificationPermissionResult = null
+        pendingLogExport?.let {
+            it.cancelled.set(true)
+            it.result.error("log_export_destroyed", "Activity 已销毁，日志导出未完成", null)
+        }
+        pendingLogExport = null
         super.onDestroy()
     }
 }

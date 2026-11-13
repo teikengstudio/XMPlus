@@ -3,17 +3,23 @@ import 'dart:io';
 
 import 'package:dio/dio.dart';
 
-bool retryableStatus(int? status) =>
-    status == 408 ||
-    status == 425 ||
-    status == 429 ||
-    status != null &&
-        status >= 500 &&
-        status <= 599 &&
-        status != 501 &&
-        status != 505;
+import "app_log.dart";
+
+bool retryableStatus(int? status) {
+  AppLog.instance.trace("lib/services/network_retry.dart::retryableStatus");
+  return status == 408 ||
+      status == 425 ||
+      status == 429 ||
+      status != null &&
+          status >= 500 &&
+          status <= 599 &&
+          status != 501 &&
+          status != 505;
+}
 
 bool retryableTransport(Object error) {
+  AppLog.instance.trace("lib/services/network_retry.dart::retryableTransport");
+
   if (error is HandshakeException || error is TlsException) return false;
   if (error is DioException) {
     if (error.error is HandshakeException || error.error is TlsException) {
@@ -40,6 +46,8 @@ bool retryableTransport(Object error) {
 /// Parse the provider's cooldown without a policy-specific upper bound. Values
 /// beyond DateTime's range saturate only at the latest representable deadline.
 Duration? serverRetryAfter(String? value) {
+  AppLog.instance.trace("lib/services/network_retry.dart::serverRetryAfter");
+
   final text = value?.trim();
   if (text == null || text.isEmpty) return null;
   final now = DateTime.now().toUtc();
@@ -63,6 +71,8 @@ Duration? serverRetryAfter(String? value) {
 }
 
 Duration retryDelay(int attempt, String? retryAfter) {
+  AppLog.instance.trace("lib/services/network_retry.dart::retryDelay");
+
   final backoff = Duration(seconds: 1 << attempt);
   final server = serverRetryAfter(retryAfter) ?? Duration.zero;
   return server > backoff ? server : backoff;
@@ -74,8 +84,15 @@ Future<void> waitToRetry(
   Future<void>? closed,
   Future<void> Function()? checkpoint,
 }) async {
+  AppLog.instance.trace("lib/services/network_retry.dart::waitToRetry");
+
   final watch = Stopwatch()..start();
-  final closing = closed?.then<bool>((_) => true);
+  final closing = closed?.then<bool>((_) {
+    AppLog.instance.trace(
+      "lib/services/network_retry.dart::waitToRetry.closure#1",
+    );
+    return true;
+  });
   while (true) {
     await checkpoint?.call();
     final left = delay - watch.elapsed;
@@ -89,7 +106,12 @@ Future<void> waitToRetry(
     );
     try {
       final stopped = await Future.any<bool>([
-        ready.future.then((_) => false),
+        ready.future.then((_) {
+          AppLog.instance.trace(
+            "lib/services/network_retry.dart::waitToRetry.closure#2",
+          );
+          return false;
+        }),
         if (closing != null) closing,
       ]);
       if (stopped) throw StateError('HTTP client closed');

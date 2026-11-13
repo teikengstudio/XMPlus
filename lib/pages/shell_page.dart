@@ -10,14 +10,16 @@ import '../common/theme.dart';
 import '../common/widgets/adaptive_text.dart';
 import '../common/widgets/app_header.dart';
 import '../services/app_runtime.dart';
+import '../services/app_log.dart';
+import '../services/account_service.dart';
+import '../services/download_service.dart' show DownloadStopped;
+import '../storage/app_storage.dart';
 import '../services/update_service.dart';
 import 'settings_page.dart';
 import 'home_page.dart';
 import 'listening_page.dart';
-import 'usage_page.dart';
 import '../models/xmly_models.dart';
 import 'download_page.dart';
-import 'catalogue_page.dart';
 
 class ShellPage extends StatefulWidget {
   const ShellPage({
@@ -34,7 +36,10 @@ class ShellPage extends StatefulWidget {
   final VoidCallback? onTray;
 
   @override
-  State<ShellPage> createState() => _ShellPageState();
+  State<ShellPage> createState() {
+    AppLog.instance.trace("lib/pages/shell_page.dart::ShellPage.createState");
+    return _ShellPageState();
+  }
 }
 
 class _ShellPageState extends State<ShellPage> {
@@ -44,36 +49,115 @@ class _ShellPageState extends State<ShellPage> {
 
   @override
   void initState() {
+    AppLog.instance.trace(
+      "lib/pages/shell_page.dart::_ShellPageState.initState",
+    );
+
     super.initState();
     _updates = UpdateService(widget.runtime.storage);
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      AppLog.instance.trace(
+        "lib/pages/shell_page.dart::_ShellPageState.initState.closure#1",
+      );
+
       if (mounted) unawaited(_updates.check(context));
     });
   }
 
   @override
   void dispose() {
+    AppLog.instance.trace("lib/pages/shell_page.dart::_ShellPageState.dispose");
+
     _updates.dispose();
     super.dispose();
   }
 
-  Future<void> _download(List<Track> tracks) async {
-    if (_preparingDownload) return;
-    _preparingDownload = true;
-    try {
-      await requestDownloads(context, widget.runtime, tracks);
-    } catch (error) {
-      if (mounted)
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              error is XmlyException ? error.message : '下载未开始，请检查账号及下载目录',
+  Future<void> _download(List<Track> tracks) {
+    AppLog.instance.trace(
+      "lib/pages/shell_page.dart::_ShellPageState._download",
+    );
+    return AppLog.instance.runWithErrorScope(() async {
+      AppLog.instance.trace(
+        "lib/pages/shell_page.dart::_ShellPageState._download.closure#1",
+      );
+
+      if (_preparingDownload) return;
+      _preparingDownload = true;
+      try {
+        await requestDownloads(context, widget.runtime, tracks);
+      } catch (error, stack) {
+        final expected =
+            error is DownloadStopped ||
+            error is FormatException ||
+            (error is AccountException &&
+                const {
+                  'credential_missing',
+                  'missing',
+                  'paused',
+                  'closed',
+                  'not_loaded',
+                  'credential_mismatch',
+                  'archive_invalid',
+                  'quota_invalid',
+                  'unsettled',
+                }.contains(error.code)) ||
+            (error is StorageException &&
+                const {'too_large', 'secret_in_state'}.contains(error.code)) ||
+            (error is XmlyException &&
+                const {
+                  'invalid_credentials',
+                  'invalid_id',
+                  'invalid_quality',
+                  'login_required',
+                  'login_expired',
+                  'auth_required',
+                  'missing_account',
+                  'confirmation_required',
+                  'confirmation_changed',
+                  'insufficient_quota',
+                  'usage_uncertain',
+                  'original_account_required',
+                  'receipt_required',
+                  'task_busy',
+                  'batch_invalid',
+                  'batch_too_large',
+                  'catalogue_limit',
+                  'invalid_settings',
+                  'invalid_duration',
+                  'invalid_space',
+                  'invalid_conflict',
+                  'media_format',
+                  'media_bitrate',
+                  'media_settings',
+                  'media_tags',
+                  'closed',
+                  'request_cancelled',
+                  'client_closed',
+                  'cache_paused',
+                  'cache_closed',
+                }.contains(error.code));
+        if (!expected && !AppLog.instance.errorWasRecorded(error)) {
+          AppLog.instance.write(
+            AppLogLevel.error,
+            'download',
+            'Starting selected downloads failed',
+            error: error,
+            stackTrace: stack,
+            promptUser: true,
+          );
+        }
+        if (mounted)
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                error is XmlyException ? error.message : '下载未开始，请检查账号及下载目录',
+              ),
             ),
-          ),
-        );
-    } finally {
-      _preparingDownload = false;
-    }
+          );
+      } finally {
+        _preparingDownload = false;
+      }
+    });
   }
 
   static const _destinations = [
@@ -84,34 +168,26 @@ class _ShellPageState extends State<ShellPage> {
   ];
 
   void _select(int index) {
+    AppLog.instance.trace("lib/pages/shell_page.dart::_ShellPageState._select");
     if (_selectedIndex == index) return;
-    setState(() => _selectedIndex = index);
+    setState(() {
+      AppLog.instance.trace(
+        "lib/pages/shell_page.dart::_ShellPageState._select.closure#1",
+      );
+      _selectedIndex = index;
+    });
   }
-
-  void _openSearch() => Navigator.of(context).push(
-    MaterialPageRoute<void>(
-      builder: (_) => Scaffold(
-        appBar: AppHeader(title: const Text('搜索')),
-        body: DiscoveryPage(
-          runtime: widget.runtime,
-          onDownload: _download,
-          onPlayAlbum: widget.runtime.player.playAlbum,
-        ),
-      ),
-    ),
-  );
-
-  void _openUsage() => Navigator.of(context).push(
-    MaterialPageRoute<void>(
-      builder: (_) =>
-          UsagePage(runtime: widget.runtime, ledger: widget.runtime.ledger),
-    ),
-  );
 
   @override
   Widget build(BuildContext context) {
+    AppLog.instance.trace("lib/pages/shell_page.dart::_ShellPageState.build");
+
     return LayoutBuilder(
       builder: (context, constraints) {
+        AppLog.instance.trace(
+          "lib/pages/shell_page.dart::_ShellPageState.build.closure#1",
+        );
+
         final availableWidth =
             constraints.maxWidth - MediaQuery.paddingOf(context).horizontal;
         final useRail = availableWidth >= 840;
@@ -132,6 +208,10 @@ class _ShellPageState extends State<ShellPage> {
                   tooltip: '窗口操作',
                   offset: const Offset(0, 12),
                   onSelected: (value) {
+                    AppLog.instance.trace(
+                      "lib/pages/shell_page.dart::_ShellPageState.build.closure#1.closure#1",
+                    );
+
                     if (value == 'mini') {
                       widget.onMiniPlayer!();
                     } else if (value == 'tray') {
@@ -140,36 +220,21 @@ class _ShellPageState extends State<ShellPage> {
                       widget.runtime.requestExit?.call();
                     }
                   },
-                  itemBuilder: (_) => [
-                    const PopupMenuItem(value: 'mini', child: Text('收起到小窗')),
-                    if (widget.onTray != null)
-                      const PopupMenuItem(value: 'tray', child: Text('收起到托盘')),
-                    const PopupMenuItem(value: 'exit', child: Text('彻底退出')),
-                  ],
+                  itemBuilder: (_) {
+                    AppLog.instance.trace(
+                      "lib/pages/shell_page.dart::_ShellPageState.build.closure#1.closure#2",
+                    );
+                    return [
+                      const PopupMenuItem(value: 'mini', child: Text('收起到小窗')),
+                      if (widget.onTray != null)
+                        const PopupMenuItem(
+                          value: 'tray',
+                          child: Text('收起到托盘'),
+                        ),
+                      const PopupMenuItem(value: 'exit', child: Text('彻底退出')),
+                    ];
+                  },
                 ),
-              if (compact)
-                PopupMenuButton<String>(
-                  tooltip: '更多操作',
-                  offset: const Offset(0, 12),
-                  onSelected: (value) =>
-                      value == 'search' ? _openSearch() : _openUsage(),
-                  itemBuilder: (_) => const [
-                    PopupMenuItem(value: 'search', child: Text('搜索专辑或声音')),
-                    PopupMenuItem(value: 'usage', child: Text('听时记录')),
-                  ],
-                )
-              else ...[
-                IconButton(
-                  tooltip: '搜索专辑或声音',
-                  icon: const Icon(Icons.search),
-                  onPressed: _openSearch,
-                ),
-                IconButton(
-                  tooltip: '听时记录',
-                  icon: const Icon(Icons.receipt_long_outlined),
-                  onPressed: _openUsage,
-                ),
-              ],
             ],
           ),
           body: SafeArea(
@@ -211,6 +276,10 @@ class _ShellPageState extends State<ShellPage> {
                         onDestinationSelected: _select,
                         selectedIndex: _selectedIndex,
                         destinations: _destinations.map((destination) {
+                          AppLog.instance.trace(
+                            "lib/pages/shell_page.dart::_ShellPageState.build.closure#1.closure#3",
+                          );
+
                           return NavigationRailDestination(
                             label: Text(
                               destination.label,
@@ -233,21 +302,29 @@ class _ShellPageState extends State<ShellPage> {
                     children: [
                       ListenableBuilder(
                         listenable: widget.runtime,
-                        builder: (context, _) =>
-                            widget.runtime.lifecycleError == null
-                            ? const SizedBox.shrink()
-                            : MaterialBanner(
-                                content: Text(widget.runtime.lifecycleError!),
-                                actions: [
-                                  TextButton(
-                                    onPressed: () {
-                                      widget.runtime.lifecycleError = null;
-                                      widget.runtime.changed();
-                                    },
-                                    child: const Text('知道了'),
-                                  ),
-                                ],
-                              ),
+                        builder: (context, _) {
+                          AppLog.instance.trace(
+                            "lib/pages/shell_page.dart::_ShellPageState.build.closure#1.closure#4",
+                          );
+                          return widget.runtime.lifecycleError == null
+                              ? const SizedBox.shrink()
+                              : MaterialBanner(
+                                  content: Text(widget.runtime.lifecycleError!),
+                                  actions: [
+                                    TextButton(
+                                      onPressed: () {
+                                        AppLog.instance.trace(
+                                          "lib/pages/shell_page.dart::_ShellPageState.build.closure#1.closure#4.closure#1",
+                                        );
+
+                                        widget.runtime.lifecycleError = null;
+                                        widget.runtime.changed();
+                                      },
+                                      child: const Text('知道了'),
+                                    ),
+                                  ],
+                                );
+                        },
                       ),
                       Expanded(
                         child: _ShellPageStack(
@@ -288,17 +365,22 @@ class _ShellPageState extends State<ShellPage> {
                       tooltip: '切换页面',
                       initialValue: _selectedIndex,
                       onSelected: _select,
-                      itemBuilder: (_) => [
-                        for (
-                          var index = 0;
-                          index < _destinations.length;
-                          index++
-                        )
-                          PopupMenuItem(
-                            value: index,
-                            child: Text(_destinations[index].label),
-                          ),
-                      ],
+                      itemBuilder: (_) {
+                        AppLog.instance.trace(
+                          "lib/pages/shell_page.dart::_ShellPageState.build.closure#1.closure#5",
+                        );
+                        return [
+                          for (
+                            var index = 0;
+                            index < _destinations.length;
+                            index++
+                          )
+                            PopupMenuItem(
+                              value: index,
+                              child: Text(_destinations[index].label),
+                            ),
+                        ];
+                      },
                       child: SizedBox(
                         height: 56,
                         child: Padding(
@@ -325,6 +407,10 @@ class _ShellPageState extends State<ShellPage> {
                   onDestinationSelected: _select,
                   selectedIndex: _selectedIndex,
                   destinations: _destinations.map((destination) {
+                    AppLog.instance.trace(
+                      "lib/pages/shell_page.dart::_ShellPageState.build.closure#1.closure#6",
+                    );
+
                     return NavigationDestination(
                       label: destination.label,
                       icon: Icon(destination.icon),
@@ -346,7 +432,12 @@ class _ShellPageStack extends StatefulWidget {
   final List<Widget> children;
 
   @override
-  State<_ShellPageStack> createState() => _ShellPageStackState();
+  State<_ShellPageStack> createState() {
+    AppLog.instance.trace(
+      "lib/pages/shell_page.dart::_ShellPageStack.createState",
+    );
+    return _ShellPageStackState();
+  }
 }
 
 class _ShellPageStackState extends State<_ShellPageStack> {
@@ -355,6 +446,10 @@ class _ShellPageStackState extends State<_ShellPageStack> {
 
   @override
   void didChangeDependencies() {
+    AppLog.instance.trace(
+      "lib/pages/shell_page.dart::_ShellPageStackState.didChangeDependencies",
+    );
+
     super.didChangeDependencies();
     final disabled = MediaQuery.disableAnimationsOf(context);
     if (disabled != _disableAnimations) {
@@ -365,6 +460,10 @@ class _ShellPageStackState extends State<_ShellPageStack> {
 
   @override
   void didUpdateWidget(covariant _ShellPageStack oldWidget) {
+    AppLog.instance.trace(
+      "lib/pages/shell_page.dart::_ShellPageStackState.didUpdateWidget",
+    );
+
     super.didUpdateWidget(oldWidget);
     if (oldWidget.index != widget.index) {
       if (!_disableAnimations) _leaving.add(oldWidget.index);
@@ -373,39 +472,58 @@ class _ShellPageStackState extends State<_ShellPageStack> {
   }
 
   void _finishTransition(int index) {
+    AppLog.instance.trace(
+      "lib/pages/shell_page.dart::_ShellPageStackState._finishTransition",
+    );
+
     if (!mounted || index == widget.index || !_leaving.contains(index)) return;
-    setState(() => _leaving.remove(index));
+    setState(() {
+      AppLog.instance.trace(
+        "lib/pages/shell_page.dart::_ShellPageStackState._finishTransition.closure#1",
+      );
+      _leaving.remove(index);
+    });
   }
 
   @override
-  Widget build(BuildContext context) => Stack(
-    fit: StackFit.expand,
-    children: [
-      for (var index = 0; index < widget.children.length; index++)
-        Offstage(
-          offstage: index != widget.index && !_leaving.contains(index),
-          child: TickerMode(
-            enabled: index == widget.index || _leaving.contains(index),
-            child: ExcludeFocus(
-              excluding: index != widget.index,
-              child: ExcludeSemantics(
+  Widget build(BuildContext context) {
+    AppLog.instance.trace(
+      "lib/pages/shell_page.dart::_ShellPageStackState.build",
+    );
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        for (var index = 0; index < widget.children.length; index++)
+          Offstage(
+            offstage: index != widget.index && !_leaving.contains(index),
+            child: TickerMode(
+              enabled: index == widget.index || _leaving.contains(index),
+              child: ExcludeFocus(
                 excluding: index != widget.index,
-                child: IgnorePointer(
-                  ignoring: index != widget.index,
-                  child: AnimatedOpacity(
-                    opacity: index == widget.index ? 1 : 0,
-                    duration: _disableAnimations
-                        ? Duration.zero
-                        : const Duration(milliseconds: 180),
-                    curve: Curves.easeOutCubic,
-                    onEnd: () => _finishTransition(index),
-                    child: RepaintBoundary(child: widget.children[index]),
+                child: ExcludeSemantics(
+                  excluding: index != widget.index,
+                  child: IgnorePointer(
+                    ignoring: index != widget.index,
+                    child: AnimatedOpacity(
+                      opacity: index == widget.index ? 1 : 0,
+                      duration: _disableAnimations
+                          ? Duration.zero
+                          : const Duration(milliseconds: 180),
+                      curve: Curves.easeOutCubic,
+                      onEnd: () {
+                        AppLog.instance.trace(
+                          "lib/pages/shell_page.dart::_ShellPageStackState.build.closure#1",
+                        );
+                        _finishTransition(index);
+                      },
+                      child: RepaintBoundary(child: widget.children[index]),
+                    ),
                   ),
                 ),
               ),
             ),
           ),
-        ),
-    ],
-  );
+      ],
+    );
+  }
 }

@@ -4,6 +4,8 @@
 import 'package:flutter/gestures.dart' show PointerDeviceKind;
 import 'package:flutter/material.dart';
 
+import "../../services/app_log.dart";
+
 const Set<PointerDeviceKind> desktopDragDevices = {
   PointerDeviceKind.touch,
   PointerDeviceKind.mouse,
@@ -23,6 +25,10 @@ class CustomScrollBehavior extends MaterialScrollBehavior {
     Widget child,
     ScrollableDetails details,
   ) {
+    AppLog.instance.trace(
+      "lib/common/widgets/scroll_behavior.dart::CustomScrollBehavior.buildOverscrollIndicator",
+    );
+
     if (getPlatform(context) == TargetPlatform.android) {
       return StretchingOverscrollIndicator(
         axisDirection: details.direction,
@@ -34,5 +40,10 @@ class CustomScrollBehavior extends MaterialScrollBehavior {
   }
 
   @override
-  Set<PointerDeviceKind> get dragDevices => desktopDragDevices;
+  Set<PointerDeviceKind> get dragDevices {
+    AppLog.instance.trace(
+      "lib/common/widgets/scroll_behavior.dart::CustomScrollBehavior.dragDevices.get",
+    );
+    return desktopDragDevices;
+  }
 }

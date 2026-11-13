@@ -4,8 +4,14 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:window_manager/window_manager.dart';
 
-bool get usesWindowHeader =>
-    !kIsWeb && defaultTargetPlatform == TargetPlatform.windows;
+import "../../services/app_log.dart";
+
+bool get usesWindowHeader {
+  AppLog.instance.trace(
+    "lib/common/widgets/app_header.dart::usesWindowHeader.get",
+  );
+  return !kIsWeb && defaultTargetPlatform == TargetPlatform.windows;
+}
 
 /// A single toolbar for page navigation and the Windows window controls.
 class AppHeader extends StatelessWidget implements PreferredSizeWidget {
@@ -33,10 +39,19 @@ class AppHeader extends StatelessWidget implements PreferredSizeWidget {
   final double toolbarHeight;
 
   @override
-  Size get preferredSize => Size.fromHeight(toolbarHeight);
+  Size get preferredSize {
+    AppLog.instance.trace(
+      "lib/common/widgets/app_header.dart::AppHeader.preferredSize.get",
+    );
+    return Size.fromHeight(toolbarHeight);
+  }
 
   @override
   Widget build(BuildContext context) {
+    AppLog.instance.trace(
+      "lib/common/widgets/app_header.dart::AppHeader.build",
+    );
+
     if (!usesWindowHeader || !windowControls) {
       return AppBar(
         title: title,
@@ -67,10 +82,24 @@ class AppHeader extends StatelessWidget implements PreferredSizeWidget {
               Expanded(
                 child: GestureDetector(
                   behavior: HitTestBehavior.translucent,
-                  onSecondaryTapUp: (_) => windowManager.popUpWindowMenu(),
-                  onPanStart: (_) => windowManager.startDragging(),
+                  onSecondaryTapUp: (_) {
+                    AppLog.instance.trace(
+                      "lib/common/widgets/app_header.dart::AppHeader.build.closure#1",
+                    );
+                    windowManager.popUpWindowMenu();
+                  },
+                  onPanStart: (_) {
+                    AppLog.instance.trace(
+                      "lib/common/widgets/app_header.dart::AppHeader.build.closure#2",
+                    );
+                    windowManager.startDragging();
+                  },
                   onDoubleTap: allowMaximize
                       ? () async {
+                          AppLog.instance.trace(
+                            "lib/common/widgets/app_header.dart::AppHeader.build.closure#3",
+                          );
+
                           if (await windowManager.isMaximized()) {
                             await windowManager.unmaximize();
                           } else {
@@ -139,7 +168,12 @@ class _WindowControls extends StatefulWidget {
   final String closeTooltip;
 
   @override
-  State<_WindowControls> createState() => _WindowControlsState();
+  State<_WindowControls> createState() {
+    AppLog.instance.trace(
+      "lib/common/widgets/app_header.dart::_WindowControls.createState",
+    );
+    return _WindowControlsState();
+  }
 }
 
 class _WindowControlsState extends State<_WindowControls> with WindowListener {
@@ -147,58 +181,105 @@ class _WindowControlsState extends State<_WindowControls> with WindowListener {
 
   @override
   void initState() {
+    AppLog.instance.trace(
+      "lib/common/widgets/app_header.dart::_WindowControlsState.initState",
+    );
+
     super.initState();
     windowManager.addListener(this);
     unawaited(_refresh());
   }
 
   Future<void> _refresh() async {
+    AppLog.instance.trace(
+      "lib/common/widgets/app_header.dart::_WindowControlsState._refresh",
+    );
+
     final value = await windowManager.isMaximized();
-    if (mounted) setState(() => _maximized = value);
+    if (mounted)
+      setState(() {
+        AppLog.instance.trace(
+          "lib/common/widgets/app_header.dart::_WindowControlsState._refresh.closure#1",
+        );
+        _maximized = value;
+      });
   }
 
   @override
-  void onWindowMaximize() => setState(() => _maximized = true);
+  void onWindowMaximize() {
+    AppLog.instance.trace(
+      "lib/common/widgets/app_header.dart::_WindowControlsState.onWindowMaximize",
+    );
+    setState(() {
+      AppLog.instance.trace(
+        "lib/common/widgets/app_header.dart::_WindowControlsState.onWindowMaximize.closure#1",
+      );
+      _maximized = true;
+    });
+  }
 
   @override
-  void onWindowUnmaximize() => setState(() => _maximized = false);
+  void onWindowUnmaximize() {
+    AppLog.instance.trace(
+      "lib/common/widgets/app_header.dart::_WindowControlsState.onWindowUnmaximize",
+    );
+    setState(() {
+      AppLog.instance.trace(
+        "lib/common/widgets/app_header.dart::_WindowControlsState.onWindowUnmaximize.closure#1",
+      );
+      _maximized = false;
+    });
+  }
 
   @override
   void dispose() {
+    AppLog.instance.trace(
+      "lib/common/widgets/app_header.dart::_WindowControlsState.dispose",
+    );
+
     windowManager.removeListener(this);
     super.dispose();
   }
 
   @override
-  Widget build(BuildContext context) => Row(
-    mainAxisSize: MainAxisSize.min,
-    crossAxisAlignment: CrossAxisAlignment.stretch,
-    children: [
-      _WindowButton(
-        label: '最小化',
-        icon: Icons.remove,
-        onPressed: windowManager.minimize,
-      ),
-      if (widget.allowMaximize)
+  Widget build(BuildContext context) {
+    AppLog.instance.trace(
+      "lib/common/widgets/app_header.dart::_WindowControlsState.build",
+    );
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
         _WindowButton(
-          label: _maximized ? '还原窗口' : '最大化',
-          icon: _maximized ? Icons.filter_none : Icons.crop_square,
-          onPressed: () async {
-            if (await windowManager.isMaximized()) {
-              await windowManager.unmaximize();
-            } else {
-              await windowManager.maximize();
-            }
-          },
+          label: '最小化',
+          icon: Icons.remove,
+          onPressed: windowManager.minimize,
         ),
-      _WindowButton(
-        label: widget.closeTooltip,
-        icon: Icons.close,
-        close: true,
-        onPressed: windowManager.close,
-      ),
-    ],
-  );
+        if (widget.allowMaximize)
+          _WindowButton(
+            label: _maximized ? '还原窗口' : '最大化',
+            icon: _maximized ? Icons.filter_none : Icons.crop_square,
+            onPressed: () async {
+              AppLog.instance.trace(
+                "lib/common/widgets/app_header.dart::_WindowControlsState.build.closure#1",
+              );
+
+              if (await windowManager.isMaximized()) {
+                await windowManager.unmaximize();
+              } else {
+                await windowManager.maximize();
+              }
+            },
+          ),
+        _WindowButton(
+          label: widget.closeTooltip,
+          icon: Icons.close,
+          close: true,
+          onPressed: windowManager.close,
+        ),
+      ],
+    );
+  }
 }
 
 class _WindowButton extends StatelessWidget {
@@ -216,6 +297,10 @@ class _WindowButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    AppLog.instance.trace(
+      "lib/common/widgets/app_header.dart::_WindowButton.build",
+    );
+
     final colors = Theme.of(context).colorScheme;
     return SizedBox(
       width: 42,
@@ -227,12 +312,20 @@ class _WindowButton extends StatelessWidget {
           shape: const WidgetStatePropertyAll(LinearBorder()),
           padding: const WidgetStatePropertyAll(EdgeInsets.zero),
           foregroundColor: WidgetStateProperty.resolveWith((states) {
+            AppLog.instance.trace(
+              "lib/common/widgets/app_header.dart::_WindowButton.build.closure#1",
+            );
+
             if (close && states.contains(WidgetState.hovered)) {
               return Colors.white;
             }
             return colors.onSurfaceVariant;
           }),
           backgroundColor: WidgetStateProperty.resolveWith((states) {
+            AppLog.instance.trace(
+              "lib/common/widgets/app_header.dart::_WindowButton.build.closure#2",
+            );
+
             if (states.contains(WidgetState.hovered)) {
               return close
                   ? const Color(0xFFC42B1C)

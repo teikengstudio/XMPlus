@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import "../../services/app_log.dart";
+
 /// A quiet tab with a fixed label footprint and a short selection indicator.
 class AppTabButton extends StatelessWidget {
   const AppTabButton({
@@ -17,6 +19,10 @@ class AppTabButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    AppLog.instance.trace(
+      "lib/common/widgets/app_tab_button.dart::AppTabButton.build",
+    );
+
     final theme = Theme.of(context);
     final colors = theme.colorScheme;
     final duration = MediaQuery.disableAnimationsOf(context)
@@ -95,7 +101,12 @@ class AppTabStrip extends StatefulWidget {
   final List<Widget> children;
 
   @override
-  State<AppTabStrip> createState() => _AppTabStripState();
+  State<AppTabStrip> createState() {
+    AppLog.instance.trace(
+      "lib/common/widgets/app_tab_button.dart::AppTabStrip.createState",
+    );
+    return _AppTabStripState();
+  }
 }
 
 class _AppTabStripState extends State<AppTabStrip> {
@@ -103,27 +114,36 @@ class _AppTabStripState extends State<AppTabStrip> {
 
   @override
   void dispose() {
+    AppLog.instance.trace(
+      "lib/common/widgets/app_tab_button.dart::_AppTabStripState.dispose",
+    );
+
     _scroll.dispose();
     super.dispose();
   }
 
   @override
-  Widget build(BuildContext context) => ScrollConfiguration(
-    behavior: ScrollConfiguration.of(context).copyWith(scrollbars: false),
-    child: Scrollbar(
-      controller: _scroll,
-      thumbVisibility: true,
-      interactive: true,
-      scrollbarOrientation: ScrollbarOrientation.bottom,
-      thickness: 3,
-      radius: const Radius.circular(3),
-      child: SingleChildScrollView(
+  Widget build(BuildContext context) {
+    AppLog.instance.trace(
+      "lib/common/widgets/app_tab_button.dart::_AppTabStripState.build",
+    );
+    return ScrollConfiguration(
+      behavior: ScrollConfiguration.of(context).copyWith(scrollbars: false),
+      child: Scrollbar(
         controller: _scroll,
-        primary: false,
-        scrollDirection: Axis.horizontal,
-        padding: const EdgeInsets.only(bottom: 8),
-        child: Row(mainAxisSize: MainAxisSize.min, children: widget.children),
+        thumbVisibility: true,
+        interactive: true,
+        scrollbarOrientation: ScrollbarOrientation.bottom,
+        thickness: 3,
+        radius: const Radius.circular(3),
+        child: SingleChildScrollView(
+          controller: _scroll,
+          primary: false,
+          scrollDirection: Axis.horizontal,
+          padding: const EdgeInsets.only(bottom: 8),
+          child: Row(mainAxisSize: MainAxisSize.min, children: widget.children),
+        ),
       ),
-    ),
-  );
+    );
+  }
 }

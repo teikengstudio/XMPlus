@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../api/xmly_comment_emojis.dart';
+import "../services/app_log.dart";
 
 /// Official bracketed expressions are images; other bracketed text stays intact.
 class CommentText extends StatelessWidget {
@@ -12,6 +13,8 @@ class CommentText extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    AppLog.instance.trace("lib/pages/comment_text.dart::CommentText.build");
+
     final spans = <InlineSpan>[];
     var start = 0;
     for (final match in _expression.allMatches(text)) {
@@ -35,11 +38,16 @@ class CommentText extends StatelessWidget {
                 height: 22,
                 fit: BoxFit.contain,
                 semanticLabel: label,
-                errorBuilder: (context, error, stack) => Text(
-                  label,
-                  style: style,
-                  textScaler: TextScaler.noScaling,
-                ),
+                errorBuilder: (context, error, stack) {
+                  AppLog.instance.trace(
+                    "lib/pages/comment_text.dart::CommentText.build.closure#1",
+                  );
+                  return Text(
+                    label,
+                    style: style,
+                    textScaler: TextScaler.noScaling,
+                  );
+                },
               ),
             ),
           ),

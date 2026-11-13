@@ -1,3 +1,5 @@
+import "app_log.dart";
+
 /// Pure playback decisions. Device commands and actual listening accounting live
 /// in PlayerService and UsageLedger, not in this policy.
 class PlaybackSettings {
@@ -26,18 +28,41 @@ class PlaybackSettings {
   final double volume;
   final double masterVolume;
   final bool masterMuted;
-  double get outputVolume => masterMuted ? 0 : volume * masterVolume / 100;
+  double get outputVolume {
+    AppLog.instance.trace(
+      "lib/services/playback_policy.dart::PlaybackSettings.outputVolume.get",
+    );
+    return masterMuted ? 0 : volume * masterVolume / 100;
+  }
 
-  factory PlaybackSettings.parse(Map values) => resolve(values);
+  factory PlaybackSettings.parse(Map values) {
+    AppLog.instance.trace(
+      "lib/services/playback_policy.dart::PlaybackSettings.factory:parse",
+    );
+    return resolve(values);
+  }
 
   static PlaybackSettings resolve(Map global, [Map album = const {}]) {
-    Object? value(String key, Object fallback) => album.containsKey(key)
-        ? album[key]
-        : global.containsKey(key)
-        ? global[key]
-        : fallback;
+    AppLog.instance.trace(
+      "lib/services/playback_policy.dart::PlaybackSettings.resolve",
+    );
+
+    Object? value(String key, Object fallback) {
+      AppLog.instance.trace(
+        "lib/services/playback_policy.dart::PlaybackSettings.resolve.value",
+      );
+      return album.containsKey(key)
+          ? album[key]
+          : global.containsKey(key)
+          ? global[key]
+          : fallback;
+    }
 
     double number(String key, double fallback, double min, double max) {
+      AppLog.instance.trace(
+        "lib/services/playback_policy.dart::PlaybackSettings.resolve.number",
+      );
+
       final raw = value(key, fallback);
       if (raw is! num || !raw.isFinite || raw < min || raw > max) {
         throw FormatException('播放设置 $key 必须在 $min–$max 之间');
@@ -46,6 +71,10 @@ class PlaybackSettings {
     }
 
     int seconds(String key, int fallback, int min, int max) {
+      AppLog.instance.trace(
+        "lib/services/playback_policy.dart::PlaybackSettings.resolve.seconds",
+      );
+
       final raw = value(key, fallback);
       if (raw is! num ||
           !raw.isFinite ||
@@ -58,6 +87,10 @@ class PlaybackSettings {
     }
 
     bool boolean(String key, bool fallback) {
+      AppLog.instance.trace(
+        "lib/services/playback_policy.dart::PlaybackSettings.resolve.boolean",
+      );
+
       final raw = value(key, fallback);
       if (raw is! bool) throw FormatException('播放设置 $key 必须为开关值');
       return raw;
@@ -93,19 +126,24 @@ class PlaybackSettings {
     );
   }
 
-  Map<String, dynamic> toJson() => {
-    'speed': speed,
-    'skipIntroSeconds': skipIntroSeconds,
-    'skipOutroSeconds': skipOutroSeconds,
-    'seekBackwardSeconds': seekBackwardSeconds,
-    'seekForwardSeconds': seekForwardSeconds,
-    'autoNext': autoNext,
-    'loopMode': loopMode,
-    'listenAndDownload': listenAndDownload,
-    'volume': volume,
-    'masterVolume': masterVolume,
-    'masterMuted': masterMuted,
-  };
+  Map<String, dynamic> toJson() {
+    AppLog.instance.trace(
+      "lib/services/playback_policy.dart::PlaybackSettings.toJson",
+    );
+    return {
+      'speed': speed,
+      'skipIntroSeconds': skipIntroSeconds,
+      'skipOutroSeconds': skipOutroSeconds,
+      'seekBackwardSeconds': seekBackwardSeconds,
+      'seekForwardSeconds': seekForwardSeconds,
+      'autoNext': autoNext,
+      'loopMode': loopMode,
+      'listenAndDownload': listenAndDownload,
+      'volume': volume,
+      'masterVolume': masterVolume,
+      'masterMuted': masterMuted,
+    };
+  }
 }
 
 enum SleepAction { pause, exit }
@@ -120,6 +158,10 @@ class SleepRequest {
     this.minutes = 30,
     this.waitForEnd = false,
   }) {
+    AppLog.instance.trace(
+      "lib/services/playback_policy.dart::SleepRequest.new",
+    );
+
     if (minutes < 1 || minutes > 1440) {
       throw const FormatException('定时分钟数必须在 1–1440 之间');
     }
@@ -131,6 +173,10 @@ class SleepRequest {
   final bool waitForEnd;
 
   factory SleepRequest.fromJson(Map values) {
+    AppLog.instance.trace(
+      "lib/services/playback_policy.dart::SleepRequest.factory:fromJson",
+    );
+
     final minutes = values.containsKey('minutes') ? values['minutes'] : 30;
     final wait = values.containsKey('waitForEnd')
         ? values['waitForEnd']
@@ -139,28 +185,58 @@ class SleepRequest {
     final action = values.containsKey('action') ? values['action'] : 'pause';
     if (minutes is! int ||
         wait is! bool ||
-        !SleepMode.values.any((value) => value.name == mode) ||
-        !SleepAction.values.any((value) => value.name == action)) {
+        !SleepMode.values.any((value) {
+          AppLog.instance.trace(
+            "lib/services/playback_policy.dart::SleepRequest.factory:fromJson.closure#1",
+          );
+          return value.name == mode;
+        }) ||
+        !SleepAction.values.any((value) {
+          AppLog.instance.trace(
+            "lib/services/playback_policy.dart::SleepRequest.factory:fromJson.closure#2",
+          );
+          return value.name == action;
+        })) {
       throw const FormatException('定时设置格式不正确');
     }
     return SleepRequest(
-      mode: SleepMode.values.firstWhere((value) => value.name == mode),
-      action: SleepAction.values.firstWhere((value) => value.name == action),
+      mode: SleepMode.values.firstWhere((value) {
+        AppLog.instance.trace(
+          "lib/services/playback_policy.dart::SleepRequest.factory:fromJson.closure#3",
+        );
+        return value.name == mode;
+      }),
+      action: SleepAction.values.firstWhere((value) {
+        AppLog.instance.trace(
+          "lib/services/playback_policy.dart::SleepRequest.factory:fromJson.closure#4",
+        );
+        return value.name == action;
+      }),
       minutes: minutes,
       waitForEnd: wait,
     );
   }
 
-  Map<String, dynamic> toJson() => {
-    'minutes': minutes,
-    'action': action.name,
-    'mode': mode.name,
-    'waitForEnd': waitForEnd,
-  };
+  Map<String, dynamic> toJson() {
+    AppLog.instance.trace(
+      "lib/services/playback_policy.dart::SleepRequest.toJson",
+    );
+    return {
+      'minutes': minutes,
+      'action': action.name,
+      'mode': mode.name,
+      'waitForEnd': waitForEnd,
+    };
+  }
 }
 
 class PlaybackPolicy {
-  PlaybackPolicy({DateTime Function()? clock}) : _clock = clock ?? DateTime.now;
+  PlaybackPolicy({DateTime Function()? clock})
+    : _clock = clock ?? DateTime.now {
+    AppLog.instance.trace(
+      "lib/services/playback_policy.dart::PlaybackPolicy.new",
+    );
+  }
 
   final DateTime Function() _clock;
   PlaybackSettings _settings = PlaybackSettings.resolve(const {});
@@ -172,13 +248,22 @@ class PlaybackPolicy {
   DateTime? _deadline;
   bool _sleepWaitingForEnd = false;
 
-  String? get warning =>
-      _duration > 0 &&
-          _settings.skipIntroSeconds + _settings.skipOutroSeconds >= _duration
-      ? '片头和片尾合计不小于本集时长，已关闭本集自动跳过'
-      : null;
+  String? get warning {
+    AppLog.instance.trace(
+      "lib/services/playback_policy.dart::PlaybackPolicy.warning.get",
+    );
+    return _duration > 0 &&
+            _settings.skipIntroSeconds + _settings.skipOutroSeconds >= _duration
+        ? '片头和片尾合计不小于本集时长，已关闭本集自动跳过'
+        : null;
+  }
 
-  bool get _canSkip => !_manual && _duration > 0 && warning == null;
+  bool get _canSkip {
+    AppLog.instance.trace(
+      "lib/services/playback_policy.dart::PlaybackPolicy._canSkip.get",
+    );
+    return !_manual && _duration > 0 && warning == null;
+  }
 
   double start({
     required double duration,
@@ -186,6 +271,10 @@ class PlaybackPolicy {
     required PlaybackSettings settings,
     bool manualReplay = false,
   }) {
+    AppLog.instance.trace(
+      "lib/services/playback_policy.dart::PlaybackPolicy.start",
+    );
+
     _settings = settings;
     _duration = _knownDuration(duration);
     _started = true;
@@ -197,7 +286,12 @@ class PlaybackPolicy {
         : resume;
   }
 
-  void updateSettings(PlaybackSettings settings) => _settings = settings;
+  void updateSettings(PlaybackSettings settings) {
+    AppLog.instance.trace(
+      "lib/services/playback_policy.dart::PlaybackPolicy.updateSettings",
+    );
+    _settings = settings;
+  }
 
   /// A single chapter epoch emits at most one completion, regardless of whether
   /// an outro threshold or the device's physical end event arrives first.
@@ -207,6 +301,10 @@ class PlaybackPolicy {
     bool completed = false,
     bool allowCompletion = true,
   }) {
+    AppLog.instance.trace(
+      "lib/services/playback_policy.dart::PlaybackPolicy.observe",
+    );
+
     if (!_started) return false;
     if (duration != null) _duration = _knownDuration(duration);
     if (_finished || !allowCompletion) return false;
@@ -223,23 +321,56 @@ class PlaybackPolicy {
   }
 
   double manualSeek(double position) {
+    AppLog.instance.trace(
+      "lib/services/playback_policy.dart::PlaybackPolicy.manualSeek",
+    );
+
     _manual = true;
     return _clamp(position);
   }
 
-  static double _knownDuration(double duration) =>
-      duration.isFinite && duration > 0 ? duration : 0;
+  static double _knownDuration(double duration) {
+    AppLog.instance.trace(
+      "lib/services/playback_policy.dart::PlaybackPolicy._knownDuration",
+    );
+    return duration.isFinite && duration > 0 ? duration : 0;
+  }
 
   double _clamp(double position) {
+    AppLog.instance.trace(
+      "lib/services/playback_policy.dart::PlaybackPolicy._clamp",
+    );
+
     if (!position.isFinite || position < 0) return 0;
     return _duration > 0 && position > _duration ? _duration : position;
   }
 
-  SleepRequest? get sleepRequest => _sleepRequest;
-  DateTime? get deadline => _deadline;
-  bool get sleepWaitingForEnd => _sleepWaitingForEnd;
+  SleepRequest? get sleepRequest {
+    AppLog.instance.trace(
+      "lib/services/playback_policy.dart::PlaybackPolicy.sleepRequest.get",
+    );
+    return _sleepRequest;
+  }
+
+  DateTime? get deadline {
+    AppLog.instance.trace(
+      "lib/services/playback_policy.dart::PlaybackPolicy.deadline.get",
+    );
+    return _deadline;
+  }
+
+  bool get sleepWaitingForEnd {
+    AppLog.instance.trace(
+      "lib/services/playback_policy.dart::PlaybackPolicy.sleepWaitingForEnd.get",
+    );
+    return _sleepWaitingForEnd;
+  }
 
   Duration? get remainingDuration {
+    AppLog.instance.trace(
+      "lib/services/playback_policy.dart::PlaybackPolicy.remainingDuration.get",
+    );
+
     final end = _deadline;
     if (end == null) return null;
     final remaining = end.difference(_clock());
@@ -247,6 +378,10 @@ class PlaybackPolicy {
   }
 
   void armSleep(SleepRequest request) {
+    AppLog.instance.trace(
+      "lib/services/playback_policy.dart::PlaybackPolicy.armSleep",
+    );
+
     _sleepRequest = request;
     _sleepWaitingForEnd = false;
     _deadline = request.mode == SleepMode.afterDuration
@@ -255,18 +390,30 @@ class PlaybackPolicy {
   }
 
   void cancelSleep() {
+    AppLog.instance.trace(
+      "lib/services/playback_policy.dart::PlaybackPolicy.cancelSleep",
+    );
+
     _sleepRequest = null;
     _deadline = null;
     _sleepWaitingForEnd = false;
   }
 
   SleepAction _consumeSleep() {
+    AppLog.instance.trace(
+      "lib/services/playback_policy.dart::PlaybackPolicy._consumeSleep",
+    );
+
     final action = _sleepRequest!.action;
     cancelSleep();
     return action;
   }
 
   SleepAction? pollSleep() {
+    AppLog.instance.trace(
+      "lib/services/playback_policy.dart::PlaybackPolicy.pollSleep",
+    );
+
     final request = _sleepRequest;
     if (request == null ||
         request.mode == SleepMode.endOfTrack ||
@@ -282,6 +429,10 @@ class PlaybackPolicy {
   /// Call before deciding loop/next/tail actions, including when a timer tick
   /// and a chapter event arrive together. Consuming clears the pending request.
   SleepAction? onChapterEnd() {
+    AppLog.instance.trace(
+      "lib/services/playback_policy.dart::PlaybackPolicy.onChapterEnd",
+    );
+
     final request = _sleepRequest;
     if (request == null) return null;
     if (request.mode == SleepMode.endOfTrack) return _consumeSleep();

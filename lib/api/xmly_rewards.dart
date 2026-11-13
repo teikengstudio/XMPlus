@@ -9,10 +9,16 @@ import 'package:uuid/uuid.dart';
 import '../models/xmly_models.dart';
 import 'xmly_client.dart';
 import 'xmly_crypto.dart';
+import "../services/app_log.dart";
 
 class XmlyRewards {
-  XmlyRewards(this.client, {this.automaticEnabled = false,
-      DateTime Function()? clock}) : _clock = clock ?? DateTime.now;
+  XmlyRewards(
+    this.client, {
+    this.automaticEnabled = false,
+    DateTime Function()? clock,
+  }) : _clock = clock ?? DateTime.now {
+    AppLog.instance.trace("lib/api/xmly_rewards.dart::XmlyRewards.new");
+  }
   final XmlyClient client;
   final DateTime Function() _clock;
   final _lock = Lock();
@@ -22,6 +28,8 @@ class XmlyRewards {
   static const _path = '/lite-earn/ting/welfare/';
 
   String _uid() {
+    AppLog.instance.trace("lib/api/xmly_rewards.dart::XmlyRewards._uid");
+
     final credentials = client.credentials;
     if (!client.accountAvailable || credentials == null) {
       throw XmlyException('login_expired', '领取或查询听时需要有效的登录态');
@@ -33,35 +41,59 @@ class XmlyRewards {
   }
 
   static Map<String, dynamic> _result(Map<String, dynamic> response) {
+    AppLog.instance.trace("lib/api/xmly_rewards.dart::XmlyRewards._result");
+
     final data = response['data'];
     if (data is! Map<String, dynamic> || data['success'] is! bool) {
       throw XmlyException('invalid_response', '福利响应缺少明确结果');
     }
     if (data['success'] != true) {
-      throw XmlyException('reward_rejected', '福利请求未成功，请在官方 App 检查',
-          definitive: true);
+      throw XmlyException(
+        'reward_rejected',
+        '福利请求未成功，请在官方 App 检查',
+        definitive: true,
+      );
     }
     return data;
   }
 
   Future<Map<String, dynamic>> tasks() async {
+    AppLog.instance.trace("lib/api/xmly_rewards.dart::XmlyRewards.tasks");
+
     _uid();
-    final response = await client.request('GET', XmlyClient.welfare,
-        '${_path}queryVipDurationTask/ts-${_clock().millisecondsSinceEpoch}');
+    final response = await client.request(
+      'GET',
+      XmlyClient.welfare,
+      '${_path}queryVipDurationTask/ts-${_clock().millisecondsSinceEpoch}',
+    );
     return {'data': _result(response)};
   }
 
   Map<String, dynamic> _payload(Map<String, dynamic> value) {
+    AppLog.instance.trace("lib/api/xmly_rewards.dart::XmlyRewards._payload");
+
     final fields = <String, dynamic>{};
-    for (final key in ['adId', 'adResponseId', 'isUnisdk', 'ecpm', 'verifyStr',
-        'isSecondPhaseCompleted', 'sourceName']) {
-      if (value.containsKey(key) && (key == 'sourceName' || value[key] != null) &&
-          (key != 'verifyStr' || (value[key] != null && value[key] != '' && value[key] != false))) {
+    for (final key in [
+      'adId',
+      'adResponseId',
+      'isUnisdk',
+      'ecpm',
+      'verifyStr',
+      'isSecondPhaseCompleted',
+      'sourceName',
+    ]) {
+      if (value.containsKey(key) &&
+          (key == 'sourceName' || value[key] != null) &&
+          (key != 'verifyStr' ||
+              (value[key] != null &&
+                  value[key] != '' &&
+                  value[key] != false))) {
         final item = value[key];
         if (item != null && item is! String && item is! num && item is! bool) {
           throw ArgumentError('福利请求字段格式无效');
         }
-        if (item is String && item.length > 8192) throw ArgumentError('福利请求字段过长');
+        if (item is String && item.length > 8192)
+          throw ArgumentError('福利请求字段过长');
         if (item is num && !item.isFinite) throw ArgumentError('福利请求字段格式无效');
         fields[key] = item;
       }
@@ -73,59 +105,107 @@ class XmlyRewards {
     if (fields['isSecondPhaseCompleted'] != null) {
       parts.add('${fields['isSecondPhaseCompleted']}');
     }
-    final signature = md5.convert(utf8.encode('${parts.join('&')}&$_salt')).toString();
+    final signature = md5
+        .convert(utf8.encode('${parts.join('&')}&$_salt'))
+        .toString();
     return {
-      ...fields, 'requestId': request, 'uid': int.parse(uid), 'ts': timestamp,
+      ...fields,
+      'requestId': request,
+      'uid': int.parse(uid),
+      'ts': timestamp,
       'signature': signature,
-      'ticket': XmlyCrypto.freshTicket(client.credentials!,
-          attributes: 'b=lite&s=lite_time_reward&u=$uid'),
+      'ticket': XmlyCrypto.freshTicket(
+        client.credentials!,
+        attributes: 'b=lite&s=lite_time_reward&u=$uid',
+      ),
     };
   }
 
-  Future<Map<String, dynamic>> claim(Map<String, dynamic> value) =>
-      _lock.synchronized(() => client.withBalanceChange(() => _claim(value)));
+  Future<Map<String, dynamic>> claim(Map<String, dynamic> value) {
+    AppLog.instance.trace("lib/api/xmly_rewards.dart::XmlyRewards.claim");
+    return _lock.synchronized(() {
+      AppLog.instance.trace(
+        "lib/api/xmly_rewards.dart::XmlyRewards.claim.closure#1",
+      );
+      return client.withBalanceChange(() {
+        AppLog.instance.trace(
+          "lib/api/xmly_rewards.dart::XmlyRewards.claim.closure#1.closure#1",
+        );
+        return _claim(value);
+      });
+    });
+  }
 
   Future<Map<String, dynamic>> _claim(Map<String, dynamic> value) async {
+    AppLog.instance.trace("lib/api/xmly_rewards.dart::XmlyRewards._claim");
+
     final payload = _payload(value);
     client.invalidateQuota();
     // Empty business fields are accepted by the original official protocol;
     // generated identity/signature/ticket are still mandatory. Never replay POST.
-    final response = await client.request('POST', XmlyClient.welfare,
-        '${_path}rewardDuration/ts-${payload['ts']}', data: payload);
+    final response = await client.request(
+      'POST',
+      XmlyClient.welfare,
+      '${_path}rewardDuration/ts-${payload['ts']}',
+      data: payload,
+    );
     return {'data': _result(response)};
   }
 
   /// Automatic issuance is opt-in. Read-only quota/login/resolve never invoke it.
   /// An error returns the last verified balance, and never retries that claim.
-  Future<Quota> refresh({bool Function()? shouldContinue}) => _lock.synchronized(() async {
-    bool allowed() => automaticEnabled && (shouldContinue?.call() ?? true);
-    var quota = await client.queryQuota();
-    lastError = '';
-    if (!allowed() || quota.remainingSeconds >= 7200) return quota;
-    final identity = client.cacheIdentity;
-    // ponytail: cap each explicit refresh at 64 successful claims; require a
-    // later refresh rather than letting a pathological 1-second reward loop run.
-    for (var count = 0; count < 64 && allowed() &&
-        quota.remainingSeconds < 14400; count++) {
-      if (identity != client.cacheIdentity || !client.accountAvailable) break;
-      final previous = quota.remainingSeconds;
-      try {
-        final claimed = await client.withBalanceChange(() async {
-          // Consent may be revoked while a debit holds the balance lock.
-          if (!allowed() || identity != client.cacheIdentity ||
-              !client.accountAvailable) return false;
-          await _claim({});
-          return true;
-        });
-        if (!claimed) break;
-        if (identity != client.cacheIdentity || !client.accountAvailable) break;
-        quota = await client.queryQuota();
-      } on Exception {
-        lastError = '领取听时未完成，已停止自动领取';
-        break;
+  Future<Quota> refresh({bool Function()? shouldContinue}) {
+    AppLog.instance.trace("lib/api/xmly_rewards.dart::XmlyRewards.refresh");
+    return _lock.synchronized(() async {
+      AppLog.instance.trace(
+        "lib/api/xmly_rewards.dart::XmlyRewards.refresh.closure#1",
+      );
+
+      bool allowed() {
+        AppLog.instance.trace(
+          "lib/api/xmly_rewards.dart::XmlyRewards.refresh.closure#1.allowed",
+        );
+        return automaticEnabled && (shouldContinue?.call() ?? true);
       }
-      if (quota.remainingSeconds <= previous) break;
-    }
-    return quota;
-  });
+
+      var quota = await client.queryQuota();
+      lastError = '';
+      if (!allowed() || quota.remainingSeconds >= 7200) return quota;
+      final identity = client.cacheIdentity;
+      // ponytail: cap each explicit refresh at 64 successful claims; require a
+      // later refresh rather than letting a pathological 1-second reward loop run.
+      for (
+        var count = 0;
+        count < 64 && allowed() && quota.remainingSeconds < 14400;
+        count++
+      ) {
+        if (identity != client.cacheIdentity || !client.accountAvailable) break;
+        final previous = quota.remainingSeconds;
+        try {
+          final claimed = await client.withBalanceChange(() async {
+            AppLog.instance.trace(
+              "lib/api/xmly_rewards.dart::XmlyRewards.refresh.closure#1.closure#1",
+            );
+
+            // Consent may be revoked while a debit holds the balance lock.
+            if (!allowed() ||
+                identity != client.cacheIdentity ||
+                !client.accountAvailable)
+              return false;
+            await _claim({});
+            return true;
+          });
+          if (!claimed) break;
+          if (identity != client.cacheIdentity || !client.accountAvailable)
+            break;
+          quota = await client.queryQuota();
+        } on Exception {
+          lastError = '领取听时未完成，已停止自动领取';
+          break;
+        }
+        if (quota.remainingSeconds <= previous) break;
+      }
+      return quota;
+    });
+  }
 }

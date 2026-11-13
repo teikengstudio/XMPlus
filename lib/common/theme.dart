@@ -6,12 +6,15 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show PredictiveBackEvent;
 
+import '../services/app_log.dart';
 import '../storage/app_storage.dart';
 
 class AppAppearance extends ChangeNotifier {
   static const defaultSeedColor = 0xFF245C56;
 
   AppAppearance(this.storage) {
+    AppLog.instance.trace("lib/common/theme.dart::AppAppearance.new");
+
     _load();
   }
 
@@ -24,15 +27,24 @@ class AppAppearance extends ChangeNotifier {
   String? error;
 
   void reload() {
+    AppLog.instance.trace("lib/common/theme.dart::AppAppearance.reload");
+
     _load();
     notifyListeners();
   }
 
   void _load() {
+    AppLog.instance.trace("lib/common/theme.dart::AppAppearance._load");
+
     final settings = storage.state['settings'] as Map;
     final value = settings['appearance'] as Map? ?? const {};
     final mode = value['themeMode'] ?? 'system';
-    _themeMode = ThemeMode.values.firstWhere((item) => item.name == mode);
+    _themeMode = ThemeMode.values.firstWhere((item) {
+      AppLog.instance.trace(
+        "lib/common/theme.dart::AppAppearance._load.closure#1",
+      );
+      return item.name == mode;
+    });
     final color = value['seedColor'] ?? defaultSeedColor;
     final scale = value['textScale'] ?? 1;
     final oledBlack = value['oledBlack'] ?? false;
@@ -51,47 +63,89 @@ class AppAppearance extends ChangeNotifier {
     _oledBlack = oledBlack;
   }
 
-  Future<void> _save(Map<String, dynamic> changes) async {
-    final request = Object();
-    for (final key in changes.keys) {
-      _pending[key] = request;
-    }
-    try {
-      await storage.transaction((state) {
-        final settings = state['settings'] as Map;
-        final appearance = Map<String, dynamic>.from(
-          settings['appearance'] as Map? ?? const {},
-        );
-        settings['appearance'] = appearance..addAll(changes);
-      });
-      _load();
-      error = null;
-    } catch (_) {
-      error = '设置保存失败，原设置已保留';
-    } finally {
+  Future<void> _save(Map<String, dynamic> changes) {
+    AppLog.instance.trace("lib/common/theme.dart::AppAppearance._save");
+    return AppLog.instance.runWithErrorScope(() async {
+      AppLog.instance.trace(
+        "lib/common/theme.dart::AppAppearance._save.closure#1",
+      );
+
+      final request = Object();
       for (final key in changes.keys) {
-        if (identical(_pending[key], request)) _pending.remove(key);
+        _pending[key] = request;
       }
-    }
-    notifyListeners();
+      try {
+        await storage.transaction((state) {
+          AppLog.instance.trace(
+            "lib/common/theme.dart::AppAppearance._save.closure#1.closure#1",
+          );
+
+          final settings = state['settings'] as Map;
+          final appearance = Map<String, dynamic>.from(
+            settings['appearance'] as Map? ?? const {},
+          );
+          settings['appearance'] = appearance..addAll(changes);
+        });
+        _load();
+        error = null;
+      } catch (failure, stack) {
+        if (!AppLog.instance.errorWasRecorded(failure)) {
+          AppLog.instance.write(
+            AppLogLevel.error,
+            'appearance',
+            'Saving appearance settings failed',
+            error: failure,
+            stackTrace: stack,
+          );
+        }
+        AppLog.instance.requestUploadPrompt();
+        error = '设置保存失败，原设置已保留';
+      } finally {
+        for (final key in changes.keys) {
+          if (identical(_pending[key], request)) _pending.remove(key);
+        }
+      }
+      notifyListeners();
+    });
   }
 
-  ThemeMode get themeMode => _themeMode;
-  Color get seedColor => _seedColor;
-  double get textScale => _textScale;
-  bool get oledBlack => _oledBlack;
+  ThemeMode get themeMode {
+    AppLog.instance.trace("lib/common/theme.dart::AppAppearance.themeMode.get");
+    return _themeMode;
+  }
+
+  Color get seedColor {
+    AppLog.instance.trace("lib/common/theme.dart::AppAppearance.seedColor.get");
+    return _seedColor;
+  }
+
+  double get textScale {
+    AppLog.instance.trace("lib/common/theme.dart::AppAppearance.textScale.get");
+    return _textScale;
+  }
+
+  bool get oledBlack {
+    AppLog.instance.trace("lib/common/theme.dart::AppAppearance.oledBlack.get");
+    return _oledBlack;
+  }
 
   set themeMode(ThemeMode value) {
+    AppLog.instance.trace("lib/common/theme.dart::AppAppearance.themeMode.set");
+
     if (!_pending.containsKey('themeMode') && _themeMode == value) return;
     unawaited(_save({'themeMode': value.name}));
   }
 
   set seedColor(Color value) {
+    AppLog.instance.trace("lib/common/theme.dart::AppAppearance.seedColor.set");
+
     if (!_pending.containsKey('seedColor') && _seedColor == value) return;
     unawaited(_save({'seedColor': value.toARGB32()}));
   }
 
   set textScale(double value) {
+    AppLog.instance.trace("lib/common/theme.dart::AppAppearance.textScale.set");
+
     if (!value.isFinite || value < 0.8 || value > 1.5) {
       throw RangeError.value(
         value,
@@ -104,6 +158,8 @@ class AppAppearance extends ChangeNotifier {
   }
 
   set oledBlack(bool value) {
+    AppLog.instance.trace("lib/common/theme.dart::AppAppearance.oledBlack.set");
+
     if (!_pending.containsKey('oledBlack') && _oledBlack == value) return;
     unawaited(_save({'oledBlack': value}));
   }
@@ -116,10 +172,18 @@ class AppTextScaler extends TextScaler {
   final double appScale;
 
   @override
-  double scale(double fontSize) => systemScaler.scale(fontSize) * appScale;
+  double scale(double fontSize) {
+    AppLog.instance.trace("lib/common/theme.dart::AppTextScaler.scale");
+    return systemScaler.scale(fontSize) * appScale;
+  }
 
   @override
-  double get textScaleFactor => scale(14) / 14;
+  double get textScaleFactor {
+    AppLog.instance.trace(
+      "lib/common/theme.dart::AppTextScaler.textScaleFactor.get",
+    );
+    return scale(14) / 14;
+  }
 }
 
 ThemeData getThemeData({
@@ -127,6 +191,8 @@ ThemeData getThemeData({
   required Brightness brightness,
   bool oledBlack = false,
 }) {
+  AppLog.instance.trace("lib/common/theme.dart::getThemeData");
+
   const fontFamily = 'HarmonyOS Sans SC';
   final isOled = brightness == Brightness.dark && oledBlack;
   var colorScheme = ColorScheme.fromSeed(
@@ -303,7 +369,12 @@ class _FadePageTransitionsBuilder extends PageTransitionsBuilder {
   const _FadePageTransitionsBuilder();
 
   @override
-  Duration get transitionDuration => const Duration(milliseconds: 200);
+  Duration get transitionDuration {
+    AppLog.instance.trace(
+      "lib/common/theme.dart::_FadePageTransitionsBuilder.transitionDuration.get",
+    );
+    return const Duration(milliseconds: 200);
+  }
 
   @override
   Widget buildTransitions<T>(
@@ -312,11 +383,16 @@ class _FadePageTransitionsBuilder extends PageTransitionsBuilder {
     Animation<double> animation,
     Animation<double> secondaryAnimation,
     Widget child,
-  ) => _PredictiveBackFadeTransition(
-    route: route,
-    animation: animation,
-    child: child,
-  );
+  ) {
+    AppLog.instance.trace(
+      "lib/common/theme.dart::_FadePageTransitionsBuilder.buildTransitions",
+    );
+    return _PredictiveBackFadeTransition(
+      route: route,
+      animation: animation,
+      child: child,
+    );
+  }
 }
 
 class _PredictiveBackFadeTransition extends StatefulWidget {
@@ -331,8 +407,12 @@ class _PredictiveBackFadeTransition extends StatefulWidget {
   final Widget child;
 
   @override
-  State<_PredictiveBackFadeTransition> createState() =>
-      _PredictiveBackFadeTransitionState();
+  State<_PredictiveBackFadeTransition> createState() {
+    AppLog.instance.trace(
+      "lib/common/theme.dart::_PredictiveBackFadeTransition.createState",
+    );
+    return _PredictiveBackFadeTransitionState();
+  }
 }
 
 class _PredictiveBackFadeTransitionState
@@ -340,12 +420,20 @@ class _PredictiveBackFadeTransitionState
     with WidgetsBindingObserver {
   @override
   void initState() {
+    AppLog.instance.trace(
+      "lib/common/theme.dart::_PredictiveBackFadeTransitionState.initState",
+    );
+
     super.initState();
     WidgetsBinding.instance.addObserver(this);
   }
 
   @override
   bool handleStartBackGesture(PredictiveBackEvent backEvent) {
+    AppLog.instance.trace(
+      "lib/common/theme.dart::_PredictiveBackFadeTransitionState.handleStartBackGesture",
+    );
+
     if (backEvent.isButtonEvent ||
         !widget.route.isCurrent ||
         !widget.route.popGestureEnabled) {
@@ -356,23 +444,46 @@ class _PredictiveBackFadeTransitionState
   }
 
   @override
-  void handleUpdateBackGestureProgress(PredictiveBackEvent backEvent) => widget
-      .route
-      .handleUpdateBackGestureProgress(progress: 1 - backEvent.progress);
+  void handleUpdateBackGestureProgress(PredictiveBackEvent backEvent) {
+    AppLog.instance.trace(
+      "lib/common/theme.dart::_PredictiveBackFadeTransitionState.handleUpdateBackGestureProgress",
+    );
+    widget.route.handleUpdateBackGestureProgress(
+      progress: 1 - backEvent.progress,
+    );
+  }
 
   @override
-  void handleCancelBackGesture() => widget.route.handleCancelBackGesture();
+  void handleCancelBackGesture() {
+    AppLog.instance.trace(
+      "lib/common/theme.dart::_PredictiveBackFadeTransitionState.handleCancelBackGesture",
+    );
+    widget.route.handleCancelBackGesture();
+  }
 
   @override
-  void handleCommitBackGesture() => widget.route.handleCommitBackGesture();
+  void handleCommitBackGesture() {
+    AppLog.instance.trace(
+      "lib/common/theme.dart::_PredictiveBackFadeTransitionState.handleCommitBackGesture",
+    );
+    widget.route.handleCommitBackGesture();
+  }
 
   @override
   void dispose() {
+    AppLog.instance.trace(
+      "lib/common/theme.dart::_PredictiveBackFadeTransitionState.dispose",
+    );
+
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
 
   @override
-  Widget build(BuildContext context) =>
-      FadeTransition(opacity: widget.animation, child: widget.child);
+  Widget build(BuildContext context) {
+    AppLog.instance.trace(
+      "lib/common/theme.dart::_PredictiveBackFadeTransitionState.build",
+    );
+    return FadeTransition(opacity: widget.animation, child: widget.child);
+  }
 }

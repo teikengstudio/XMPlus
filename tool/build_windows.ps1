@@ -23,6 +23,15 @@ $ErrorActionPreference = 'Stop'
 $ProjectRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 if (-not $SdkRoot) { $SdkRoot = Split-Path (Split-Path (Get-Command flutter.bat -ErrorAction Stop).Source) }
 $Flutter = Join-Path $SdkRoot 'bin\flutter.bat'
+$Dart = Join-Path $SdkRoot 'bin\dart.bat'
+$UploadSentrySymbols = $env:SENTRY_UPLOAD_SYMBOLS -ceq 'true'
+if ($UploadSentrySymbols) {
+    foreach ($name in @('SENTRY_DSN', 'SENTRY_AUTH_TOKEN')) {
+        if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($name, 'Process'))) {
+            throw "SENTRY_UPLOAD_SYMBOLS=true requires process environment $name before building."
+        }
+    }
+}
 $Utf8 = New-Object System.Text.UTF8Encoding($false)
 
 function Read-Json([string]$Path) {
@@ -308,6 +317,8 @@ Ensure-Directory $bundle
 $oldPath = $env:PATH
 $oldTls = [Net.ServicePointManager]::SecurityProtocol
 $oldNativeSupply = [Environment]::GetEnvironmentVariable('XMPLUS_NATIVE_SUPPLY', 'Process')
+$oldSentryRelease = [Environment]::GetEnvironmentVariable('SENTRY_RELEASE', 'Process')
+$oldSentryDist = [Environment]::GetEnvironmentVariable('SENTRY_DIST', 'Process')
 $oldLocation = Get-Location
 try {
     [Net.ServicePointManager]::SecurityProtocol = $oldTls -bor [Net.SecurityProtocolType]::Tls12
@@ -349,7 +360,12 @@ try {
         $obsolete = Join-Path $ProjectRoot ('build\windows\x64\runner\Release\' + $name)
         if (Test-Path -LiteralPath $obsolete -PathType Leaf) { Remove-Item -LiteralPath $obsolete }
     }
-    Invoke-Flutter -Arguments @('build', 'windows', '--release', '--no-pub')
+    $buildArguments = @('build', 'windows', '--release', '--no-pub')
+    foreach ($name in @('SENTRY_DSN', 'SENTRY_ENVIRONMENT')) {
+        $value = [Environment]::GetEnvironmentVariable($name, 'Process')
+        if (-not [string]::IsNullOrWhiteSpace($value)) { $buildArguments += "--dart-define=$name=$value" }
+    }
+    Invoke-Flutter -Arguments $buildArguments
     Assert-Hash (Join-Path $source 'pubspec.lock') $lockHash
 
     $release = Join-Path $source 'build\windows\x64\runner\Release'
@@ -547,6 +563,22 @@ try {
         }
         throw
     }
+    if ($UploadSentrySymbols) {
+        $env:SENTRY_RELEASE = "xmplus@$PackageVersion"
+        $env:SENTRY_DIST = $PackageVersion.Split('+')[1]
+        $symbolArguments = @('--disable-dart-dev', '--packages=.dart_tool/package_config.json', 'tool/upload_sentry_symbols.dart', '--sentry-define=symbols_path=build/windows',
+            "--sentry-define=release=$env:SENTRY_RELEASE", "--sentry-define=dist=$env:SENTRY_DIST",
+            '--sentry-define=commits=false')
+        foreach ($name in @('SENTRY_ORG', 'SENTRY_PROJECT')) {
+            $value = [Environment]::GetEnvironmentVariable($name, 'Process')
+            if (-not [string]::IsNullOrWhiteSpace($value)) {
+                $key = $name.Substring('SENTRY_'.Length).ToLowerInvariant()
+                $symbolArguments += "--sentry-define=$key=$value"
+            }
+        }
+        & $Dart @symbolArguments
+        if ($LASTEXITCODE -ne 0) { throw "Sentry symbol upload failed with code $LASTEXITCODE." }
+    }
     Write-Host "Bundle: $target"
     Write-Host "ZIP: $targetZip"
     Write-Host "ZIP SHA-256: $zipHash"
@@ -558,6 +590,8 @@ try {
 } finally {
     $env:PATH = $oldPath
     [Environment]::SetEnvironmentVariable('XMPLUS_NATIVE_SUPPLY', $oldNativeSupply, 'Process')
+    [Environment]::SetEnvironmentVariable('SENTRY_RELEASE', $oldSentryRelease, 'Process')
+    [Environment]::SetEnvironmentVariable('SENTRY_DIST', $oldSentryDist, 'Process')
     [Net.ServicePointManager]::SecurityProtocol = $oldTls
     Set-Location -LiteralPath $oldLocation.Path
 }

@@ -9,20 +9,23 @@ import 'package:flutter/services.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:get/get.dart';
 import 'package:synchronized/synchronized.dart';
+import 'package:sentry_flutter/sentry_flutter.dart';
 import 'package:window_manager/window_manager.dart';
 
 import 'common/theme.dart';
 import 'common/widgets/scroll_behavior.dart';
 import 'common/widgets/app_shutdown_overlay.dart';
+import 'common/widgets/log_upload_prompt_host.dart';
 import 'pages/shell_page.dart';
 import 'pages/download_page.dart';
 import 'pages/player_panel.dart';
 import 'pages/mini_player_page.dart';
 import 'pages/window_close_preferences.dart';
 import 'services/app_runtime.dart';
+import 'services/app_log.dart';
 import 'services/desktop_playback_window.dart';
 import 'services/desktop_tray.dart';
-import 'services/request_diagnostics.dart';
+import 'storage/app_storage.dart';
 
 class MyApp extends StatefulWidget {
   const MyApp({required this.runtime, super.key});
@@ -30,7 +33,10 @@ class MyApp extends StatefulWidget {
   final AppRuntime runtime;
 
   @override
-  State<MyApp> createState() => _MyAppState();
+  State<MyApp> createState() {
+    AppLog.instance.trace("lib/app.dart::MyApp.createState");
+    return _MyAppState();
+  }
 }
 
 class _MyAppState extends State<MyApp> with WindowListener {
@@ -38,19 +44,40 @@ class _MyAppState extends State<MyApp> with WindowListener {
   final _navigator = GlobalKey<NavigatorState>();
   final _messenger = GlobalKey<ScaffoldMessengerState>();
   final _playerRoutes = _PlayerRouteObserver();
+  final _promptRoutes = LogUploadPromptObserver();
+  final _sentryRoutes = SentryNavigatorObserver();
   final _windowActions = Lock();
   final _playbackWindow = DesktopPlaybackWindow();
   late final _tray = DesktopTray(
-    onRestore: () => _switchWindow(restore: true),
-    onMini: () => _switchWindow(),
-    onPlayPause: () => _trayPlayback(() {
-      final player = widget.runtime.player;
-      return player.playing || player.loading
-          ? player.pause()
-          : player.resume();
-    }),
-    onNext: () => _trayPlayback(widget.runtime.player.next),
-    onExit: () => onCloseRequested(explicitExit: true),
+    onRestore: () {
+      AppLog.instance.trace("lib/app.dart::_MyAppState._tray.closure#1");
+      return _switchWindow(restore: true);
+    },
+    onMini: () {
+      AppLog.instance.trace("lib/app.dart::_MyAppState._tray.closure#2");
+      return _switchWindow();
+    },
+    onPlayPause: () {
+      AppLog.instance.trace("lib/app.dart::_MyAppState._tray.closure#3");
+      return _trayPlayback(() {
+        AppLog.instance.trace(
+          "lib/app.dart::_MyAppState._tray.closure#3.closure#1",
+        );
+
+        final player = widget.runtime.player;
+        return player.playing || player.loading
+            ? player.pause()
+            : player.resume();
+      });
+    },
+    onNext: () {
+      AppLog.instance.trace("lib/app.dart::_MyAppState._tray.closure#4");
+      return _trayPlayback(widget.runtime.player.next);
+    },
+    onExit: () {
+      AppLog.instance.trace("lib/app.dart::_MyAppState._tray.closure#5");
+      return onCloseRequested(explicitExit: true);
+    },
   );
   bool _trayPlaybackBusy = false;
   Route<void>? _miniRoute;
@@ -58,19 +85,22 @@ class _MyAppState extends State<MyApp> with WindowListener {
   Future<void>? _closeWork;
   bool _exitPending = false, _choosingCloseAction = false;
   String? _windowCloseError;
-  bool _diagnosticsOpen = false;
 
   @override
   void initState() {
+    AppLog.instance.trace("lib/app.dart::_MyAppState.initState");
+
     super.initState();
-    unawaited(
-      RequestDiagnostics.instance.configure(widget.runtime.storage.directory),
-    );
     widget.runtime.confirmDownload = (batch) async {
+      AppLog.instance.trace("lib/app.dart::_MyAppState.initState.closure#1");
+
       final context = _navigator.currentContext;
       return context == null ? false : confirmDownloadBatch(context, batch);
     };
-    widget.runtime.requestExit = () => onCloseRequested(explicitExit: true);
+    widget.runtime.requestExit = () {
+      AppLog.instance.trace("lib/app.dart::_MyAppState.initState.closure#2");
+      return onCloseRequested(explicitExit: true);
+    };
     if (Platform.isWindows || Platform.isMacOS || Platform.isLinux) {
       windowManager.addListener(this);
       unawaited(windowManager.setPreventClose(true));
@@ -83,6 +113,7 @@ class _MyAppState extends State<MyApp> with WindowListener {
   }
 
   void _updateTray() {
+    AppLog.instance.trace("lib/app.dart::_MyAppState._updateTray");
     final player = widget.runtime.player;
     _tray.update(
       title: player.current?.title ?? '',
@@ -97,37 +128,59 @@ class _MyAppState extends State<MyApp> with WindowListener {
     );
   }
 
-  Future<void> _trayPlayback(Future<void> Function() action) async {
-    if (_trayPlaybackBusy ||
-        widget.runtime.closing ||
-        widget.runtime.restoringBackup ||
-        widget.runtime.restoreNeedsReload ||
-        !mounted)
-      return;
-    _trayPlaybackBusy = true;
-    _updateTray();
-    try {
-      await action();
-    } catch (_) {
-      await _revealWindow();
-      _showWindowError('播放操作未完成，请重试');
-    } finally {
-      _trayPlaybackBusy = false;
-      widget.runtime.changed();
-    }
+  Future<void> _trayPlayback(Future<void> Function() action) {
+    AppLog.instance.trace("lib/app.dart::_MyAppState._trayPlayback");
+    return AppLog.instance.runWithErrorScope(() async {
+      AppLog.instance.trace(
+        "lib/app.dart::_MyAppState._trayPlayback.closure#1",
+      );
+
+      if (_trayPlaybackBusy ||
+          widget.runtime.closing ||
+          widget.runtime.restoringBackup ||
+          widget.runtime.restoreNeedsReload ||
+          !mounted)
+        return;
+      _trayPlaybackBusy = true;
+      _updateTray();
+      try {
+        await action();
+      } catch (error, stack) {
+        if (!AppLog.instance.errorWasRecorded(error)) {
+          AppLog.instance.write(
+            AppLogLevel.error,
+            'window',
+            'Tray playback operation failed',
+            error: error,
+            stackTrace: stack,
+            promptUser: true,
+          );
+        }
+        await _revealWindow();
+        _showWindowError('播放操作未完成，请重试');
+      } finally {
+        _trayPlaybackBusy = false;
+        widget.runtime.changed();
+      }
+    });
   }
 
   @override
   void onWindowClose() async {
+    AppLog.instance.trace("lib/app.dart::_MyAppState.onWindowClose");
+
     await onCloseRequested();
   }
 
   @override
   void onWindowMinimize() {
+    AppLog.instance.trace("lib/app.dart::_MyAppState.onWindowMinimize");
     if (Platform.isWindows && _miniRoute != null) unawaited(_sendToTray());
   }
 
   Future<void> onCloseRequested({bool explicitExit = false}) {
+    AppLog.instance.trace("lib/app.dart::_MyAppState.onCloseRequested");
+
     if (!mounted) return Future.value();
     if (explicitExit ||
         widget.runtime.scheduledExit ||
@@ -144,20 +197,39 @@ class _MyAppState extends State<MyApp> with WindowListener {
         _navigator.currentState?.removeRoute(dialog);
       }
     }
-    return _closeWork ??= _windowActions
-        .synchronized(_handleClose)
-        .whenComplete(() {
-          _closeWork = null;
-          _exitPending = false;
-          widget.runtime.scheduledExit = false;
-        });
+    return _closeWork ??= _windowActions.synchronized(_handleClose).whenComplete(
+      () {
+        AppLog.instance.trace(
+          "lib/app.dart::_MyAppState.onCloseRequested.closure#1",
+        );
+
+        _closeWork = null;
+        _exitPending = false;
+        widget.runtime.scheduledExit = false;
+        if (mounted)
+          setState(() {
+            AppLog.instance.trace(
+              "lib/app.dart::_MyAppState.onCloseRequested.closure#1.closure#1",
+            );
+          });
+      },
+    );
   }
 
   Future<T?> _askClose<T>(Widget dialog) async {
+    AppLog.instance.trace("lib/app.dart::_MyAppState._askClose");
+
     await _restoreMainWindow();
     final context = _navigator.currentContext;
     if (context == null) return null;
-    final route = DialogRoute<T>(context: context, builder: (_) => dialog);
+    final route = DialogRoute<T>(
+      context: context,
+      settings: const RouteSettings(name: '/dialog/window-close'),
+      builder: (_) {
+        AppLog.instance.trace("lib/app.dart::_MyAppState._askClose.closure#1");
+        return dialog;
+      },
+    );
     _closeDialog = route;
     try {
       return await _navigator.currentState!.push(route);
@@ -166,100 +238,172 @@ class _MyAppState extends State<MyApp> with WindowListener {
     }
   }
 
-  Future<void> _handleClose() async {
-    if (!mounted) return;
-    if (_windowCloseError != null) setState(() => _windowCloseError = null);
-    try {
-      if (Platform.isWindows && !_exitPending) {
-        if (_miniRoute != null) {
-          await _hideToTray();
-          if (!_exitPending) return;
-        } else {
-          var action = WindowCloseAction.read(widget.runtime);
-          if (action == WindowCloseAction.ask) {
-            _choosingCloseAction = true;
-            final choice = await _askClose<(WindowCloseAction, bool)>(
-              const WindowCloseChoiceDialog(),
-            );
-            _choosingCloseAction = false;
-            if (!_exitPending) {
-              if (choice == null) return;
-              action = choice.$1;
-              if (choice.$2) {
-                try {
-                  await action.save(widget.runtime);
-                } catch (_) {
-                  _showWindowError('未能记住选择，本次仍按所选方式关闭');
+  Future<void> _handleClose() {
+    AppLog.instance.trace("lib/app.dart::_MyAppState._handleClose");
+    return AppLog.instance.runWithErrorScope(() async {
+      AppLog.instance.trace("lib/app.dart::_MyAppState._handleClose.closure#1");
+
+      if (!mounted) return;
+      if (_windowCloseError != null)
+        setState(() {
+          AppLog.instance.trace(
+            "lib/app.dart::_MyAppState._handleClose.closure#1.closure#1",
+          );
+          _windowCloseError = null;
+        });
+      try {
+        if (Platform.isWindows && !_exitPending) {
+          if (_miniRoute != null) {
+            await _hideToTray();
+            if (!_exitPending) return;
+          } else {
+            var action = WindowCloseAction.read(widget.runtime);
+            if (action == WindowCloseAction.ask) {
+              _choosingCloseAction = true;
+              final choice = await _askClose<(WindowCloseAction, bool)>(
+                const WindowCloseChoiceDialog(),
+              );
+              _choosingCloseAction = false;
+              if (!_exitPending) {
+                if (choice == null) return;
+                action = choice.$1;
+                if (choice.$2) {
+                  try {
+                    await action.save(widget.runtime);
+                  } catch (error, stack) {
+                    if (!(error is StorageException &&
+                            const {
+                              'too_large',
+                              'secret_in_state',
+                            }.contains(error.code)) &&
+                        !AppLog.instance.errorWasRecorded(error)) {
+                      AppLog.instance.write(
+                        AppLogLevel.error,
+                        'window',
+                        'Saving close preference failed',
+                        error: error,
+                        stackTrace: stack,
+                        promptUser: true,
+                      );
+                    }
+                    _showWindowError('未能记住选择，本次仍按所选方式关闭');
+                  }
                 }
               }
             }
-          }
-          if (!_exitPending && action == WindowCloseAction.mini) {
-            await _enterMini();
-            if (!_exitPending) return;
-          }
-          if (!_exitPending && action == WindowCloseAction.tray) {
-            await _hideToTray();
-            if (!_exitPending) return;
+            if (!_exitPending && action == WindowCloseAction.mini) {
+              await _enterMini();
+              if (!_exitPending) return;
+            }
+            if (!_exitPending && action == WindowCloseAction.tray) {
+              await _hideToTray();
+              if (!_exitPending) return;
+            }
           }
         }
-      }
-      if (!widget.runtime.exitOnly &&
-          !widget.runtime.scheduledExit &&
-          !widget.runtime.restoringBackup &&
-          !widget.runtime.restoreNeedsReload &&
-          widget.runtime.downloads.tasks.any((task) => task.active)) {
-        final confirmed = await _askClose<bool>(
-          Builder(
-            builder: (context) => AlertDialog(
-              title: const Text('暂停下载并退出？'),
-              content: const Text('下次打开后可手动继续。'),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.pop(context, false),
-                  child: const Text('取消'),
-                ),
-                FilledButton(
-                  onPressed: () => Navigator.pop(context, true),
-                  child: const Text('暂停并退出'),
-                ),
-              ],
+        if (!widget.runtime.exitOnly &&
+            !widget.runtime.scheduledExit &&
+            !widget.runtime.restoringBackup &&
+            !widget.runtime.restoreNeedsReload &&
+            widget.runtime.downloads.tasks.any((task) {
+              AppLog.instance.trace(
+                "lib/app.dart::_MyAppState._handleClose.closure#1.closure#2",
+              );
+              return task.active;
+            })) {
+          final confirmed = await _askClose<bool>(
+            Builder(
+              builder: (context) {
+                AppLog.instance.trace(
+                  "lib/app.dart::_MyAppState._handleClose.closure#1.closure#3",
+                );
+                return AlertDialog(
+                  title: const Text('暂停下载并退出？'),
+                  content: const Text('下次打开后可手动继续。'),
+                  actions: [
+                    TextButton(
+                      onPressed: () {
+                        AppLog.instance.trace(
+                          "lib/app.dart::_MyAppState._handleClose.closure#1.closure#3.closure#1",
+                        );
+                        Navigator.pop(context, false);
+                      },
+                      child: const Text('取消'),
+                    ),
+                    FilledButton(
+                      onPressed: () {
+                        AppLog.instance.trace(
+                          "lib/app.dart::_MyAppState._handleClose.closure#1.closure#3.closure#2",
+                        );
+                        Navigator.pop(context, true);
+                      },
+                      child: const Text('暂停并退出'),
+                    ),
+                  ],
+                );
+              },
             ),
-          ),
-        );
-        if (confirmed != true && !widget.runtime.scheduledExit) return;
-      }
-      if (await widget.runtime.close()) {
-        if (Platform.isAndroid) {
-          await SystemNavigator.pop();
+          );
+          if (confirmed != true && !widget.runtime.scheduledExit) return;
+        }
+        if (await widget.runtime.close()) {
+          if (Platform.isWindows) _tray.dispose();
+          AppLog.instance.write(AppLogLevel.info, 'lifecycle', '应用退出');
+          await AppLog.instance.close();
+          if (Platform.isAndroid) {
+            await SystemNavigator.pop();
+          } else {
+            await windowManager.setPreventClose(false);
+            await windowManager.close();
+          }
         } else {
-          await windowManager.setPreventClose(false);
-          _tray.dispose();
-          await windowManager.close();
+          await _revealWindow();
+          _showWindowError(widget.runtime.lifecycleError ?? '退出未完成，请重试');
         }
-      } else {
+      } catch (error, stack) {
+        if (!AppLog.instance.errorWasRecorded(error)) {
+          AppLog.instance.write(
+            AppLogLevel.error,
+            'window',
+            'Closing window failed',
+            error: error,
+            stackTrace: stack,
+            promptUser: true,
+          );
+        }
+        if (mounted) {
+          setState(() {
+            AppLog.instance.trace(
+              "lib/app.dart::_MyAppState._handleClose.closure#1.closure#4",
+            );
+            _windowCloseError = '窗口未能关闭，请重试退出';
+          });
+        }
+        if (Platform.isWindows || Platform.isMacOS || Platform.isLinux) {
+          try {
+            await windowManager.setPreventClose(true);
+          } catch (cleanupError, cleanupStack) {
+            AppLog.instance.write(
+              AppLogLevel.warning,
+              'window',
+              'Restoring close prevention failed',
+              error: cleanupError,
+              stackTrace: cleanupStack,
+              promptUser: false,
+            );
+          }
+        }
         await _revealWindow();
-        _showWindowError(widget.runtime.lifecycleError ?? '退出未完成，请重试');
+        _showWindowError('窗口操作未完成，请重试');
+      } finally {
+        _choosingCloseAction = false;
       }
-    } catch (_) {
-      if (mounted) {
-        setState(() => _windowCloseError = '窗口未能关闭，请重试退出');
-      }
-      if (Platform.isWindows || Platform.isMacOS || Platform.isLinux) {
-        try {
-          await windowManager.setPreventClose(true);
-        } catch (_) {
-          // Keep the retry UI even if the native window call also failed.
-        }
-      }
-      await _revealWindow();
-      _showWindowError('窗口操作未完成，请重试');
-    } finally {
-      _choosingCloseAction = false;
-    }
+    });
   }
 
   Future<void> _revealWindow() async {
+    AppLog.instance.trace("lib/app.dart::_MyAppState._revealWindow");
+
     if (Platform.isWindows || Platform.isMacOS || Platform.isLinux) {
       if (await windowManager.isMinimized()) await windowManager.restore();
       await windowManager.show();
@@ -268,6 +412,7 @@ class _MyAppState extends State<MyApp> with WindowListener {
   }
 
   Future<void> _hideToTray() async {
+    AppLog.instance.trace("lib/app.dart::_MyAppState._hideToTray");
     if (!_tray.ensureReady()) throw StateError('系统托盘暂不可用');
     _updateTray();
     try {
@@ -278,57 +423,137 @@ class _MyAppState extends State<MyApp> with WindowListener {
     }
   }
 
-  Future<void> _sendToTray() => _windowActions.synchronized(() async {
-    if (!mounted || widget.runtime.closing) return;
-    try {
-      await _hideToTray();
-    } catch (_) {
-      await _revealWindow();
-      _showWindowError('暂时无法收起到托盘，请重试');
-    }
-  });
+  Future<void> _sendToTray() {
+    AppLog.instance.trace("lib/app.dart::_MyAppState._sendToTray");
+    return AppLog.instance.runWithErrorScope(() {
+      AppLog.instance.trace("lib/app.dart::_MyAppState._sendToTray.closure#1");
+
+      return _windowActions.synchronized(() async {
+        AppLog.instance.trace(
+          "lib/app.dart::_MyAppState._sendToTray.closure#1.closure#1",
+        );
+
+        if (!mounted || widget.runtime.closing) return;
+        try {
+          await _hideToTray();
+        } catch (error, stack) {
+          if (!AppLog.instance.errorWasRecorded(error)) {
+            AppLog.instance.write(
+              AppLogLevel.error,
+              'window',
+              'Hiding playback window to tray failed',
+              error: error,
+              stackTrace: stack,
+              promptUser: true,
+            );
+          }
+          await _revealWindow();
+          _showWindowError('暂时无法收起到托盘，请重试');
+        }
+      });
+    });
+  }
 
   Future<void> _restoreMainWindow() async {
+    AppLog.instance.trace("lib/app.dart::_MyAppState._restoreMainWindow");
     if (Platform.isWindows) {
       await _playbackWindow.restore();
       final route = _miniRoute;
       if (route != null) {
         _navigator.currentState?.removeRoute(route);
-        if (mounted) setState(() => _miniRoute = null);
+        if (mounted)
+          setState(() {
+            AppLog.instance.trace(
+              "lib/app.dart::_MyAppState._restoreMainWindow.closure#1",
+            );
+            _miniRoute = null;
+          });
       }
     }
     await _revealWindow();
   }
 
   void _showWindowError(String message) {
+    AppLog.instance.trace("lib/app.dart::_MyAppState._showWindowError");
+
     _messenger.currentState?.showSnackBar(SnackBar(content: Text(message)));
   }
 
-  Future<void> _enterMini() async {
-    if (_miniRoute != null || !mounted) return;
-    final route = MaterialPageRoute<void>(
-      settings: const RouteSettings(name: MiniPlayerPage.routeName),
-      builder: (_) => MiniPlayerPage(
-        runtime: widget.runtime,
-        onRestore: () => unawaited(_switchWindow(restore: true)),
-        onExit: () => unawaited(onCloseRequested(explicitExit: true)),
-      ),
-    );
-    setState(() => _miniRoute = route);
-    unawaited(_navigator.currentState!.push(route));
-    try {
-      await _playbackWindow.enterMini();
-    } catch (_) {
-      if (!_playbackWindow.isMini) {
-        _navigator.currentState?.removeRoute(route);
-        if (mounted) setState(() => _miniRoute = null);
+  Future<void> _enterMini() {
+    AppLog.instance.trace("lib/app.dart::_MyAppState._enterMini");
+    return AppLog.instance.runWithErrorScope(() async {
+      AppLog.instance.trace("lib/app.dart::_MyAppState._enterMini.closure#1");
+
+      if (_miniRoute != null || !mounted) return;
+      final route = MaterialPageRoute<void>(
+        settings: const RouteSettings(name: MiniPlayerPage.routeName),
+        builder: (_) {
+          AppLog.instance.trace(
+            "lib/app.dart::_MyAppState._enterMini.closure#1.closure#1",
+          );
+          return MiniPlayerPage(
+            runtime: widget.runtime,
+            onRestore: () {
+              AppLog.instance.trace(
+                "lib/app.dart::_MyAppState._enterMini.closure#1.closure#1.closure#1",
+              );
+              unawaited(_switchWindow(restore: true));
+            },
+            onExit: () {
+              AppLog.instance.trace(
+                "lib/app.dart::_MyAppState._enterMini.closure#1.closure#1.closure#2",
+              );
+              unawaited(onCloseRequested(explicitExit: true));
+            },
+          );
+        },
+      );
+      setState(() {
+        AppLog.instance.trace(
+          "lib/app.dart::_MyAppState._enterMini.closure#1.closure#2",
+        );
+        _miniRoute = route;
+      });
+      unawaited(_navigator.currentState!.push(route));
+      try {
+        await _playbackWindow.enterMini();
+      } catch (error, stack) {
+        if (!AppLog.instance.errorWasRecorded(error)) {
+          AppLog.instance.write(
+            AppLogLevel.error,
+            'window',
+            'Entering mini window failed',
+            error: error,
+            stackTrace: stack,
+            promptUser: true,
+          );
+        }
+        if (!_playbackWindow.isMini) {
+          _navigator.currentState?.removeRoute(route);
+          if (mounted)
+            setState(() {
+              AppLog.instance.trace(
+                "lib/app.dart::_MyAppState._enterMini.closure#1.closure#3",
+              );
+              _miniRoute = null;
+            });
+        }
+        rethrow;
       }
-      rethrow;
-    }
+    });
   }
 
-  Future<void> _switchWindow({bool restore = false}) =>
-      _windowActions.synchronized(() async {
+  Future<void> _switchWindow({bool restore = false}) {
+    AppLog.instance.trace("lib/app.dart::_MyAppState._switchWindow");
+    return AppLog.instance.runWithErrorScope(() {
+      AppLog.instance.trace(
+        "lib/app.dart::_MyAppState._switchWindow.closure#1",
+      );
+      return _windowActions.synchronized(() async {
+        AppLog.instance.trace(
+          "lib/app.dart::_MyAppState._switchWindow.closure#1.closure#1",
+        );
+
         if (!mounted || widget.runtime.closing) return;
         try {
           if (restore) {
@@ -337,29 +562,28 @@ class _MyAppState extends State<MyApp> with WindowListener {
             await _enterMini();
             await _revealWindow();
           }
-        } catch (_) {
+        } catch (error, stack) {
+          if (!AppLog.instance.errorWasRecorded(error)) {
+            AppLog.instance.write(
+              AppLogLevel.error,
+              'window',
+              'Switching playback window failed',
+              error: error,
+              stackTrace: stack,
+              promptUser: true,
+            );
+          }
           await _revealWindow();
           _showWindowError('窗口切换失败，可重试或选择彻底退出');
         }
       });
-
-  Future<void> _showRequestFailures() async {
-    if (_diagnosticsOpen || !mounted) return;
-    final context = _navigator.currentContext;
-    if (context == null) return;
-    _diagnosticsOpen = true;
-    try {
-      await showDialog<void>(
-        context: context,
-        builder: (_) => const _RequestFailureDialog(),
-      );
-    } finally {
-      _diagnosticsOpen = false;
-    }
+    });
   }
 
   @override
   void dispose() {
+    AppLog.instance.trace("lib/app.dart::_MyAppState.dispose");
+
     if (Platform.isWindows || Platform.isMacOS || Platform.isLinux) {
       windowManager.removeListener(this);
     }
@@ -371,143 +595,155 @@ class _MyAppState extends State<MyApp> with WindowListener {
     }
     _appearance.dispose();
     _playerRoutes.dispose();
+    _promptRoutes.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
+    AppLog.instance.trace("lib/app.dart::_MyAppState.build");
+
     return ListenableBuilder(
       listenable: _appearance,
-      builder: (context, _) => GetMaterialApp(
-        title: 'XMPlus',
-        navigatorKey: _navigator,
-        scaffoldMessengerKey: _messenger,
-        navigatorObservers: [_playerRoutes],
-        debugShowCheckedModeBanner: false,
-        theme: getThemeData(
-          seedColor: _appearance.seedColor,
-          brightness: Brightness.light,
-          oledBlack: _appearance.oledBlack,
-        ),
-        darkTheme: getThemeData(
-          seedColor: _appearance.seedColor,
-          brightness: Brightness.dark,
-          oledBlack: _appearance.oledBlack,
-        ),
-        themeMode: _appearance.themeMode,
-        localizationsDelegates: GlobalMaterialLocalizations.delegates,
-        locale: const Locale('zh', 'CN'),
-        fallbackLocale: const Locale('zh', 'CN'),
-        supportedLocales: const [Locale('zh', 'CN'), Locale('en', 'US')],
-        scrollBehavior: const CustomScrollBehavior(),
-        builder: (context, child) => MediaQuery(
-          data: MediaQuery.of(context).copyWith(
-            textScaler: AppTextScaler(
-              MediaQuery.textScalerOf(context),
-              _appearance.textScale,
-            ),
+      builder: (context, _) {
+        AppLog.instance.trace("lib/app.dart::_MyAppState.build.closure#1");
+        return GetMaterialApp(
+          title: 'XMPlus',
+          navigatorKey: _navigator,
+          scaffoldMessengerKey: _messenger,
+          navigatorObservers: [_playerRoutes, _promptRoutes, _sentryRoutes],
+          initialRoute: '/',
+          debugShowCheckedModeBanner: false,
+          theme: getThemeData(
+            seedColor: _appearance.seedColor,
+            brightness: Brightness.light,
+            oledBlack: _appearance.oledBlack,
           ),
-          child: ColoredBox(
-            color: Theme.of(context).colorScheme.surface,
-            child: AppShutdownOverlay(
-              runtime: widget.runtime,
-              windowError: _windowCloseError,
-              onRetry: () => unawaited(onCloseRequested(explicitExit: true)),
-              child: Overlay.wrap(
-                child: ListenableBuilder(
-                  listenable: _playerRoutes,
-                  child: child,
-                  builder: (context, child) => Column(
-                    children: [
-                      if (_miniRoute == null)
-                        ListenableBuilder(
-                          listenable: widget.runtime,
-                          builder: (context, _) => StreamBuilder<void>(
-                            stream: RequestDiagnostics.instance.changes,
-                            builder: (context, _) {
-                              final diagnostics = RequestDiagnostics.instance;
-                              final settings =
-                                  widget.runtime.storage.state['settings']
-                                      as Map;
-                              if (settings['showRequestFailureBanner'] !=
-                                      true ||
-                                  (diagnostics.entries.isEmpty &&
-                                      diagnostics.persistenceError == null)) {
-                                return const SizedBox.shrink();
-                              }
-                              return Material(
-                                color: Theme.of(context)
-                                    .colorScheme
-                                    .errorContainer,
-                                child: SafeArea(
-                                  bottom: false,
-                                  child: Padding(
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 12,
-                                      vertical: 6,
-                                    ),
-                                    child: Row(
-                                      children: [
-                                        const Icon(Icons.error_outline),
-                                        const SizedBox(width: 8),
-                                        Expanded(
-                                          child: Text(
-                                            '请求失败记录：${diagnostics.entries.length} 条'
-                                            '${diagnostics.persistenceError == null ? '' : '；本地日志保存失败，请复制保留'}',
-                                          ),
+          darkTheme: getThemeData(
+            seedColor: _appearance.seedColor,
+            brightness: Brightness.dark,
+            oledBlack: _appearance.oledBlack,
+          ),
+          themeMode: _appearance.themeMode,
+          localizationsDelegates: GlobalMaterialLocalizations.delegates,
+          locale: const Locale('zh', 'CN'),
+          fallbackLocale: const Locale('zh', 'CN'),
+          supportedLocales: const [Locale('zh', 'CN'), Locale('en', 'US')],
+          scrollBehavior: const CustomScrollBehavior(),
+          builder: (context, child) {
+            AppLog.instance.trace(
+              "lib/app.dart::_MyAppState.build.closure#1.closure#1",
+            );
+            return MediaQuery(
+              data: MediaQuery.of(context).copyWith(
+                textScaler: AppTextScaler(
+                  MediaQuery.textScalerOf(context),
+                  _appearance.textScale,
+                ),
+              ),
+              child: ColoredBox(
+                color: Theme.of(context).colorScheme.surface,
+                child: AppShutdownOverlay(
+                  runtime: widget.runtime,
+                  windowError: _windowCloseError,
+                  onRetry: () {
+                    AppLog.instance.trace(
+                      "lib/app.dart::_MyAppState.build.closure#1.closure#1.closure#1",
+                    );
+                    unawaited(onCloseRequested(explicitExit: true));
+                  },
+                  child: Overlay.wrap(
+                    child: ListenableBuilder(
+                      listenable: Listenable.merge([
+                        _playerRoutes,
+                        _promptRoutes,
+                        widget.runtime,
+                      ]),
+                      child: child,
+                      builder: (context, child) {
+                        AppLog.instance.trace(
+                          "lib/app.dart::_MyAppState.build.closure#1.closure#1.closure#2",
+                        );
+                        return LogUploadPromptHost(
+                          navigatorKey: _navigator,
+                          canShow: () {
+                            AppLog.instance.trace(
+                              "lib/app.dart::_MyAppState.build.closure#1.closure#1.closure#2.closure#1",
+                            );
+                            return !_promptRoutes.hasPopup &&
+                                !widget.runtime.closing &&
+                                !widget.runtime.restoringBackup &&
+                                !widget.runtime.restoreNeedsReload &&
+                                _closeWork == null &&
+                                !_exitPending &&
+                                _closeDialog == null;
+                          },
+                          child: Column(
+                            children: [
+                              Expanded(child: child!),
+                              if (_miniRoute == null &&
+                                  !_playerRoutes.playerExpanded)
+                                SafeArea(
+                                  top: false,
+                                  child: ExcludeFocus(
+                                    excluding:
+                                        _playerRoutes.current is PopupRoute,
+                                    child: ExcludeSemantics(
+                                      excluding:
+                                          _playerRoutes.current is PopupRoute,
+                                      child: AbsorbPointer(
+                                        absorbing:
+                                            _playerRoutes.current is PopupRoute,
+                                        child: PlayerPanel(
+                                          runtime: widget.runtime,
+                                          navigatorKey: _navigator,
                                         ),
-                                        TextButton(
-                                          onPressed: _showRequestFailures,
-                                          child: const Text('详情 / 复制'),
-                                        ),
-                                      ],
+                                      ),
                                     ),
                                   ),
                                 ),
-                              );
-                            },
+                            ],
                           ),
-                        ),
-                      Expanded(child: child!),
-                      if (_miniRoute == null && !_playerRoutes.playerExpanded)
-                        SafeArea(
-                          top: false,
-                          child: ExcludeFocus(
-                            excluding: _playerRoutes.current is PopupRoute,
-                            child: ExcludeSemantics(
-                              excluding: _playerRoutes.current is PopupRoute,
-                              child: AbsorbPointer(
-                                absorbing: _playerRoutes.current is PopupRoute,
-                                child: PlayerPanel(
-                                  runtime: widget.runtime,
-                                  navigatorKey: _navigator,
-                                ),
-                              ),
-                            ),
-                          ),
-                        ),
-                    ],
+                        );
+                      },
+                    ),
                   ),
                 ),
               ),
+            );
+          },
+          home: PopScope(
+            canPop: !Platform.isAndroid,
+            onPopInvokedWithResult: (didPop, result) {
+              AppLog.instance.trace(
+                "lib/app.dart::_MyAppState.build.closure#1.closure#2",
+              );
+
+              if (!didPop && Platform.isAndroid) unawaited(onCloseRequested());
+            },
+            child: ShellPage(
+              appearance: _appearance,
+              runtime: widget.runtime,
+              onMiniPlayer: Platform.isWindows
+                  ? () {
+                      AppLog.instance.trace(
+                        "lib/app.dart::_MyAppState.build.closure#1.closure#3",
+                      );
+                      unawaited(_switchWindow());
+                    }
+                  : null,
+              onTray: Platform.isWindows
+                  ? () {
+                      AppLog.instance.trace(
+                        "lib/app.dart::_MyAppState.build.closure#1.closure#4",
+                      );
+                      unawaited(_sendToTray());
+                    }
+                  : null,
             ),
           ),
-        ),
-        home: PopScope(
-          canPop: !Platform.isAndroid,
-          onPopInvokedWithResult: (didPop, result) {
-            if (!didPop && Platform.isAndroid) unawaited(onCloseRequested());
-          },
-          child: ShellPage(
-            appearance: _appearance,
-            runtime: widget.runtime,
-            onMiniPlayer: Platform.isWindows
-                ? () => unawaited(_switchWindow())
-                : null,
-            onTray: Platform.isWindows ? () => unawaited(_sendToTray()) : null,
-          ),
-        ),
-      ),
+        );
+      },
     );
   }
 }
@@ -518,6 +754,10 @@ class _PlayerRouteObserver extends NavigatorObserver with ChangeNotifier {
   bool _disposed = false;
 
   bool get playerExpanded {
+    AppLog.instance.trace(
+      "lib/app.dart::_PlayerRouteObserver.playerExpanded.get",
+    );
+
     for (final route in _routes.reversed) {
       if (route is PageRoute)
         return route.settings.name == PlayerPanel.routeName;
@@ -526,26 +766,38 @@ class _PlayerRouteObserver extends NavigatorObserver with ChangeNotifier {
   }
 
   void _changed(Route<dynamic>? route) {
+    AppLog.instance.trace("lib/app.dart::_PlayerRouteObserver._changed");
+
     current = route;
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      AppLog.instance.trace(
+        "lib/app.dart::_PlayerRouteObserver._changed.closure#1",
+      );
+
       if (!_disposed) notifyListeners();
     });
   }
 
   @override
   void didPush(Route<dynamic> route, Route<dynamic>? previousRoute) {
+    AppLog.instance.trace("lib/app.dart::_PlayerRouteObserver.didPush");
+
     _routes.add(route);
     _changed(route);
   }
 
   @override
   void didPop(Route<dynamic> route, Route<dynamic>? previousRoute) {
+    AppLog.instance.trace("lib/app.dart::_PlayerRouteObserver.didPop");
+
     _routes.remove(route);
     _changed(previousRoute);
   }
 
   @override
   void didReplace({Route<dynamic>? newRoute, Route<dynamic>? oldRoute}) {
+    AppLog.instance.trace("lib/app.dart::_PlayerRouteObserver.didReplace");
+
     final index = oldRoute == null ? -1 : _routes.indexOf(oldRoute);
     if (index >= 0) {
       if (newRoute == null) {
@@ -561,137 +813,17 @@ class _PlayerRouteObserver extends NavigatorObserver with ChangeNotifier {
 
   @override
   void didRemove(Route<dynamic> route, Route<dynamic>? previousRoute) {
+    AppLog.instance.trace("lib/app.dart::_PlayerRouteObserver.didRemove");
+
     _routes.remove(route);
     _changed(identical(current, route) ? previousRoute : current);
   }
 
   @override
   void dispose() {
+    AppLog.instance.trace("lib/app.dart::_PlayerRouteObserver.dispose");
+
     _disposed = true;
     super.dispose();
-  }
-}
-
-class _RequestFailureDialog extends StatefulWidget {
-  const _RequestFailureDialog();
-  @override
-  State<_RequestFailureDialog> createState() => _RequestFailureDialogState();
-}
-
-class _RequestFailureDialogState extends State<_RequestFailureDialog> {
-  RequestFailure? _selected;
-  String? _copiedPath;
-  String? _copyError;
-
-  @override
-  Widget build(BuildContext context) {
-    final diagnostics = RequestDiagnostics.instance;
-    return StreamBuilder<void>(
-      stream: diagnostics.changes,
-      builder: (context, _) {
-        final entries = diagnostics.entries;
-        final selected = _selected ?? (entries.isEmpty ? null : entries.last);
-        return AlertDialog(
-          title: Text('请求失败详情（${entries.length} 条）'),
-          content: SizedBox(
-            width: 900,
-            height: MediaQuery.sizeOf(context).height * .65,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                const Text('仅保存在本机。完整日志可能包含 Cookie、令牌、账号和签名等敏感信息；复制或分享前请自行核对。'),
-                const SizedBox(height: 8),
-                SelectableText('日志目录：${diagnostics.directory ?? '尚未初始化'}'),
-                if (diagnostics.persistenceError != null)
-                  SelectableText(
-                    '保存失败：${diagnostics.persistenceError}（当前会话内容仍可复制）',
-                  ),
-                if (selected != null) ...[
-                  DropdownButton<RequestFailure>(
-                    isExpanded: true,
-                    value: selected,
-                    items: entries.reversed
-                        .map(
-                          (entry) => DropdownMenuItem(
-                            value: entry,
-                            child: Text(
-                              '${entry.timestamp.toLocal()} · ${entry.account} · ${entry.method} ${entry.url}',
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          ),
-                        )
-                        .toList(),
-                    onChanged: (value) => setState(() {
-                      _selected = value;
-                      _copyError = null;
-                    }),
-                  ),
-                  Expanded(
-                    child: FutureBuilder<String>(
-                      future: diagnostics.read(selected),
-                      builder: (context, snapshot) => SingleChildScrollView(
-                        child: SelectableText(
-                          snapshot.hasError
-                              ? '无法读取日志：${snapshot.error}\n文件：${selected.path}'
-                              : snapshot.data ?? '正在读取完整内容…',
-                        ),
-                      ),
-                    ),
-                  ),
-                  SelectableText('文件：${selected.path}'),
-                ] else
-                  const Expanded(child: Text('暂无失败请求。')),
-                if (_copyError != null)
-                  Padding(
-                    padding: const EdgeInsets.only(top: 8),
-                    child: Text(
-                      _copyError!,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        color: Theme.of(context).colorScheme.error,
-                      ),
-                    ),
-                  ),
-              ],
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: selected == null
-                  ? null
-                  : () async {
-                      try {
-                        final text = await diagnostics.read(selected);
-                        await Clipboard.setData(ClipboardData(text: text));
-                        if (mounted)
-                          setState(() {
-                            _copiedPath = selected.path;
-                            _copyError = null;
-                          });
-                      } catch (error) {
-                        if (mounted)
-                          setState(() {
-                            _copiedPath = null;
-                            _copyError = '复制失败：$error';
-                          });
-                      }
-                    },
-              child: Text(
-                _copiedPath == selected?.path
-                    ? '已复制完整内容'
-                    : _copyError != null
-                    ? '重试复制'
-                    : '复制完整内容',
-              ),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('关闭'),
-            ),
-          ],
-        );
-      },
-    );
   }
 }

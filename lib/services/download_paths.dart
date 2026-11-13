@@ -10,6 +10,7 @@ import 'package:win32/win32.dart' as win;
 
 import '../models/xmly_models.dart';
 import 'android_platform.dart';
+import 'app_log.dart';
 import 'file_paths.dart';
 
 /// Filesystem policy shared by downloads and the media processor. No audio or
@@ -21,8 +22,15 @@ class DownloadPaths {
   static const mediaManifestSuffix = '.xmplus-media.json';
   static const _mediaProbeName = 'output.abcdefghij';
   static const _temporarySuffixReserve = '0000000000000000';
-  static int get _maxTargetPath =>
-      Platform.isWindows ? _maxPath - mediaManifestSuffix.length : _maxPath;
+  static int get _maxTargetPath {
+    AppLog.instance.trace(
+      "lib/services/download_paths.dart::DownloadPaths._maxTargetPath.get",
+    );
+    return Platform.isWindows
+        ? _maxPath - mediaManifestSuffix.length
+        : _maxPath;
+  }
+
   static const _defaultPattern = '{index} - {title} [{trackId}]';
   static final _illegal = RegExp(r'[<>:"/\\|?*\x00-\x1f\x7f]');
   static final _reserved = RegExp(
@@ -34,72 +42,116 @@ class DownloadPaths {
     String root, {
     int reserveBytes = 0,
     int minimumFreeMiB = 512,
-  }) async {
-    final base = _absoluteRoot(root);
-    if (Platform.isWindows &&
-        p
-                .join(
-                  base,
-                  '$mediaTemporaryPrefix$_temporarySuffixReserve',
-                  _mediaProbeName,
-                )
-                .length >
-            _maxPath) {
-      throw const XmlyException('path_too_long', '下载目录过长，请选择较短的根目录');
-    }
-    final minimumMiB = math.max(512, minimumFreeMiB);
-    if (reserveBytes < 0 ||
-        minimumFreeMiB < 0 ||
-        minimumMiB > 0x7fffffffffffffff ~/ _mib ||
-        reserveBytes > 0x7fffffffffffffff - minimumMiB * _mib) {
-      throw const XmlyException('invalid_space', '可用空间设置无效');
-    }
-    if (!await Directory(base).exists()) {
-      throw const XmlyException('download_directory', '下载目录不存在，请重新选择');
-    }
-    // A real write, flush and deletion tests this account's access, not mode bits.
-    Directory? probeDirectory;
-    try {
-      probeDirectory = await Directory(base).createTemp(
-        Platform.isWindows ? mediaTemporaryPrefix : '.xmplus-write-',
+  }) {
+    AppLog.instance.trace(
+      "lib/services/download_paths.dart::DownloadPaths.checkRoot",
+    );
+    return AppLog.instance.runWithErrorScope(() async {
+      AppLog.instance.trace(
+        "lib/services/download_paths.dart::DownloadPaths.checkRoot.closure#1",
       );
-      final probe = File(
-        p.join(
-          probeDirectory.path,
-          Platform.isWindows ? _mediaProbeName : 'probe',
-        ),
-      );
-      if (Platform.isWindows && probe.path.length > _maxPath) {
+
+      final base = _absoluteRoot(root);
+      if (Platform.isWindows &&
+          p
+                  .join(
+                    base,
+                    '$mediaTemporaryPrefix$_temporarySuffixReserve',
+                    _mediaProbeName,
+                  )
+                  .length >
+              _maxPath) {
         throw const XmlyException('path_too_long', '下载目录过长，请选择较短的根目录');
       }
-      final handle = await probe.open(mode: FileMode.writeOnly);
-      try {
-        await handle.writeByte(0);
-        await handle.flush();
-      } finally {
-        await handle.close();
+      final minimumMiB = math.max(512, minimumFreeMiB);
+      if (reserveBytes < 0 ||
+          minimumFreeMiB < 0 ||
+          minimumMiB > 0x7fffffffffffffff ~/ _mib ||
+          reserveBytes > 0x7fffffffffffffff - minimumMiB * _mib) {
+        throw const XmlyException('invalid_space', '可用空间设置无效');
       }
-      await probe.delete();
-    } on FileSystemException {
-      throw const XmlyException('download_not_writable', '下载目录不可写，请重新选择');
-    } finally {
-      if (probeDirectory != null) {
+      if (!await Directory(base).exists()) {
+        throw const XmlyException('download_directory', '下载目录不存在，请重新选择');
+      }
+      // A real write, flush and deletion tests this account's access, not mode bits.
+      Directory? probeDirectory;
+      try {
+        probeDirectory = await Directory(base).createTemp(
+          Platform.isWindows ? mediaTemporaryPrefix : '.xmplus-write-',
+        );
+        final probe = File(
+          p.join(
+            probeDirectory.path,
+            Platform.isWindows ? _mediaProbeName : 'probe',
+          ),
+        );
+        if (Platform.isWindows && probe.path.length > _maxPath) {
+          throw const XmlyException('path_too_long', '下载目录过长，请选择较短的根目录');
+        }
+        final handle = await probe.open(mode: FileMode.writeOnly);
+        var writeFailed = false;
         try {
-          await probeDirectory.delete(recursive: true);
-        } on FileSystemException {
-          // A failed write remains a failed check, even if cleanup also fails.
+          await handle.writeByte(0);
+          await handle.flush();
+        } catch (_) {
+          writeFailed = true;
+          rethrow;
+        } finally {
+          try {
+            await handle.close();
+          } catch (error, stack) {
+            if (!writeFailed) rethrow;
+            AppLog.instance.write(
+              AppLogLevel.warning,
+              'download_paths',
+              'Closing download directory write probe failed',
+              error: error,
+              stackTrace: stack,
+            );
+          }
+        }
+        await probe.delete();
+      } on FileSystemException catch (error, stack) {
+        if (!AppLog.instance.errorWasRecorded(error)) {
+          AppLog.instance.write(
+            AppLogLevel.error,
+            'download_paths',
+            'Checking download directory write access failed',
+            error: error,
+            stackTrace: stack,
+          );
+        }
+        const replacement = XmlyException(
+          'download_not_writable',
+          '下载目录不可写，请重新选择',
+        );
+        AppLog.instance.linkError(replacement, error);
+        Error.throwWithStackTrace(replacement, stack);
+      } finally {
+        if (probeDirectory != null) {
+          try {
+            await probeDirectory.delete(recursive: true);
+          } on FileSystemException catch (error, stack) {
+            AppLog.instance.write(
+              AppLogLevel.warning,
+              'download_paths',
+              'Removing download directory write probe failed',
+              error: error,
+              stackTrace: stack,
+            );
+          }
         }
       }
-    }
-    final available = await _availableBytes(
-      await Directory(base).resolveSymbolicLinks(),
-    );
-    if (available < 0) {
-      throw const XmlyException('disk_space_unavailable', '无法查询下载目录的可用空间');
-    }
-    if (available < minimumMiB * _mib + reserveBytes) {
-      throw const XmlyException('disk_space', '下载空间不足，请释放空间或更换目录');
-    }
+      final available = await _availableBytes(
+        await Directory(base).resolveSymbolicLinks(),
+      );
+      if (available < 0) {
+        throw const XmlyException('disk_space_unavailable', '无法查询下载目录的可用空间');
+      }
+      if (available < minimumMiB * _mib + reserveBytes) {
+        throw const XmlyException('disk_space', '下载空间不足，请释放空间或更换目录');
+      }
+    });
   }
 
   /// Appends a stable ID, even when the title is empty or must be shortened.
@@ -109,6 +161,10 @@ class DownloadPaths {
     required String id,
     int maxLength = 120,
   }) {
+    AppLog.instance.trace(
+      "lib/services/download_paths.dart::DownloadPaths.safeComponent",
+    );
+
     if (!RegExp(r'^[A-Za-z0-9_-]+$').hasMatch(id)) {
       throw const XmlyException('invalid_path_id', '文件标识无效');
     }
@@ -141,6 +197,10 @@ class DownloadPaths {
     required Map<String, dynamic> settings,
     int? totalTracks,
   }) {
+    AppLog.instance.trace(
+      "lib/services/download_paths.dart::DownloadPaths.targetPath",
+    );
+
     final base = _absoluteRoot(root);
     if (!RegExp(r'^[A-Za-z0-9]{1,10}$').hasMatch(extension)) {
       throw const XmlyException('invalid_extension', '音频扩展名无效');
@@ -160,10 +220,12 @@ class DownloadPaths {
     }
     final variables = RegExp(r'\{([^{}]+)\}');
     const allowed = {'index', 'title', 'trackId', 'album', 'albumId'};
-    final keys = variables
-        .allMatches(pattern)
-        .map((match) => match[1]!)
-        .toSet();
+    final keys = variables.allMatches(pattern).map((match) {
+      AppLog.instance.trace(
+        "lib/services/download_paths.dart::DownloadPaths.targetPath.closure#1",
+      );
+      return match[1]!;
+    }).toSet();
     final remainder = pattern.replaceAll(variables, '');
     if (!allowed.containsAll(keys) ||
         remainder.contains('{') ||
@@ -201,16 +263,27 @@ class DownloadPaths {
     };
     final rendered = standaloneDefault
         ? '${track.title} [${track.number}]'
-        : pattern.replaceAllMapped(variables, (match) => values[match[1]]!);
+        : pattern.replaceAllMapped(variables, (match) {
+            AppLog.instance.trace(
+              "lib/services/download_paths.dart::DownloadPaths.targetPath.closure#2",
+            );
+            return values[match[1]]!;
+          });
     final folderId = track.albumId.isEmpty ? track.number : track.albumId;
     final folderTitle = track.albumId.isEmpty ? '未分类' : track.album;
     var folderLimit = 120, fileLimit = 120;
-    String makePath() => p.joinAll([
-      base,
-      if (albumFolders)
-        safeComponent(folderTitle, id: folderId, maxLength: folderLimit),
-      '${safeComponent(rendered, id: track.number, maxLength: fileLimit)}.${extension.toLowerCase()}',
-    ]);
+    String makePath() {
+      AppLog.instance.trace(
+        "lib/services/download_paths.dart::DownloadPaths.targetPath.makePath",
+      );
+      return p.joinAll([
+        base,
+        if (albumFolders)
+          safeComponent(folderTitle, id: folderId, maxLength: folderLimit),
+        '${safeComponent(rendered, id: track.number, maxLength: fileLimit)}.${extension.toLowerCase()}',
+      ]);
+    }
+
     var result = makePath();
     if (result.length > _maxTargetPath && albumFolders) {
       final minimum = folderId.length + 4;
@@ -237,46 +310,52 @@ class DownloadPaths {
 
   /// 'skip' only selects the name. The processor must probe/hash an existing
   /// file before treating it as a completed task. No file is deleted here.
-  Future<String> chooseDestination(
-    String target, {
-    String conflict = 'skip',
-  }) async {
-    if (!const {'skip', 'overwrite', 'number'}.contains(conflict)) {
-      throw const XmlyException('invalid_conflict', '同名文件处理方式无效');
-    }
-    if (conflict != 'number' ||
-        await FileSystemEntity.type(target, followLinks: false) ==
-            FileSystemEntityType.notFound) {
-      return target;
-    }
-    final extension = p.extension(target);
-    final stem = p.basenameWithoutExtension(target);
-    final directory = p.dirname(target);
-    for (var number = 1; ; number++) {
-      final suffix = ' ($number)$extension';
-      final limit = math.min(
-        240 - utf8.encode(suffix).length,
-        _maxTargetPath - directory.length - 1 - suffix.length,
+  Future<String> chooseDestination(String target, {String conflict = 'skip'}) {
+    AppLog.instance.trace(
+      "lib/services/download_paths.dart::DownloadPaths.chooseDestination",
+    );
+    return AppLog.instance.runWithErrorScope(() async {
+      AppLog.instance.trace(
+        "lib/services/download_paths.dart::DownloadPaths.chooseDestination.closure#1",
       );
-      var name = stem;
-      if (name.length > limit ||
-          utf8.encode(name).length > 240 - utf8.encode(suffix).length) {
-        final id = RegExp(r' \[([A-Za-z0-9_-]+)\]$').firstMatch(stem);
-        if (id == null) {
-          throw const XmlyException('path_too_long', '文件名过长，无法安全添加编号');
+
+      if (!const {'skip', 'overwrite', 'number'}.contains(conflict)) {
+        throw const XmlyException('invalid_conflict', '同名文件处理方式无效');
+      }
+      if (conflict != 'number' ||
+          await FileSystemEntity.type(target, followLinks: false) ==
+              FileSystemEntityType.notFound) {
+        return target;
+      }
+      final extension = p.extension(target);
+      final stem = p.basenameWithoutExtension(target);
+      final directory = p.dirname(target);
+      for (var number = 1; ; number++) {
+        final suffix = ' ($number)$extension';
+        final limit = math.min(
+          240 - utf8.encode(suffix).length,
+          _maxTargetPath - directory.length - 1 - suffix.length,
+        );
+        var name = stem;
+        if (name.length > limit ||
+            utf8.encode(name).length > 240 - utf8.encode(suffix).length) {
+          final id = RegExp(r' \[([A-Za-z0-9_-]+)\]$').firstMatch(stem);
+          if (id == null) {
+            throw const XmlyException('path_too_long', '文件名过长，无法安全添加编号');
+          }
+          name = safeComponent(stem, id: id[1]!, maxLength: limit);
+          var units = limit;
+          while (utf8.encode('$name$suffix').length > 255) {
+            name = safeComponent(stem, id: id[1]!, maxLength: --units);
+          }
         }
-        name = safeComponent(stem, id: id[1]!, maxLength: limit);
-        var units = limit;
-        while (utf8.encode('$name$suffix').length > 255) {
-          name = safeComponent(stem, id: id[1]!, maxLength: --units);
+        final candidate = p.join(directory, '$name$suffix');
+        if (await FileSystemEntity.type(candidate, followLinks: false) ==
+            FileSystemEntityType.notFound) {
+          return candidate;
         }
       }
-      final candidate = p.join(directory, '$name$suffix');
-      if (await FileSystemEntity.type(candidate, followLinks: false) ==
-          FileSystemEntityType.notFound) {
-        return candidate;
-      }
-    }
+    });
   }
 
   /// Only same-volume operations; never pre-deletes or clobbers an existing
@@ -287,46 +366,74 @@ class DownloadPaths {
     String temporary,
     String destination, {
     bool overwrite = false,
-  }) async {
-    final source = absoluteFilePath(temporary);
-    final target = absoluteFilePath(destination);
-    final sourceCanonical = await File(source).resolveSymbolicLinks();
-    final targetParent = await Directory(p.dirname(target))
-        .resolveSymbolicLinks();
-    final targetCanonical = p.join(targetParent, p.basename(target));
-    if (p.equals(sourceCanonical, targetCanonical) ||
-        (Platform.isWindows &&
-            sourceCanonical.toLowerCase() == targetCanonical.toLowerCase())) {
-      throw const XmlyException('invalid_commit', '临时文件不能与成品相同');
-    }
-    if (await FileSystemEntity.type(source, followLinks: false) !=
-        FileSystemEntityType.file) {
-      throw const XmlyException('invalid_commit', '临时音频必须是普通文件');
-    }
-    final type = await FileSystemEntity.type(target, followLinks: false);
-    if (type != FileSystemEntityType.notFound &&
-        (!overwrite || type != FileSystemEntityType.file)) {
-      throw const XmlyException('destination_exists', '目标已存在，请重新选择同名文件处理方式');
-    }
-    final handle = await File(source).open(mode: FileMode.append);
-    try {
-      await handle.flush();
-    } finally {
-      await handle.close();
-    }
-    if (Platform.isWindows) {
-      _WindowsFiles.commit(source, target, overwrite: overwrite);
-    } else if (Platform.isLinux ||
-        Platform.isMacOS ||
-        Platform.isAndroid ||
-        Platform.isIOS) {
-      await _PosixFiles.commit(source, target, overwrite: overwrite);
-    } else {
-      throw const XmlyException('atomic_commit_unsupported', '当前平台不支持安全提交文件');
-    }
+  }) {
+    AppLog.instance.trace(
+      "lib/services/download_paths.dart::DownloadPaths.commit",
+    );
+    return AppLog.instance.runWithErrorScope(() async {
+      AppLog.instance.trace(
+        "lib/services/download_paths.dart::DownloadPaths.commit.closure#1",
+      );
+
+      final source = absoluteFilePath(temporary);
+      final target = absoluteFilePath(destination);
+      final sourceCanonical = await File(source).resolveSymbolicLinks();
+      final targetParent = await Directory(p.dirname(target))
+          .resolveSymbolicLinks();
+      final targetCanonical = p.join(targetParent, p.basename(target));
+      if (p.equals(sourceCanonical, targetCanonical) ||
+          (Platform.isWindows &&
+              sourceCanonical.toLowerCase() == targetCanonical.toLowerCase())) {
+        throw const XmlyException('invalid_commit', '临时文件不能与成品相同');
+      }
+      if (await FileSystemEntity.type(source, followLinks: false) !=
+          FileSystemEntityType.file) {
+        throw const XmlyException('invalid_commit', '临时音频必须是普通文件');
+      }
+      final type = await FileSystemEntity.type(target, followLinks: false);
+      if (type != FileSystemEntityType.notFound &&
+          (!overwrite || type != FileSystemEntityType.file)) {
+        throw const XmlyException('destination_exists', '目标已存在，请重新选择同名文件处理方式');
+      }
+      final handle = await File(source).open(mode: FileMode.append);
+      var flushFailed = false;
+      try {
+        await handle.flush();
+      } catch (_) {
+        flushFailed = true;
+        rethrow;
+      } finally {
+        try {
+          await handle.close();
+        } catch (error, stack) {
+          if (!flushFailed) rethrow;
+          AppLog.instance.write(
+            AppLogLevel.warning,
+            'download_paths',
+            'Closing audio commit source failed',
+            error: error,
+            stackTrace: stack,
+          );
+        }
+      }
+      if (Platform.isWindows) {
+        _WindowsFiles.commit(source, target, overwrite: overwrite);
+      } else if (Platform.isLinux ||
+          Platform.isMacOS ||
+          Platform.isAndroid ||
+          Platform.isIOS) {
+        await _PosixFiles.commit(source, target, overwrite: overwrite);
+      } else {
+        throw const XmlyException('atomic_commit_unsupported', '当前平台不支持安全提交文件');
+      }
+    });
   }
 
   static String _absoluteRoot(String root) {
+    AppLog.instance.trace(
+      "lib/services/download_paths.dart::DownloadPaths._absoluteRoot",
+    );
+
     if (root.isEmpty || root.contains('\x00') || !p.isAbsolute(root)) {
       throw const XmlyException('download_directory', '请选择绝对路径的下载目录');
     }
@@ -334,6 +441,10 @@ class DownloadPaths {
   }
 
   static String _shorten(String text, int units, int bytes) {
+    AppLog.instance.trace(
+      "lib/services/download_paths.dart::DownloadPaths._shorten",
+    );
+
     final result = StringBuffer();
     var usedUnits = 0, usedBytes = 0;
     for (final rune in text.runes) {
@@ -347,65 +458,112 @@ class DownloadPaths {
     return result.toString();
   }
 
-  static Future<int> _availableBytes(String root) async {
-    if (Platform.isAndroid) {
+  static Future<int> _availableBytes(String root) {
+    AppLog.instance.trace(
+      "lib/services/download_paths.dart::DownloadPaths._availableBytes",
+    );
+    return AppLog.instance.runWithErrorScope(() async {
+      AppLog.instance.trace(
+        "lib/services/download_paths.dart::DownloadPaths._availableBytes.closure#1",
+      );
+
+      if (Platform.isAndroid) {
+        try {
+          return await AndroidPlatform.availableBytes(root);
+        } catch (error, stack) {
+          if (!AppLog.instance.errorWasRecorded(error)) {
+            AppLog.instance.write(
+              AppLogLevel.error,
+              'download_paths',
+              'Querying Android download free space failed',
+              error: error,
+              stackTrace: stack,
+            );
+          }
+          const replacement = XmlyException(
+            'disk_space_unavailable',
+            '无法查询下载目录的可用空间',
+          );
+          AppLog.instance.linkError(replacement, error);
+          Error.throwWithStackTrace(replacement, stack);
+        }
+      }
+      if (Platform.isWindows) {
+        return using((arena) {
+          AppLog.instance.trace(
+            "lib/services/download_paths.dart::DownloadPaths._availableBytes.closure#1.closure#1",
+          );
+
+          final path = root.toNativeUtf16(allocator: arena);
+          final free = arena<Uint64>();
+          final result = win.GetDiskFreeSpaceEx(
+            win.PCWSTR(path),
+            free,
+            nullptr,
+            nullptr,
+          );
+          if (!result.value) {
+            throw const XmlyException(
+              'disk_space_unavailable',
+              '无法查询下载目录的可用空间',
+            );
+          }
+          return free.value;
+        });
+      }
+      if (!(Platform.isLinux ||
+          Platform.isMacOS ||
+          Platform.isAndroid ||
+          Platform.isIOS)) {
+        throw const XmlyException('disk_space_unsupported', '当前平台不支持查询可用空间');
+      }
       try {
-        return await AndroidPlatform.availableBytes(root);
-      } catch (_) {
-        throw const XmlyException('disk_space_unavailable', '无法查询下载目录的可用空间');
-      }
-    }
-    if (Platform.isWindows) {
-      return using((arena) {
-        final path = root.toNativeUtf16(allocator: arena);
-        final free = arena<Uint64>();
-        final result = win.GetDiskFreeSpaceEx(
-          win.PCWSTR(path),
-          free,
-          nullptr,
-          nullptr,
+        final result = await Process.run(
+          'df',
+          ['-Pk', root],
+          runInShell: false,
+          environment: {'LC_ALL': 'C'},
+        ).timeout(const Duration(seconds: 10));
+        if (result.exitCode == 0) {
+          final rows = const LineSplitter().convert(result.stdout.toString());
+          final values = rows
+              .skip(1)
+              .map((line) {
+                AppLog.instance.trace(
+                  "lib/services/download_paths.dart::DownloadPaths._availableBytes.closure#1.closure#2",
+                );
+                return RegExp(r'^\S+\s+\d+\s+\d+\s+(\d+)\s+\d+%\s')
+                    .firstMatch(line);
+              })
+              .whereType<RegExpMatch>()
+              .toList();
+          if (values.length == 1) {
+            final blocks = int.tryParse(values.single[1]!);
+            if (blocks != null &&
+                blocks >= 0 &&
+                blocks <= 0x7fffffffffffffff ~/ 1024)
+              return blocks * 1024;
+          }
+        }
+      } on ProcessException catch (error, stack) {
+        if (!AppLog.instance.errorWasRecorded(error)) {
+          AppLog.instance.write(
+            AppLogLevel.error,
+            'download_paths',
+            'Starting download free space query failed',
+            error: error,
+            stackTrace: stack,
+          );
+        }
+        const replacement = XmlyException(
+          'disk_space_unsupported',
+          '当前平台缺少可用空间查询工具',
         );
-        if (!result.value) {
-          throw const XmlyException('disk_space_unavailable', '无法查询下载目录的可用空间');
-        }
-        return free.value;
-      });
-    }
-    if (!(Platform.isLinux ||
-        Platform.isMacOS ||
-        Platform.isAndroid ||
-        Platform.isIOS)) {
-      throw const XmlyException('disk_space_unsupported', '当前平台不支持查询可用空间');
-    }
-    try {
-      final result = await Process.run(
-        'df',
-        ['-Pk', root],
-        runInShell: false,
-        environment: {'LC_ALL': 'C'},
-      ).timeout(const Duration(seconds: 10));
-      if (result.exitCode == 0) {
-        final rows = const LineSplitter().convert(result.stdout.toString());
-        final values = rows
-            .skip(1)
-            .map(
-              (line) =>
-                  RegExp(r'^\S+\s+\d+\s+\d+\s+(\d+)\s+\d+%\s').firstMatch(line),
-            )
-            .whereType<RegExpMatch>()
-            .toList();
-        if (values.length == 1) {
-          final blocks = int.tryParse(values.single[1]!);
-          if (blocks != null &&
-              blocks >= 0 &&
-              blocks <= 0x7fffffffffffffff ~/ 1024)
-            return blocks * 1024;
-        }
+        AppLog.instance.linkError(replacement, error);
+        Error.throwWithStackTrace(replacement, stack);
       }
-    } on ProcessException {
-      throw const XmlyException('disk_space_unsupported', '当前平台缺少可用空间查询工具');
-    }
-    throw const XmlyException('disk_space_unavailable', '无法查询下载目录的可用空间');
+      throw const XmlyException('disk_space_unavailable', '无法查询下载目录的可用空间');
+    });
   }
 }
 
@@ -437,6 +595,10 @@ class _PosixFiles {
       );
 
   static bool _androidRenameNoReplace(Pointer<Utf8> from, Pointer<Utf8> to) {
+    AppLog.instance.trace(
+      "lib/services/download_paths.dart::_PosixFiles._androidRenameNoReplace",
+    );
+
     final number = switch (Abi.current()) {
       Abi.androidArm => 382,
       Abi.androidArm64 => 276,
@@ -468,30 +630,49 @@ class _PosixFiles {
     String source,
     String target, {
     required bool overwrite,
-  }) async {
-    final copyRequired = using((arena) {
-      final from = source.toNativeUtf8(allocator: arena);
-      final to = target.toNativeUtf8(allocator: arena);
-      if (Platform.isAndroid && !overwrite) {
-        return !_androidRenameNoReplace(from, to);
-      } else {
-        // Other POSIX platforms retain link's atomic no-clobber behavior.
-        // These operations still refuse cross-volume moves without copying.
-        if ((overwrite ? _rename(from, to) : _link(from, to)) != 0) {
-          throw FileSystemException('无法原子提交音频，原文件与缓存已保留', target);
+  }) {
+    AppLog.instance.trace(
+      "lib/services/download_paths.dart::_PosixFiles.commit",
+    );
+    return AppLog.instance.runWithErrorScope(() async {
+      AppLog.instance.trace(
+        "lib/services/download_paths.dart::_PosixFiles.commit.closure#1",
+      );
+
+      final copyRequired = using((arena) {
+        AppLog.instance.trace(
+          "lib/services/download_paths.dart::_PosixFiles.commit.closure#1.closure#1",
+        );
+
+        final from = source.toNativeUtf8(allocator: arena);
+        final to = target.toNativeUtf8(allocator: arena);
+        if (Platform.isAndroid && !overwrite) {
+          return !_androidRenameNoReplace(from, to);
+        } else {
+          // Other POSIX platforms retain link's atomic no-clobber behavior.
+          // These operations still refuse cross-volume moves without copying.
+          if ((overwrite ? _rename(from, to) : _link(from, to)) != 0) {
+            throw FileSystemException('无法原子提交音频，原文件与缓存已保留', target);
+          }
+        }
+        return false;
+      });
+      if (copyRequired) {
+        await AndroidPlatform.copyNoReplace(source, target);
+      } else if (!overwrite && !Platform.isAndroid) {
+        try {
+          File(source).deleteSync();
+        } on FileSystemException catch (error, stack) {
+          AppLog.instance.write(
+            AppLogLevel.warning,
+            'download_paths',
+            'Removing committed audio temporary link failed',
+            error: error,
+            stackTrace: stack,
+          );
         }
       }
-      return false;
     });
-    if (copyRequired) {
-      await AndroidPlatform.copyNoReplace(source, target);
-    } else if (!overwrite && !Platform.isAndroid) {
-      try {
-        File(source).deleteSync();
-      } on FileSystemException {
-        // Destination is already committed; an extra temporary link is safe.
-      }
-    }
   }
 }
 
@@ -516,14 +697,27 @@ class _WindowsFiles {
         )
       >('ReplaceFileW');
 
-  static String _longPath(String path) => path.startsWith(r'\\?\')
-      ? path
-      : path.startsWith(r'\\')
-      ? '${r'\\?\UNC\'}${path.substring(2)}'
-      : '${r'\\?\'}$path';
+  static String _longPath(String path) {
+    AppLog.instance.trace(
+      "lib/services/download_paths.dart::_WindowsFiles._longPath",
+    );
+    return path.startsWith(r'\\?\')
+        ? path
+        : path.startsWith(r'\\')
+        ? '${r'\\?\UNC\'}${path.substring(2)}'
+        : '${r'\\?\'}$path';
+  }
 
   static void commit(String source, String target, {required bool overwrite}) {
+    AppLog.instance.trace(
+      "lib/services/download_paths.dart::_WindowsFiles.commit",
+    );
+
     using((arena) {
+      AppLog.instance.trace(
+        "lib/services/download_paths.dart::_WindowsFiles.commit.closure#1",
+      );
+
       final from = _longPath(source).toNativeUtf16(allocator: arena);
       final to = _longPath(target).toNativeUtf16(allocator: arena);
       if (!overwrite || !File(target).existsSync()) {
@@ -553,9 +747,14 @@ class _WindowsFiles {
       }
       try {
         File(backupPath).deleteSync();
-      } on FileSystemException {
-        // New validated destination is authoritative; do not turn cleanup into
-        // a processing failure after the atomic replacement succeeded.
+      } on FileSystemException catch (error, stack) {
+        AppLog.instance.write(
+          AppLogLevel.warning,
+          'download_paths',
+          'Removing replaced audio backup failed',
+          error: error,
+          stackTrace: stack,
+        );
       }
     });
   }

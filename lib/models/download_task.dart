@@ -2,6 +2,7 @@ import 'dart:collection';
 import 'dart:convert';
 
 import 'xmly_models.dart';
+import "../services/app_log.dart";
 
 enum DownloadState {
   queued,
@@ -44,7 +45,9 @@ class DownloadTask {
     this.attemptedAccounts = const [],
   }) : settings = settings is _SettingsSnapshot
            ? settings
-           : _snapshot(settings);
+           : _snapshot(settings) {
+    AppLog.instance.trace("lib/models/download_task.dart::DownloadTask.new");
+  }
 
   final String id, accountIdentity, rootDirectory;
   final Track track;
@@ -60,13 +63,24 @@ class DownloadTask {
   final DateTime? retryAt;
   final List<String> attemptedAccounts;
 
-  bool get deduplicates => state != DownloadState.cancelled;
-  bool get active => const {
-    DownloadState.queued,
-    DownloadState.awaitingDebit,
-    DownloadState.downloading,
-    DownloadState.processing,
-  }.contains(state);
+  bool get deduplicates {
+    AppLog.instance.trace(
+      "lib/models/download_task.dart::DownloadTask.deduplicates.get",
+    );
+    return state != DownloadState.cancelled;
+  }
+
+  bool get active {
+    AppLog.instance.trace(
+      "lib/models/download_task.dart::DownloadTask.active.get",
+    );
+    return const {
+      DownloadState.queued,
+      DownloadState.awaitingDebit,
+      DownloadState.downloading,
+      DownloadState.processing,
+    }.contains(state);
+  }
 
   static const _keep = Object();
   DownloadTask copyWith({
@@ -93,74 +107,90 @@ class DownloadTask {
     bool? processingFailed,
     bool? outputMissing,
     bool? outputDeleted,
-  }) => DownloadTask(
-    id: id,
-    accountIdentity: accountIdentity ?? this.accountIdentity,
-    track: track ?? this.track,
-    rootDirectory: rootDirectory ?? this.rootDirectory,
-    settings: settings ?? this.settings,
-    createdAt: createdAt,
-    state: state ?? this.state,
-    costSeconds: costSeconds ?? this.costSeconds,
-    expectedBalance: identical(expectedBalance, _keep)
-        ? this.expectedBalance
-        : expectedBalance as int?,
-    userConfirmed: userConfirmed ?? this.userConfirmed,
-    needsConfirmation: needsConfirmation ?? this.needsConfirmation,
-    error: identical(error, _keep) ? this.error : error as String?,
-    warning: identical(warning, _keep) ? this.warning : warning as String?,
-    actualQuality: identical(actualQuality, _keep)
-        ? this.actualQuality
-        : actualQuality as String?,
-    processingFailed: processingFailed ?? this.processingFailed,
-    outputMissing: outputMissing ?? this.outputMissing,
-    outputDeleted: outputDeleted ?? this.outputDeleted,
-    receivedBytes: receivedBytes ?? this.receivedBytes,
-    totalBytes: identical(totalBytes, _keep)
-        ? this.totalBytes
-        : totalBytes as int?,
-    bytesPerSecond: bytesPerSecond ?? this.bytesPerSecond,
-    retryCount: retryCount ?? this.retryCount,
-    receiptOperationId: identical(receiptOperationId, _keep)
-        ? this.receiptOperationId
-        : receiptOperationId as String?,
-    finalPath: identical(finalPath, _keep)
-        ? this.finalPath
-        : finalPath as String?,
-    retryAt: identical(retryAt, _keep) ? this.retryAt : retryAt as DateTime?,
-    attemptedAccounts: attemptedAccounts ?? this.attemptedAccounts,
-  );
+  }) {
+    AppLog.instance.trace(
+      "lib/models/download_task.dart::DownloadTask.copyWith",
+    );
+    return DownloadTask(
+      id: id,
+      accountIdentity: accountIdentity ?? this.accountIdentity,
+      track: track ?? this.track,
+      rootDirectory: rootDirectory ?? this.rootDirectory,
+      settings: settings ?? this.settings,
+      createdAt: createdAt,
+      state: state ?? this.state,
+      costSeconds: costSeconds ?? this.costSeconds,
+      expectedBalance: identical(expectedBalance, _keep)
+          ? this.expectedBalance
+          : expectedBalance as int?,
+      userConfirmed: userConfirmed ?? this.userConfirmed,
+      needsConfirmation: needsConfirmation ?? this.needsConfirmation,
+      error: identical(error, _keep) ? this.error : error as String?,
+      warning: identical(warning, _keep) ? this.warning : warning as String?,
+      actualQuality: identical(actualQuality, _keep)
+          ? this.actualQuality
+          : actualQuality as String?,
+      processingFailed: processingFailed ?? this.processingFailed,
+      outputMissing: outputMissing ?? this.outputMissing,
+      outputDeleted: outputDeleted ?? this.outputDeleted,
+      receivedBytes: receivedBytes ?? this.receivedBytes,
+      totalBytes: identical(totalBytes, _keep)
+          ? this.totalBytes
+          : totalBytes as int?,
+      bytesPerSecond: bytesPerSecond ?? this.bytesPerSecond,
+      retryCount: retryCount ?? this.retryCount,
+      receiptOperationId: identical(receiptOperationId, _keep)
+          ? this.receiptOperationId
+          : receiptOperationId as String?,
+      finalPath: identical(finalPath, _keep)
+          ? this.finalPath
+          : finalPath as String?,
+      retryAt: identical(retryAt, _keep) ? this.retryAt : retryAt as DateTime?,
+      attemptedAccounts: attemptedAccounts ?? this.attemptedAccounts,
+    );
+  }
 
-  Map<String, dynamic> toJson() => {
-    'id': id,
-    'accountIdentity': accountIdentity,
-    'track': track.toJson(),
-    'rootDirectory': rootDirectory,
-    'settings': settings,
-    'createdAt': createdAt.toUtc().toIso8601String(),
-    'state': state.name,
-    'costSeconds': costSeconds,
-    'expectedBalance': expectedBalance,
-    'userConfirmed': userConfirmed,
-    'needsConfirmation': needsConfirmation,
-    'error': error,
-    'receivedBytes': receivedBytes,
-    'totalBytes': totalBytes,
-    'warning': warning,
-    'actualQuality': actualQuality,
-    'processingFailed': processingFailed,
-    'outputMissing': outputMissing,
-    'outputDeleted': outputDeleted,
-    'bytesPerSecond': bytesPerSecond,
-    'retryCount': retryCount,
-    'receiptOperationId': receiptOperationId,
-    'finalPath': finalPath,
-    'retryAt': retryAt?.toUtc().toIso8601String(),
-    'attemptedAccounts': attemptedAccounts,
-  };
+  Map<String, dynamic> toJson() {
+    AppLog.instance.trace("lib/models/download_task.dart::DownloadTask.toJson");
+    return {
+      'id': id,
+      'accountIdentity': accountIdentity,
+      'track': track.toJson(),
+      'rootDirectory': rootDirectory,
+      'settings': settings,
+      'createdAt': createdAt.toUtc().toIso8601String(),
+      'state': state.name,
+      'costSeconds': costSeconds,
+      'expectedBalance': expectedBalance,
+      'userConfirmed': userConfirmed,
+      'needsConfirmation': needsConfirmation,
+      'error': error,
+      'receivedBytes': receivedBytes,
+      'totalBytes': totalBytes,
+      'warning': warning,
+      'actualQuality': actualQuality,
+      'processingFailed': processingFailed,
+      'outputMissing': outputMissing,
+      'outputDeleted': outputDeleted,
+      'bytesPerSecond': bytesPerSecond,
+      'retryCount': retryCount,
+      'receiptOperationId': receiptOperationId,
+      'finalPath': finalPath,
+      'retryAt': retryAt?.toUtc().toIso8601String(),
+      'attemptedAccounts': attemptedAccounts,
+    };
+  }
 
   factory DownloadTask.fromJson(Map<String, dynamic> value) {
+    AppLog.instance.trace(
+      "lib/models/download_task.dart::DownloadTask.factory:fromJson",
+    );
+
     int integer(String key, [int fallback = 0]) {
+      AppLog.instance.trace(
+        "lib/models/download_task.dart::DownloadTask.factory:fromJson.integer",
+      );
+
       final number = value[key];
       if (number == null) return fallback;
       if (number is! int || number < 0) throw const FormatException('下载任务数字无效');
@@ -218,7 +248,15 @@ class DownloadTask {
   }
 
   static Map<String, dynamic> _snapshot(Map<String, dynamic> settings) {
+    AppLog.instance.trace(
+      "lib/models/download_task.dart::DownloadTask._snapshot",
+    );
+
     Object? freeze(Object? value) {
+      AppLog.instance.trace(
+        "lib/models/download_task.dart::DownloadTask._snapshot.freeze",
+      );
+
       if (value is Map) {
         final result = <String, dynamic>{};
         for (final entry in value.entries) {
@@ -249,5 +287,9 @@ class DownloadTask {
 }
 
 class _SettingsSnapshot extends MapView<String, dynamic> {
-  _SettingsSnapshot(Map<String, dynamic> value) : super(value);
+  _SettingsSnapshot(Map<String, dynamic> value) : super(value) {
+    AppLog.instance.trace(
+      "lib/models/download_task.dart::_SettingsSnapshot.new",
+    );
+  }
 }

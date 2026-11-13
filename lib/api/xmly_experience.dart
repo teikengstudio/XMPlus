@@ -1,5 +1,6 @@
 import '../models/xmly_models.dart';
 import 'xmly_client.dart';
+import "../services/app_log.dart";
 
 class HomeChannel {
   const HomeChannel({required this.pageId, required this.title});
@@ -32,7 +33,9 @@ class HomeSection {
     this.isRanking = false,
     Map<String, HomeAlbumStats> stats = const {},
   }) : albums = List.unmodifiable(albums),
-       stats = Map.unmodifiable(stats);
+       stats = Map.unmodifiable(stats) {
+    AppLog.instance.trace("lib/api/xmly_experience.dart::HomeSection.new");
+  }
   final String title;
   final List<Album> albums;
   final bool isRanking;
@@ -44,7 +47,9 @@ class HomeContent {
     required List<HomeSection> sections,
     List<HomeTab> tabs = const [],
   }) : sections = List.unmodifiable(sections),
-       tabs = List.unmodifiable(tabs);
+       tabs = List.unmodifiable(tabs) {
+    AppLog.instance.trace("lib/api/xmly_experience.dart::HomeContent.new");
+  }
   final List<HomeSection> sections;
   final List<HomeTab> tabs;
 }
@@ -65,14 +70,18 @@ class SubscriptionPage {
   SubscriptionPage({
     required List<SubscriptionItem> items,
     required this.hasMore,
-  }) : items = List.unmodifiable(items);
+  }) : items = List.unmodifiable(items) {
+    AppLog.instance.trace("lib/api/xmly_experience.dart::SubscriptionPage.new");
+  }
   final List<SubscriptionItem> items;
   final bool hasMore;
 }
 
 class FavoritePage {
   FavoritePage({required List<Track> items, required this.hasMore})
-    : items = List.unmodifiable(items);
+    : items = List.unmodifiable(items) {
+    AppLog.instance.trace("lib/api/xmly_experience.dart::FavoritePage.new");
+  }
   final List<Track> items;
   final bool hasMore;
 }
@@ -88,16 +97,29 @@ class UpdatePage {
     required List<UpdateItem> items,
     required this.hasMore,
     required this.nextTimeline,
-  }) : items = List.unmodifiable(items);
+  }) : items = List.unmodifiable(items) {
+    AppLog.instance.trace("lib/api/xmly_experience.dart::UpdatePage.new");
+  }
   final List<UpdateItem> items;
   final bool hasMore;
   final int? nextTimeline;
 }
 
+class AlbumIntroductionData {
+  const AlbumIntroductionData({
+    required this.richText,
+    required this.recommendations,
+  });
+  final String richText;
+  final HomeSection recommendations;
+}
+
 /// Lite client surfaces and explicit official subscription/favorite mutations.
 /// No audio admission, billing, history writes, or credential-bearing caches.
 class XmlyExperience {
-  XmlyExperience(this.client);
+  XmlyExperience(this.client) {
+    AppLog.instance.trace("lib/api/xmly_experience.dart::XmlyExperience.new");
+  }
   final XmlyClient client;
   static final _favoriteMembership = Expando<Future<Set<String>>>(
     'favoriteMembership',
@@ -106,12 +128,62 @@ class XmlyExperience {
     'subscriptionMembership',
   );
 
+  Future<AlbumIntroductionData> albumIntroduction(String albumId) async {
+    AppLog.instance.trace(
+      'lib/api/xmly_experience.dart::XmlyExperience.albumIntroduction',
+    );
+    final number = xmlyIdentifier(albumId);
+    final response = await client.request(
+      'GET',
+      XmlyClient.mobile,
+      '/fmobile-album/album/rec/detail/ts-$_stamp',
+      query: {'albumId': number, 'supportWebp': 'true'},
+      account: false,
+    );
+    final data = xmlyMap(response['data']);
+    final detail = xmlyMap(data['detail']);
+    final album = xmlyMap(data['album']);
+    if (xmlyIdentifier('${album['albumId'] ?? ''}') != number ||
+        (detail['albumId'] != null &&
+            xmlyIdentifier('${detail['albumId']}') != number)) {
+      throw const XmlyException('id_mismatch', '专辑简介与当前专辑不匹配');
+    }
+    // intro/shortIntro/shortIntroRich are server-truncated previews.
+    final rich = detail['introRich'] ?? album['introRich'];
+    if (rich is! String) {
+      throw const XmlyException('invalid_introduction', '完整专辑简介格式无效，请重试');
+    }
+    final recommendations = <Album>[];
+    final seen = <String>{number};
+    for (final row in _list(data['recAlbums'], maximum: 100)) {
+      final recommendation = Album.fromApi(xmlyMap(row));
+      if (seen.add(recommendation.id)) recommendations.add(recommendation);
+    }
+    return AlbumIntroductionData(
+      richText: rich,
+      recommendations: HomeSection(
+        title: _text(data['recAlbumsPanelTitle']).isEmpty
+            ? '相关推荐'
+            : _text(data['recAlbumsPanelTitle']),
+        albums: recommendations,
+      ),
+    );
+  }
+
   void invalidateLibrary() {
+    AppLog.instance.trace(
+      "lib/api/xmly_experience.dart::XmlyExperience.invalidateLibrary",
+    );
+
     _favoriteMembership[client] = null;
     _subscriptionMembership[client] = null;
   }
 
   Future<Set<String>> _membership({required bool favorite}) async {
+    AppLog.instance.trace(
+      "lib/api/xmly_experience.dart::XmlyExperience._membership",
+    );
+
     _requireAccount();
     final cache = favorite ? _favoriteMembership : _subscriptionMembership;
     final pending = cache[client] ??= _loadMembership(favorite: favorite);
@@ -128,17 +200,31 @@ class XmlyExperience {
   }
 
   Future<Set<String>> _loadMembership({required bool favorite}) async {
+    AppLog.instance.trace(
+      "lib/api/xmly_experience.dart::XmlyExperience._loadMembership",
+    );
+
     final seen = <String>{};
     for (var page = 1; page <= 10000; page++) {
       final Iterable<String> ids;
       final bool more;
       if (favorite) {
         final result = await _favorites(page: page);
-        ids = result.items.map((track) => track.id);
+        ids = result.items.map((track) {
+          AppLog.instance.trace(
+            "lib/api/xmly_experience.dart::XmlyExperience._loadMembership.closure#1",
+          );
+          return track.id;
+        });
         more = result.hasMore;
       } else {
         final result = await _subscriptions(page: page);
-        ids = result.items.map((item) => item.album.id);
+        ids = result.items.map((item) {
+          AppLog.instance.trace(
+            "lib/api/xmly_experience.dart::XmlyExperience._loadMembership.closure#2",
+          );
+          return item.album.id;
+        });
         more = result.hasMore;
       }
       final before = seen.length;
@@ -152,9 +238,18 @@ class XmlyExperience {
   }
 
   static const _invalid = XmlyException('invalid_experience', '喜马拉雅返回的列表格式无效');
-  String get _stamp => '${DateTime.now().millisecondsSinceEpoch}';
+  String get _stamp {
+    AppLog.instance.trace(
+      "lib/api/xmly_experience.dart::XmlyExperience._stamp.get",
+    );
+    return '${DateTime.now().millisecondsSinceEpoch}';
+  }
 
   static int? _integer(Object? value) {
+    AppLog.instance.trace(
+      "lib/api/xmly_experience.dart::XmlyExperience._integer",
+    );
+
     if (value is String) {
       final parsed = int.tryParse(value);
       return parsed != null && parsed >= 0 ? parsed : null;
@@ -167,27 +262,46 @@ class XmlyExperience {
     return null;
   }
 
-  static String _text(Object? value) => value is String ? value : '';
+  static String _text(Object? value) {
+    AppLog.instance.trace("lib/api/xmly_experience.dart::XmlyExperience._text");
+    return value is String ? value : '';
+  }
+
   static List<dynamic> _list(Object? value, {int maximum = 500}) {
+    AppLog.instance.trace("lib/api/xmly_experience.dart::XmlyExperience._list");
+
     if (value is! List ||
         value.length > maximum ||
-        value.any((row) => row is! Map<String, dynamic>))
+        value.any((row) {
+          AppLog.instance.trace(
+            "lib/api/xmly_experience.dart::XmlyExperience._list.closure#1",
+          );
+          return row is! Map<String, dynamic>;
+        }))
       throw _invalid;
     return value;
   }
 
   static bool _more(Map<String, dynamic> data) {
+    AppLog.instance.trace("lib/api/xmly_experience.dart::XmlyExperience._more");
+
     if (data['hasMore'] is! bool) throw _invalid;
     return data['hasMore'] as bool;
   }
 
   static int _time(Object? value) {
+    AppLog.instance.trace("lib/api/xmly_experience.dart::XmlyExperience._time");
+
     final time = _integer(value);
     if (time == null || time < 0 || time > 2115354119000) throw _invalid;
     return time;
   }
 
   static void _paging(int page, int size) {
+    AppLog.instance.trace(
+      "lib/api/xmly_experience.dart::XmlyExperience._paging",
+    );
+
     if (page < 1 || page > 10000 || size < 1 || size > 50) {
       throw const XmlyException(
         'invalid_page',
@@ -197,23 +311,30 @@ class XmlyExperience {
     }
   }
 
-  static Album _album(Map<String, dynamic> row) => Album.fromApi({
-    'albumId': row['albumId'],
-    'title': row['albumTitle'],
-    'intro': row['albumIntro'],
-    'nickname': row['nickname'],
-    'coverLarge': row['coverLarge'],
-    'coverMiddle': row['coverMiddle'],
-    'coverSmall': row['coverSmall'],
-    'cover_url': row['albumCover'],
-    'tracks': _integer(row['trackCount']) ?? 0,
-  });
+  static Album _album(Map<String, dynamic> row) {
+    AppLog.instance.trace(
+      "lib/api/xmly_experience.dart::XmlyExperience._album",
+    );
+    return Album.fromApi({
+      'albumId': row['albumId'],
+      'title': row['albumTitle'],
+      'intro': row['albumIntro'],
+      'nickname': row['nickname'],
+      'coverLarge': row['coverLarge'],
+      'coverMiddle': row['coverMiddle'],
+      'coverSmall': row['coverSmall'],
+      'cover_url': row['albumCover'],
+      'tracks': _integer(row['trackCount']) ?? 0,
+    });
+  }
 
   Future<Map<String, dynamic>> _get(
     String path,
     Map<String, dynamic> query, {
     bool account = true,
   }) async {
+    AppLog.instance.trace("lib/api/xmly_experience.dart::XmlyExperience._get");
+
     final response = await client.request(
       'GET',
       XmlyClient.mobile,
@@ -226,6 +347,10 @@ class XmlyExperience {
   }
 
   void _requireAccount() {
+    AppLog.instance.trace(
+      "lib/api/xmly_experience.dart::XmlyExperience._requireAccount",
+    );
+
     if (!client.accountAvailable)
       throw const XmlyException(
         'login_required',
@@ -235,6 +360,10 @@ class XmlyExperience {
   }
 
   Future<List<HomeChannel>> channels() async {
+    AppLog.instance.trace(
+      "lib/api/xmly_experience.dart::XmlyExperience.channels",
+    );
+
     final data = await _get('/lite-mobile/index/v1/subPages/$_stamp', {
       'latestTheaterViewTimestamp': 0,
       'theaterDefaultMark': 0,
@@ -253,6 +382,8 @@ class XmlyExperience {
   }
 
   Future<HomeContent> home(int pageId, {int? tabId}) async {
+    AppLog.instance.trace("lib/api/xmly_experience.dart::XmlyExperience.home");
+
     if (pageId <= 0 ||
         pageId > 2147483647 ||
         (tabId != null && (tabId <= 0 || tabId > 2147483647))) {
@@ -312,6 +443,10 @@ class XmlyExperience {
     List<dynamic> rows, {
     bool ranking = false,
   }) {
+    AppLog.instance.trace(
+      "lib/api/xmly_experience.dart::XmlyExperience._section",
+    );
+
     final albums = <Album>[];
     final stats = <String, HomeAlbumStats>{};
     final ids = <String>{};
@@ -339,6 +474,10 @@ class XmlyExperience {
   }
 
   Future<SubscriptionPage> subscriptions({int page = 1, int pageSize = 30}) {
+    AppLog.instance.trace(
+      "lib/api/xmly_experience.dart::XmlyExperience.subscriptions",
+    );
+
     if (page == 1) _subscriptionMembership[client] = null;
     return _subscriptions(page: page, pageSize: pageSize);
   }
@@ -347,6 +486,10 @@ class XmlyExperience {
     int page = 1,
     int pageSize = 30,
   }) async {
+    AppLog.instance.trace(
+      "lib/api/xmly_experience.dart::XmlyExperience._subscriptions",
+    );
+
     _requireAccount();
     _paging(page, pageSize);
     final data = await _get(
@@ -377,11 +520,19 @@ class XmlyExperience {
   }
 
   Future<FavoritePage> favorites({int page = 1, int pageSize = 30}) {
+    AppLog.instance.trace(
+      "lib/api/xmly_experience.dart::XmlyExperience.favorites",
+    );
+
     if (page == 1) _favoriteMembership[client] = null;
     return _favorites(page: page, pageSize: pageSize);
   }
 
   Future<FavoritePage> _favorites({int page = 1, int pageSize = 30}) async {
+    AppLog.instance.trace(
+      "lib/api/xmly_experience.dart::XmlyExperience._favorites",
+    );
+
     _requireAccount();
     _paging(page, pageSize);
     final data = await _get('/lite-mobile/like/v1/user-likes', {
@@ -426,23 +577,59 @@ class XmlyExperience {
   }
 
   Future<bool> isFavorite(String trackId) async {
+    AppLog.instance.trace(
+      "lib/api/xmly_experience.dart::XmlyExperience.isFavorite",
+    );
+
     _requireAccount();
     final id = 'xmly:${xmlyIdentifier(trackId)}';
     return (await _membership(favorite: true)).contains(id);
   }
 
   Future<bool> isSubscribed(String albumId) async {
+    AppLog.instance.trace(
+      "lib/api/xmly_experience.dart::XmlyExperience.isSubscribed",
+    );
+
     _requireAccount();
     final id = xmlyIdentifier(albumId);
     return (await _membership(favorite: false)).contains(id);
   }
 
   static void _mutationSuccess(Map<String, dynamic> response) {
+    AppLog.instance.trace(
+      "lib/api/xmly_experience.dart::XmlyExperience._mutationSuccess",
+    );
+
     // request() checks nonzero ret; mutations also require an explicit success.
     if (_integer(response['ret']) != 0) throw _invalid;
   }
 
+  Future<void> likeTrack(Track track) async {
+    AppLog.instance.trace(
+      'lib/api/xmly_experience.dart::XmlyExperience.likeTrack',
+    );
+
+    _requireAccount();
+    final response = await client.request(
+      'POST',
+      XmlyClient.mobile,
+      '/favourite-business/favorite/track',
+      data: {
+        'trackId': xmlyIdentifier(track.id),
+        'playTime': '1',
+        'favorite': 'true',
+      },
+      form: true,
+    );
+    _mutationSuccess(response);
+  }
+
   Future<void> setFavorite(Track track, {required bool favorite}) async {
+    AppLog.instance.trace(
+      "lib/api/xmly_experience.dart::XmlyExperience.setFavorite",
+    );
+
     _requireAccount();
     final trackId = xmlyIdentifier(track.id);
     var album = track.albumId;
@@ -474,6 +661,10 @@ class XmlyExperience {
   }
 
   Future<void> setSubscribed(String albumId, {required bool subscribed}) async {
+    AppLog.instance.trace(
+      "lib/api/xmly_experience.dart::XmlyExperience.setSubscribed",
+    );
+
     _requireAccount();
     final id = xmlyIdentifier(albumId);
     try {
@@ -493,6 +684,10 @@ class XmlyExperience {
   }
 
   Future<UpdatePage> updates({int? before, int pageSize = 30}) async {
+    AppLog.instance.trace(
+      "lib/api/xmly_experience.dart::XmlyExperience.updates",
+    );
+
     _requireAccount();
     _paging(1, pageSize);
     if (before != null && (before <= 0 || before > 2115354119000))

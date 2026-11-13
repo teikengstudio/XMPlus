@@ -1,6 +1,7 @@
 plugins {
     id("com.android.application")
     id("dev.flutter.flutter-gradle-plugin")
+    id("io.sentry.android.gradle")
 }
 
 val signingValues = mapOf(
@@ -31,7 +32,7 @@ android {
 
     defaultConfig {
         applicationId = "teikengstudio.xmplus"
-        minSdk = 24
+        minSdk = 26
         targetSdk = 36
         versionCode = flutter.versionCode
         versionName = flutter.versionName
@@ -74,6 +75,23 @@ kotlin {
 
 flutter {
     source = "../.."
+}
+
+val sentryUploadEnabled = !System.getenv("SENTRY_AUTH_TOKEN").isNullOrBlank() &&
+    System.getenv("SENTRY_UPLOAD_SYMBOLS") == "true"
+sentry {
+    org.set("tkstudio")
+    projectName.set("xmplus")
+    authToken.set(System.getenv("SENTRY_AUTH_TOKEN"))
+    autoInstallation { enabled.set(false) }
+    includeProguardMapping.set(true)
+    autoUploadProguardMapping.set(sentryUploadEnabled)
+    uploadNativeSymbols.set(sentryUploadEnabled)
+    autoUploadNativeSymbols.set(sentryUploadEnabled)
+    includeSourceContext.set(false)
+    includeNativeSources.set(false)
+    tracingInstrumentation { enabled.set(false) }
+    ignoredBuildTypes.set(setOf("debug"))
 }
 
 dependencies {

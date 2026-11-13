@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import "../services/app_log.dart";
+
 /// An inline draft: only Apply changes the application's saved theme.
 class ThemeColorEditor extends StatefulWidget {
   const ThemeColorEditor({
@@ -17,7 +19,12 @@ class ThemeColorEditor extends StatefulWidget {
   final bool oledBlack;
 
   @override
-  State<ThemeColorEditor> createState() => _ThemeColorEditorState();
+  State<ThemeColorEditor> createState() {
+    AppLog.instance.trace(
+      "lib/pages/theme_color_editor.dart::ThemeColorEditor.createState",
+    );
+    return _ThemeColorEditorState();
+  }
 }
 
 class _ThemeColorEditorState extends State<ThemeColorEditor> {
@@ -27,12 +34,26 @@ class _ThemeColorEditorState extends State<ThemeColorEditor> {
   bool _validHex = true;
   bool _planeFocused = false;
 
-  Color get _color => _hsv.toColor();
-  String get _hexValue =>
-      '#${(_color.toARGB32() & 0xFFFFFF).toRadixString(16).padLeft(6, '0').toUpperCase()}';
+  Color get _color {
+    AppLog.instance.trace(
+      "lib/pages/theme_color_editor.dart::_ThemeColorEditorState._color.get",
+    );
+    return _hsv.toColor();
+  }
+
+  String get _hexValue {
+    AppLog.instance.trace(
+      "lib/pages/theme_color_editor.dart::_ThemeColorEditorState._hexValue.get",
+    );
+    return '#${(_color.toARGB32() & 0xFFFFFF).toRadixString(16).padLeft(6, '0').toUpperCase()}';
+  }
 
   @override
   void initState() {
+    AppLog.instance.trace(
+      "lib/pages/theme_color_editor.dart::_ThemeColorEditorState.initState",
+    );
+
     super.initState();
     _hsv = HSVColor.fromColor(widget.initialColor.withValues(alpha: 1));
     _hex = TextEditingController(text: _hexValue);
@@ -40,13 +61,25 @@ class _ThemeColorEditorState extends State<ThemeColorEditor> {
 
   @override
   void dispose() {
+    AppLog.instance.trace(
+      "lib/pages/theme_color_editor.dart::_ThemeColorEditorState.dispose",
+    );
+
     _hex.dispose();
     _planeFocus.dispose();
     super.dispose();
   }
 
   void _setColor(HSVColor color) {
+    AppLog.instance.trace(
+      "lib/pages/theme_color_editor.dart::_ThemeColorEditorState._setColor",
+    );
+
     setState(() {
+      AppLog.instance.trace(
+        "lib/pages/theme_color_editor.dart::_ThemeColorEditorState._setColor.closure#1",
+      );
+
       _hsv = color;
       _validHex = true;
       _hex.value = TextEditingValue(
@@ -57,14 +90,27 @@ class _ThemeColorEditorState extends State<ThemeColorEditor> {
   }
 
   void _readHex(String value) {
+    AppLog.instance.trace(
+      "lib/pages/theme_color_editor.dart::_ThemeColorEditorState._readHex",
+    );
+
     final match = RegExp(r'^#?([a-fA-F0-9]{3}|[a-fA-F0-9]{6})$')
         .firstMatch(value.trim());
     setState(() {
+      AppLog.instance.trace(
+        "lib/pages/theme_color_editor.dart::_ThemeColorEditorState._readHex.closure#1",
+      );
+
       _validHex = match != null;
       if (match == null) return;
       var digits = match[1]!;
       if (digits.length == 3) {
-        digits = digits.split('').map((digit) => '$digit$digit').join();
+        digits = digits.split('').map((digit) {
+          AppLog.instance.trace(
+            "lib/pages/theme_color_editor.dart::_ThemeColorEditorState._readHex.closure#1.closure#1",
+          );
+          return '$digit$digit';
+        }).join();
       }
       _hsv = HSVColor.fromColor(
         Color(0xFF000000 | int.parse(digits, radix: 16)),
@@ -73,6 +119,10 @@ class _ThemeColorEditorState extends State<ThemeColorEditor> {
   }
 
   KeyEventResult _onPlaneKey(FocusNode node, KeyEvent event) {
+    AppLog.instance.trace(
+      "lib/pages/theme_color_editor.dart::_ThemeColorEditorState._onPlaneKey",
+    );
+
     if (event is! KeyDownEvent && event is! KeyRepeatEvent) {
       return KeyEventResult.ignored;
     }
@@ -92,50 +142,92 @@ class _ThemeColorEditorState extends State<ThemeColorEditor> {
     return KeyEventResult.handled;
   }
 
-  Widget _colorPlane() => LayoutBuilder(
-    builder: (context, constraints) {
-      const height = 160.0;
-      void select(Offset position) {
-        _planeFocus.requestFocus();
-        _setColor(
-          _hsv
-              .withSaturation(
-                (position.dx / constraints.maxWidth).clamp(0.0, 1.0),
-              )
-              .withValue((1 - position.dy / height).clamp(0.0, 1.0)),
+  Widget _colorPlane() {
+    AppLog.instance.trace(
+      "lib/pages/theme_color_editor.dart::_ThemeColorEditorState._colorPlane",
+    );
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        AppLog.instance.trace(
+          "lib/pages/theme_color_editor.dart::_ThemeColorEditorState._colorPlane.closure#1",
         );
-      }
 
-      return Semantics(
-        label: '饱和度和明度',
-        value:
-            '${(_hsv.saturation * 100).round()}%，${(_hsv.value * 100).round()}%',
-        hint: '使用左右方向键调整饱和度，上下方向键调整明度，也可输入色值',
-        child: Focus(
-          focusNode: _planeFocus,
-          onKeyEvent: _onPlaneKey,
-          onFocusChange: (value) => setState(() => _planeFocused = value),
-          child: MouseRegion(
-            cursor: SystemMouseCursors.precise,
-            child: GestureDetector(
-              key: const ValueKey('themeSaturationValue'),
-              behavior: HitTestBehavior.opaque,
-              onTapDown: (event) => select(event.localPosition),
-              onPanDown: (event) => select(event.localPosition),
-              onPanUpdate: (event) => select(event.localPosition),
-              child: CustomPaint(
-                size: Size(constraints.maxWidth, height),
-                painter: _ColorPlanePainter(_hsv, _planeFocused),
+        const height = 160.0;
+        void select(Offset position) {
+          AppLog.instance.trace(
+            "lib/pages/theme_color_editor.dart::_ThemeColorEditorState._colorPlane.closure#1.select",
+          );
+
+          _planeFocus.requestFocus();
+          _setColor(
+            _hsv
+                .withSaturation(
+                  (position.dx / constraints.maxWidth).clamp(0.0, 1.0),
+                )
+                .withValue((1 - position.dy / height).clamp(0.0, 1.0)),
+          );
+        }
+
+        return Semantics(
+          label: '饱和度和明度',
+          value:
+              '${(_hsv.saturation * 100).round()}%，${(_hsv.value * 100).round()}%',
+          hint: '使用左右方向键调整饱和度，上下方向键调整明度，也可输入色值',
+          child: Focus(
+            focusNode: _planeFocus,
+            onKeyEvent: _onPlaneKey,
+            onFocusChange: (value) {
+              AppLog.instance.trace(
+                "lib/pages/theme_color_editor.dart::_ThemeColorEditorState._colorPlane.closure#1.closure#1",
+              );
+              setState(() {
+                AppLog.instance.trace(
+                  "lib/pages/theme_color_editor.dart::_ThemeColorEditorState._colorPlane.closure#1.closure#1.closure#1",
+                );
+                _planeFocused = value;
+              });
+            },
+            child: MouseRegion(
+              cursor: SystemMouseCursors.precise,
+              child: GestureDetector(
+                key: const ValueKey('themeSaturationValue'),
+                behavior: HitTestBehavior.opaque,
+                onTapDown: (event) {
+                  AppLog.instance.trace(
+                    "lib/pages/theme_color_editor.dart::_ThemeColorEditorState._colorPlane.closure#1.closure#2",
+                  );
+                  select(event.localPosition);
+                },
+                onPanDown: (event) {
+                  AppLog.instance.trace(
+                    "lib/pages/theme_color_editor.dart::_ThemeColorEditorState._colorPlane.closure#1.closure#3",
+                  );
+                  select(event.localPosition);
+                },
+                onPanUpdate: (event) {
+                  AppLog.instance.trace(
+                    "lib/pages/theme_color_editor.dart::_ThemeColorEditorState._colorPlane.closure#1.closure#4",
+                  );
+                  select(event.localPosition);
+                },
+                child: CustomPaint(
+                  size: Size(constraints.maxWidth, height),
+                  painter: _ColorPlanePainter(_hsv, _planeFocused),
+                ),
               ),
             ),
           ),
-        ),
-      );
-    },
-  );
+        );
+      },
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
+    AppLog.instance.trace(
+      "lib/pages/theme_color_editor.dart::_ThemeColorEditorState.build",
+    );
+
     final theme = Theme.of(context);
     final controls = Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -182,9 +274,18 @@ class _ThemeColorEditorState extends State<ThemeColorEditor> {
                       value: _hsv.hue,
                       min: 0,
                       max: 360,
-                      semanticFormatterCallback: (value) =>
-                          '色相 ${value.round()} 度',
-                      onChanged: (value) => _setColor(_hsv.withHue(value)),
+                      semanticFormatterCallback: (value) {
+                        AppLog.instance.trace(
+                          "lib/pages/theme_color_editor.dart::_ThemeColorEditorState.build.closure#1",
+                        );
+                        return '色相 ${value.round()} 度';
+                      },
+                      onChanged: (value) {
+                        AppLog.instance.trace(
+                          "lib/pages/theme_color_editor.dart::_ThemeColorEditorState.build.closure#2",
+                        );
+                        _setColor(_hsv.withHue(value));
+                      },
                     ),
                   ],
                 ),
@@ -238,6 +339,10 @@ class _ThemeColorEditorState extends State<ThemeColorEditor> {
       children: [
         LayoutBuilder(
           builder: (context, constraints) {
+            AppLog.instance.trace(
+              "lib/pages/theme_color_editor.dart::_ThemeColorEditorState.build.closure#3",
+            );
+
             if (constraints.maxWidth >= 560) {
               return Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -267,7 +372,14 @@ class _ThemeColorEditorState extends State<ThemeColorEditor> {
             ),
             FilledButton(
               key: const ValueKey('themeColorApply'),
-              onPressed: _validHex ? () => widget.onApply(_color) : null,
+              onPressed: _validHex
+                  ? () {
+                      AppLog.instance.trace(
+                        "lib/pages/theme_color_editor.dart::_ThemeColorEditorState.build.closure#4",
+                      );
+                      widget.onApply(_color);
+                    }
+                  : null,
               child: const Text('应用主题色'),
             ),
           ],
@@ -285,6 +397,10 @@ class _ColorPlanePainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
+    AppLog.instance.trace(
+      "lib/pages/theme_color_editor.dart::_ColorPlanePainter.paint",
+    );
+
     final rect = Offset.zero & size;
     final shape = RRect.fromRectAndRadius(rect, const Radius.circular(12));
     canvas.save();
@@ -328,8 +444,12 @@ class _ColorPlanePainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(_ColorPlanePainter oldDelegate) =>
-      oldDelegate.color != color || oldDelegate.focused != focused;
+  bool shouldRepaint(_ColorPlanePainter oldDelegate) {
+    AppLog.instance.trace(
+      "lib/pages/theme_color_editor.dart::_ColorPlanePainter.shouldRepaint",
+    );
+    return oldDelegate.color != color || oldDelegate.focused != focused;
+  }
 }
 
 class _ColorPreview extends StatelessWidget {
@@ -345,6 +465,10 @@ class _ColorPreview extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    AppLog.instance.trace(
+      "lib/pages/theme_color_editor.dart::_ColorPreview.build",
+    );
+
     final scheme = ColorScheme.fromSeed(
       seedColor: seed,
       brightness: brightness,

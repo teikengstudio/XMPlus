@@ -7,6 +7,7 @@ import 'package:crypto/crypto.dart';
 import 'package:encrypt/encrypt.dart' as aes;
 
 import '../models/xmly_models.dart';
+import "../services/app_log.dart";
 
 class XmlyCrypto {
   static final List<int> playKey = List.unmodifiable(
@@ -19,18 +20,28 @@ class XmlyCrypto {
     'b0b1a8ac34e66efa95c7f4157cf8b6ba33dfc2075e41fb964f2e12dcaa',
   );
   static const _activityMaterial = 'q35435432sadks2i3546p2ndkcaqiwurhqfebt4kn';
-  static List<int> _hex(String value) => [
-    for (var i = 0; i < value.length; i += 2)
-      int.parse(value.substring(i, i + 2), radix: 16),
-  ];
-  static aes.Encrypter _cipher(List<int> key) => aes.Encrypter(
-    aes.AES(
-      aes.Key(Uint8List.fromList(key)),
-      mode: aes.AESMode.ecb,
-      padding: 'PKCS7',
-    ),
-  );
+  static List<int> _hex(String value) {
+    AppLog.instance.trace("lib/api/xmly_crypto.dart::XmlyCrypto._hex");
+    return [
+      for (var i = 0; i < value.length; i += 2)
+        int.parse(value.substring(i, i + 2), radix: 16),
+    ];
+  }
+
+  static aes.Encrypter _cipher(List<int> key) {
+    AppLog.instance.trace("lib/api/xmly_crypto.dart::XmlyCrypto._cipher");
+    return aes.Encrypter(
+      aes.AES(
+        aes.Key(Uint8List.fromList(key)),
+        mode: aes.AESMode.ecb,
+        padding: 'PKCS7',
+      ),
+    );
+  }
+
   static String encrypt(Map<String, dynamic> value, List<int> key) {
+    AppLog.instance.trace("lib/api/xmly_crypto.dart::XmlyCrypto.encrypt");
+
     final raw = utf8.encode(jsonEncode(value));
     if (raw.length > 2 * 1024 * 1024)
       throw const XmlyException('invalid_encoding', '协议数据过大');
@@ -39,6 +50,8 @@ class XmlyCrypto {
   }
 
   static String decrypt(String value, List<int> key) {
+    AppLog.instance.trace("lib/api/xmly_crypto.dart::XmlyCrypto.decrypt");
+
     try {
       if (value.length > 4 * 1024 * 1024) throw const FormatException();
       final text = value.replaceAll('\r', '').replaceAll('\n', '');
@@ -71,6 +84,8 @@ class XmlyCrypto {
     Map<String, dynamic> metadata, {
     required String uid,
   }) {
+    AppLog.instance.trace("lib/api/xmly_crypto.dart::XmlyCrypto.paidMediaUrl");
+
     try {
       final fileId = metadata['fileId'], ep = metadata['ep'];
       final domain = metadata['domain'], version = metadata['apiVersion'];
@@ -103,9 +118,12 @@ class XmlyCrypto {
       final filename = decrypt(fileId, _paidFileKey).trim();
       if (!RegExp(r'^[A-Za-z0-9][A-Za-z0-9/_.-]*\.(?:m4a|mp3)$')
               .hasMatch(filename) ||
-          filename
-              .split('/')
-              .any((part) => part.isEmpty || part == '.' || part == '..')) {
+          filename.split('/').any((part) {
+            AppLog.instance.trace(
+              "lib/api/xmly_crypto.dart::XmlyCrypto.paidMediaUrl.closure#1",
+            );
+            return part.isEmpty || part == '.' || part == '..';
+          })) {
         throw const FormatException();
       }
       if (!RegExp(r'^[A-Za-z0-9+/_\-]*={0,2}$').hasMatch(ep))
@@ -133,7 +151,12 @@ class XmlyCrypto {
       }
       final parts = utf8.decode(bytes, allowMalformed: false).trim().split('-');
       if (parts.length != 4 ||
-          parts.any((part) => part.isEmpty) ||
+          parts.any((part) {
+            AppLog.instance.trace(
+              "lib/api/xmly_crypto.dart::XmlyCrypto.paidMediaUrl.closure#2",
+            );
+            return part.isEmpty;
+          }) ||
           !RegExp(r'^[a-fA-F0-9]{32}$').hasMatch(parts[1]) ||
           !RegExp(r'^[0-9]{10,20}$').hasMatch(parts[3])) {
         throw const FormatException();
@@ -158,25 +181,41 @@ class XmlyCrypto {
   }
 
   static String activitySignature(Map<String, String> params) {
+    AppLog.instance.trace(
+      "lib/api/xmly_crypto.dart::XmlyCrypto.activitySignature",
+    );
+
     final keys = params.keys.toList()..sort();
     final canonical =
-        '${keys.map((key) => '$key=${params[key]}&').join()}$_activityMaterial';
+        '${keys.map((key) {
+          AppLog.instance.trace("lib/api/xmly_crypto.dart::XmlyCrypto.activitySignature.closure#1");
+          return '$key=${params[key]}&';
+        }).join()}$_activityMaterial';
     return md5
         .convert(
-          utf8
-              .encode(canonical)
-              .map((byte) => byte >= 65 && byte <= 90 ? byte + 32 : byte)
-              .toList(),
+          utf8.encode(canonical).map((byte) {
+            AppLog.instance.trace(
+              "lib/api/xmly_crypto.dart::XmlyCrypto.activitySignature.closure#2",
+            );
+            return byte >= 65 && byte <= 90 ? byte + 32 : byte;
+          }).toList(),
         )
         .toString();
   }
 
   static String freshTicket(Credentials credentials, {String? attributes}) {
+    AppLog.instance.trace("lib/api/xmly_crypto.dart::XmlyCrypto.freshTicket");
+
     final identity = md5
         .convert(utf8.encode('${credentials.uid}|${credentials.deviceId}'))
         .bytes;
     final random = Random.secure();
-    final uuid = List<int>.generate(16, (_) => random.nextInt(256));
+    final uuid = List<int>.generate(16, (_) {
+      AppLog.instance.trace(
+        "lib/api/xmly_crypto.dart::XmlyCrypto.freshTicket.closure#1",
+      );
+      return random.nextInt(256);
+    });
     uuid[6] = (uuid[6] & 15) | 64;
     uuid[8] = (uuid[8] & 63) | 128;
     final seconds = DateTime.now().millisecondsSinceEpoch ~/ 1000;

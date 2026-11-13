@@ -12,16 +12,24 @@ import '../models/xmly_models.dart';
 import 'download_paths.dart';
 import 'file_paths.dart';
 import 'android_platform.dart';
+import 'app_log.dart';
 
-import 'request_diagnostics.dart';
+import 'http_log_attempt.dart';
 import 'network_retry.dart';
+
+/// Invalid user-supplied media options retain their existing service code.
+class MediaInputException extends XmlyException {
+  const MediaInputException(super.code, super.message);
+}
 
 class MediaResult {
   MediaResult({
     required this.path,
     required List<String> warnings,
     required this.probe,
-  }) : warnings = List.unmodifiable(warnings);
+  }) : warnings = List.unmodifiable(warnings) {
+    AppLog.instance.trace("lib/services/media_processor.dart::MediaResult.new");
+  }
   final String path;
   final List<String> warnings;
   final Map<String, dynamic> probe;
@@ -41,7 +49,11 @@ class MediaProcessor {
        ffprobePath = Platform.isAndroid
            ? 'libxmplus_ffprobe.so'
            : ffprobePath ?? _tool(executableDirectory, 'ffprobe'),
-       _paths = paths ?? DownloadPaths();
+       _paths = paths ?? DownloadPaths() {
+    AppLog.instance.trace(
+      "lib/services/media_processor.dart::MediaProcessor.new",
+    );
+  }
 
   final String ffmpegPath, ffprobePath;
   final DownloadPaths _paths;
@@ -52,14 +64,23 @@ class MediaProcessor {
   static const _coverLimit = 5 * 1024 * 1024;
   static const _protocols = ['-protocol_whitelist', 'file,pipe'];
 
-  static String _tool(String? directory, String name) => p.join(
-    directory ?? p.dirname(Platform.resolvedExecutable),
-    'tools',
-    'ffmpeg',
-    '$name${Platform.isWindows ? '.exe' : ''}',
-  );
+  static String _tool(String? directory, String name) {
+    AppLog.instance.trace(
+      "lib/services/media_processor.dart::MediaProcessor._tool",
+    );
+    return p.join(
+      directory ?? p.dirname(Platform.resolvedExecutable),
+      'tools',
+      'ffmpeg',
+      '$name${Platform.isWindows ? '.exe' : ''}',
+    );
+  }
 
   Future<void> checkTools({Future<void> Function()? checkpoint}) async {
+    AppLog.instance.trace(
+      "lib/services/media_processor.dart::MediaProcessor.checkTools",
+    );
+
     for (final entry in [(ffmpegPath, 'ffmpeg'), (ffprobePath, 'ffprobe')]) {
       final output = await _run(
         entry.$1,
@@ -73,12 +94,21 @@ class MediaProcessor {
     }
   }
 
-  Future<Map<String, dynamic>> probe(String path) => _probe(path, null);
+  Future<Map<String, dynamic>> probe(String path) {
+    AppLog.instance.trace(
+      "lib/services/media_processor.dart::MediaProcessor.probe",
+    );
+    return _probe(path, null);
+  }
 
   Future<Map<String, dynamic>> _probe(
     String path,
     Future<void> Function()? checkpoint,
   ) async {
+    AppLog.instance.trace(
+      "lib/services/media_processor.dart::MediaProcessor._probe",
+    );
+
     final local = await _localFile(path);
     final output = await _run(
       ffprobePath,
@@ -100,20 +130,39 @@ class MediaProcessor {
       _audio(result);
       _duration(result);
       return result;
-    } on FormatException {
-      throw const XmlyException('media_probe', '无法识别有效音频');
+    } on FormatException catch (error, stack) {
+      AppLog.instance.write(
+        AppLogLevel.error,
+        'media',
+        '读取音频信息失败',
+        error: error,
+        stackTrace: stack,
+        promptUser: true,
+      );
+      const normalized = XmlyException('media_probe', '无法识别有效音频');
+      AppLog.instance.linkError(normalized, error);
+      throw normalized;
     }
   }
 
   /// Hashes compressed audio packets, not decoded PCM, so original-mode
   /// remuxing must preserve both the codec and the encoded audio stream.
-  Future<String> audioHash(String path) => _audioHash(path, null);
+  Future<String> audioHash(String path) {
+    AppLog.instance.trace(
+      "lib/services/media_processor.dart::MediaProcessor.audioHash",
+    );
+    return _audioHash(path, null);
+  }
 
   Future<String> _audioHash(
     String path,
     Future<void> Function()? checkpoint, {
     Map<String, dynamic>? details,
   }) async {
+    AppLog.instance.trace(
+      "lib/services/media_processor.dart::MediaProcessor._audioHash",
+    );
+
     final local = await _localFile(path);
     final input = details ?? await _probe(local, checkpoint);
     final adts = '${xmlyMap(input['format'])['format_name']}'
@@ -147,26 +196,82 @@ class MediaProcessor {
     required String sourcePath,
     required DownloadTask task,
     Future<void> Function()? checkpoint,
-  }) async {
-    final media = xmlyMap(task.settings['media']);
-    final configured = MediaProcessor(
-      ffmpegPath: _override(media, 'ffmpegPath', ffmpegPath),
-      ffprobePath: _override(media, 'ffprobePath', ffprobePath),
-      paths: _paths,
+  }) {
+    AppLog.instance.trace(
+      "lib/services/media_processor.dart::MediaProcessor.process",
     );
-    Future<void> checked() async {
-      try {
-        await checkpoint?.call();
-      } catch (error, stack) {
-        throw _MediaCancelled(error, stack);
-      }
-    }
+    return AppLog.instance.runWithErrorScope(() async {
+      AppLog.instance.trace(
+        "lib/services/media_processor.dart::MediaProcessor.process.closure#1",
+      );
 
-    try {
-      return await configured._process(sourcePath, task, checked);
-    } on _MediaCancelled catch (error) {
-      Error.throwWithStackTrace(error.error, error.stack);
-    }
+      if (AppLog.instance.level == AppLogLevel.debug) {
+        AppLog.instance.write(
+          AppLogLevel.debug,
+          'media',
+          '处理任务',
+          data: {
+            'sourcePath': sourcePath,
+            'taskId': task.id,
+            'trackId': task.track.id,
+            'albumId': task.track.albumId,
+            'accountIdentity': task.accountIdentity,
+            'rootDirectory': task.rootDirectory,
+            'download': task.settings['download'],
+            'media': task.settings['media'],
+            'tags': task.settings['tags'],
+          },
+        );
+      }
+      Future<void> checked() async {
+        AppLog.instance.trace(
+          "lib/services/media_processor.dart::MediaProcessor.process.closure#1.checked",
+        );
+
+        try {
+          await checkpoint?.call();
+        } catch (error, stack) {
+          throw _MediaCancelled(error, stack);
+        }
+      }
+
+      try {
+        final media = xmlyMap(task.settings['media']);
+        final configured = MediaProcessor(
+          ffmpegPath: _override(media, 'ffmpegPath', ffmpegPath),
+          ffprobePath: _override(media, 'ffprobePath', ffprobePath),
+          paths: _paths,
+        );
+        return await configured._process(sourcePath, task, checked);
+      } on _MediaCancelled catch (error) {
+        Error.throwWithStackTrace(error.error, error.stack);
+      } catch (error, stack) {
+        final expected =
+            error is MediaInputException ||
+            error is XmlyException &&
+                const {
+                  'media_format',
+                  'media_bitrate',
+                  'media_settings',
+                  'media_tags',
+                  'invalid_space',
+                  'invalid_conflict',
+                }.contains(error.code);
+        if (!expected) AppLog.instance.requestUploadPrompt();
+        if (!AppLog.instance.errorWasRecorded(error)) {
+          AppLog.instance.write(
+            expected ? AppLogLevel.warning : AppLogLevel.error,
+            'media',
+            '处理任务失败',
+            data: {'taskId': task.id, 'accountIdentity': task.accountIdentity},
+            error: error,
+            stackTrace: stack,
+            promptUser: !expected,
+          );
+        }
+        rethrow;
+      }
+    });
   }
 
   static String _override(
@@ -174,11 +279,15 @@ class MediaProcessor {
     String key,
     String fallback,
   ) {
+    AppLog.instance.trace(
+      "lib/services/media_processor.dart::MediaProcessor._override",
+    );
+
     if (Platform.isAndroid) return fallback;
     final value = options[key];
     if (value == null || value == '') return fallback;
     if (value is! String || !p.isAbsolute(value)) {
-      throw const XmlyException('media_tool', '请选择媒体工具的完整路径');
+      throw const MediaInputException('media_tool', '请选择媒体工具的完整路径');
     }
     return value;
   }
@@ -188,6 +297,10 @@ class MediaProcessor {
     DownloadTask task,
     Future<void> Function()? checkpoint,
   ) async {
+    AppLog.instance.trace(
+      "lib/services/media_processor.dart::MediaProcessor._process",
+    );
+
     await checkpoint?.call();
     final source = await _localFile(sourcePath);
     await checkTools(checkpoint: checkpoint);
@@ -273,6 +386,21 @@ class MediaProcessor {
       settings: task.settings,
       totalTracks: total,
     );
+    if (AppLog.instance.level == AppLogLevel.debug) {
+      AppLog.instance.write(
+        AppLogLevel.debug,
+        'media',
+        '选择输出路径',
+        data: {
+          'taskId': task.id,
+          'accountIdentity': task.accountIdentity,
+          'sourcePath': source,
+          'targetPath': target,
+          'format': format,
+          'bitrateKbps': bitrate,
+        },
+      );
+    }
     await Directory(p.dirname(target)).create(recursive: true);
     final sourceDigest = await _fileHash(source, checkpoint);
     final signature = sha256
@@ -296,6 +424,10 @@ class MediaProcessor {
         : null;
     final warnings = <String>[];
     return _withOutputLock(() async {
+      AppLog.instance.trace(
+        "lib/services/media_processor.dart::MediaProcessor._process.closure#1",
+      );
+
       await checkpoint?.call();
       final conflict = download['conflict'] ?? 'skip';
       if (conflict is! String)
@@ -410,7 +542,14 @@ class MediaProcessor {
               );
             } on _MediaCancelled {
               rethrow;
-            } catch (_) {
+            } catch (error, stack) {
+              AppLog.instance.write(
+                AppLogLevel.warning,
+                'media',
+                '封面处理失败',
+                error: error,
+                stackTrace: stack,
+              );
               cover = null;
               warnings.add('封面获取失败，已保留音频');
             }
@@ -441,19 +580,25 @@ class MediaProcessor {
                     description ??= entry.value;
                 }
               }
-              metadata.removeWhere(
-                (key, _) => const {
+              metadata.removeWhere((key, _) {
+                AppLog.instance.trace(
+                  "lib/services/media_processor.dart::MediaProcessor._process.closure#1.closure#1",
+                );
+                return const {
                   'description',
                   'comment',
-                }.contains(key.toLowerCase()),
-              );
+                }.contains(key.toLowerCase());
+              });
               outputTags['source'] = outputTags.remove('comment')!;
               if (description != null) outputTags['comment'] = description;
             }
             for (final entry in outputTags.entries) {
-              metadata.removeWhere(
-                (key, _) => key.toLowerCase() == entry.key.toLowerCase(),
-              );
+              metadata.removeWhere((key, _) {
+                AppLog.instance.trace(
+                  "lib/services/media_processor.dart::MediaProcessor._process.closure#1.closure#2",
+                );
+                return key.toLowerCase() == entry.key.toLowerCase();
+              });
               if (entry.value.isNotEmpty) metadata[entry.key] = entry.value;
             }
             final contents = StringBuffer(';FFMETADATA1\n');
@@ -552,11 +697,13 @@ class MediaProcessor {
         final outputProbe = await _probe(output, checkpoint);
         _compatible(input, outputProbe, format as String);
         if (cover != null &&
-            !(outputProbe['streams'] as List).any(
-              (stream) =>
-                  xmlyMap(stream)['codec_type'] == 'video' &&
-                  xmlyMap(xmlyMap(stream)['disposition'])['attached_pic'] == 1,
-            )) {
+            !(outputProbe['streams'] as List).any((stream) {
+              AppLog.instance.trace(
+                "lib/services/media_processor.dart::MediaProcessor._process.closure#1.closure#3",
+              );
+              return xmlyMap(stream)['codec_type'] == 'video' &&
+                  xmlyMap(xmlyMap(stream)['disposition'])['attached_pic'] == 1;
+            })) {
           warnings.add('封面未能写入，已保留音频');
         }
         await _decode(output, checkpoint);
@@ -592,7 +739,14 @@ class MediaProcessor {
             '$destination${DownloadPaths.mediaManifestSuffix}',
             overwrite: true,
           );
-        } catch (_) {
+        } catch (error, stack) {
+          AppLog.instance.write(
+            AppLogLevel.warning,
+            'media',
+            '保存校验记录失败',
+            error: error,
+            stackTrace: stack,
+          );
           warnings.add('校验记录保存失败，重试时不会自动跳过此文件');
         }
         return MediaResult(
@@ -603,8 +757,14 @@ class MediaProcessor {
       } finally {
         try {
           await temporary.delete(recursive: true);
-        } on FileSystemException {
-          /* Only disposable processor output. */
+        } on FileSystemException catch (error, stack) {
+          AppLog.instance.write(
+            AppLogLevel.warning,
+            'media',
+            '清理临时输出失败',
+            error: error,
+            stackTrace: stack,
+          );
         }
       }
     }, checkpoint);
@@ -614,12 +774,20 @@ class MediaProcessor {
     Future<T> Function() operation,
     Future<void> Function()? checkpoint,
   ) async {
+    AppLog.instance.trace(
+      "lib/services/media_processor.dart::MediaProcessor._withOutputLock",
+    );
+
     final result = Completer<T>();
     var entered = false, checking = false;
     Timer? timer;
     // Abandoned waiters must never select a name or touch files later.
     unawaited(
       _outputs.synchronized(() async {
+        AppLog.instance.trace(
+          "lib/services/media_processor.dart::MediaProcessor._withOutputLock.closure#1",
+        );
+
         if (result.isCompleted) return;
         entered = true;
         timer?.cancel();
@@ -632,6 +800,10 @@ class MediaProcessor {
     );
     if (!entered && checkpoint != null) {
       timer = Timer.periodic(const Duration(milliseconds: 100), (_) async {
+        AppLog.instance.trace(
+          "lib/services/media_processor.dart::MediaProcessor._withOutputLock.closure#2",
+        );
+
         if (entered || result.isCompleted || checking) return;
         checking = true;
         try {
@@ -659,6 +831,10 @@ class MediaProcessor {
     String? originalHash,
     Future<void> Function()? checkpoint,
   ) async {
+    AppLog.instance.trace(
+      "lib/services/media_processor.dart::MediaProcessor._existing",
+    );
+
     await checkpoint?.call();
     try {
       if (await FileSystemEntity.type(path, followLinks: false) !=
@@ -696,12 +872,20 @@ class MediaProcessor {
     String key,
     bool fallback,
   ) {
+    AppLog.instance.trace(
+      "lib/services/media_processor.dart::MediaProcessor._boolean",
+    );
+
     final value = options[key] ?? fallback;
     if (value is! bool) throw const XmlyException('media_settings', '媒体设置无效');
     return value;
   }
 
   static Map<String, dynamic> _audio(Map<String, dynamic> probe) {
+    AppLog.instance.trace(
+      "lib/services/media_processor.dart::MediaProcessor._audio",
+    );
+
     final streams = probe['streams'];
     if (streams is List) {
       for (final stream in streams) {
@@ -716,6 +900,10 @@ class MediaProcessor {
   }
 
   static double _duration(Map<String, dynamic> probe) {
+    AppLog.instance.trace(
+      "lib/services/media_processor.dart::MediaProcessor._duration",
+    );
+
     final duration =
         double.tryParse('${_audio(probe)['duration']}') ??
         double.tryParse('${xmlyMap(probe['format'])['duration']}');
@@ -726,6 +914,10 @@ class MediaProcessor {
   }
 
   static String _originalExtension(Map<String, dynamic> input) {
+    AppLog.instance.trace(
+      "lib/services/media_processor.dart::MediaProcessor._originalExtension",
+    );
+
     final formats = '${xmlyMap(input['format'])['format_name']}'
         .split(',')
         .toSet();
@@ -755,13 +947,19 @@ class MediaProcessor {
   }
 
   static String _escapeMetadata(String value) {
+    AppLog.instance.trace(
+      "lib/services/media_processor.dart::MediaProcessor._escapeMetadata",
+    );
+
     if (value.contains('\u0000')) {
       throw const XmlyException('media_tags', '标签内容无效');
     }
-    return value.replaceAllMapped(
-      RegExp(r'[\\=;#\r\n]'),
-      (match) => '\\${match[0]}',
-    );
+    return value.replaceAllMapped(RegExp(r'[\\=;#\r\n]'), (match) {
+      AppLog.instance.trace(
+        "lib/services/media_processor.dart::MediaProcessor._escapeMetadata.closure#1",
+      );
+      return '\\${match[0]}';
+    });
   }
 
   static Map<String, String> _metadata(
@@ -769,6 +967,10 @@ class MediaProcessor {
     Map<String, dynamic> options,
     int? total,
   ) {
+    AppLog.instance.trace(
+      "lib/services/media_processor.dart::MediaProcessor._metadata",
+    );
+
     final track = task.track;
     final overrides = xmlyMap(options['overrides']);
     const allowed = {'titlePrefix', 'album', 'artist', 'genre', 'description'};
@@ -780,8 +982,13 @@ class MediaProcessor {
         throw const XmlyException('media_tags', '标签内容无效');
       }
     }
-    String value(String key, String fallback) =>
-        overrides.containsKey(key) ? overrides[key] as String : fallback;
+    String value(String key, String fallback) {
+      AppLog.instance.trace(
+        "lib/services/media_processor.dart::MediaProcessor._metadata.value",
+      );
+      return overrides.containsKey(key) ? overrides[key] as String : fallback;
+    }
+
     final order = track.orderNo ?? track.officialPosition;
     final tags = <String, String>{
       'title': '${value('titlePrefix', '')}${track.title}',
@@ -804,6 +1011,10 @@ class MediaProcessor {
     Map<String, dynamic> output,
     String format,
   ) {
+    AppLog.instance.trace(
+      "lib/services/media_processor.dart::MediaProcessor._compatible",
+    );
+
     final source = _audio(input), result = _audio(output);
     final expected = switch (format) {
       'original' => source['codec_name'],
@@ -848,6 +1059,10 @@ class MediaProcessor {
   }
 
   Future<void> _decode(String path, Future<void> Function()? checkpoint) async {
+    AppLog.instance.trace(
+      "lib/services/media_processor.dart::MediaProcessor._decode",
+    );
+
     await _run(ffmpegPath, [
       '-v',
       'error',
@@ -865,6 +1080,10 @@ class MediaProcessor {
   }
 
   static Future<String> _localFile(String value) async {
+    AppLog.instance.trace(
+      "lib/services/media_processor.dart::MediaProcessor._localFile",
+    );
+
     if (!p.isAbsolute(value) ||
         value.contains('\u0000') ||
         await FileSystemEntity.type(value, followLinks: false) !=
@@ -880,6 +1099,10 @@ class MediaProcessor {
     String path,
     Future<void> Function()? checkpoint,
   ) async {
+    AppLog.instance.trace(
+      "lib/services/media_processor.dart::MediaProcessor._fileHash",
+    );
+
     final sink = _DigestSink();
     final converter = sha256.startChunkedConversion(sink);
     await for (final bytes in File(path).openRead()) {
@@ -895,15 +1118,35 @@ class MediaProcessor {
     String target,
     Future<void> Function()? checkpoint,
   ) async {
+    AppLog.instance.trace(
+      "lib/services/media_processor.dart::MediaProcessor._copy",
+    );
+
     final output = await File(target).open(mode: FileMode.writeOnly);
+    var failed = false;
     try {
       await for (final bytes in File(source).openRead()) {
         await checkpoint?.call();
         await output.writeFrom(bytes);
       }
       await output.flush();
+    } catch (_) {
+      failed = true;
+      rethrow;
     } finally {
-      await output.close();
+      try {
+        await output.close();
+      } catch (error, stack) {
+        AppLog.instance.write(
+          AppLogLevel.error,
+          'media',
+          '关闭临时输出失败',
+          error: error,
+          stackTrace: stack,
+          promptUser: true,
+        );
+        if (!failed) rethrow;
+      }
     }
   }
 
@@ -912,12 +1155,25 @@ class MediaProcessor {
     String directory,
     Future<void> Function()? checkpoint,
   ) async {
+    AppLog.instance.trace(
+      "lib/services/media_processor.dart::MediaProcessor._cover",
+    );
+
     for (var attempt = 0; ; attempt++) {
       await checkpoint?.call();
       final client = HttpClient()
         ..connectionTimeout = const Duration(seconds: 10);
-      client.findProxy = (_) => 'DIRECT';
+      client.findProxy = (_) {
+        AppLog.instance.trace(
+          "lib/services/media_processor.dart::MediaProcessor._cover.closure#1",
+        );
+        return 'DIRECT';
+      };
       client.connectionFactory = (uri, proxyHost, proxyPort) async {
+        AppLog.instance.trace(
+          "lib/services/media_processor.dart::MediaProcessor._cover.closure#2",
+        );
+
         final addresses = await _safeCoverUri(uri);
         return uri.scheme == 'https'
             ? SecureSocket.startConnect(addresses.first, uri.port)
@@ -926,9 +1182,23 @@ class MediaProcessor {
       // Retry-After is outside this per-attempt redirect/body deadline.
       final deadline = DateTime.now().add(const Duration(seconds: 30));
       Future<T> wait<T>(Future<T> future) async {
+        AppLog.instance.trace(
+          "lib/services/media_processor.dart::MediaProcessor._cover.wait",
+        );
+
         final pending = future.then<Object>(
-          (value) => (value,),
-          onError: (Object error, StackTrace stack) => (error, stack),
+          (value) {
+            AppLog.instance.trace(
+              "lib/services/media_processor.dart::MediaProcessor._cover.wait.closure#1",
+            );
+            return (value,);
+          },
+          onError: (Object error, StackTrace stack) {
+            AppLog.instance.trace(
+              "lib/services/media_processor.dart::MediaProcessor._cover.wait.closure#2",
+            );
+            return (error, stack);
+          },
         );
         while (true) {
           await checkpoint?.call();
@@ -940,7 +1210,12 @@ class MediaProcessor {
               left < const Duration(milliseconds: 100)
                   ? left
                   : const Duration(milliseconds: 100),
-            ).then<Object?>((_) => null),
+            ).then<Object?>((_) {
+              AppLog.instance.trace(
+                "lib/services/media_processor.dart::MediaProcessor._cover.wait.closure#3",
+              );
+              return null;
+            }),
           ]);
           if (outcome case (Object error, StackTrace stack)) {
             Error.throwWithStackTrace(error, stack);
@@ -949,7 +1224,7 @@ class MediaProcessor {
         }
       }
 
-      RequestDiagnostic? diagnostic;
+      HttpLogAttempt? diagnostic;
       HttpClientResponse? response;
       var definitive = false;
       Duration? delay;
@@ -959,16 +1234,25 @@ class MediaProcessor {
           response = null;
           diagnostic = null;
           final bytes = <int>[];
-          diagnostic = RequestDiagnostic(
-            account: '公共嵌入封面（无账号）',
-            method: 'GET',
-            url: '$uri',
-          )..responseBytes = (() => bytes);
+          diagnostic =
+              HttpLogAttempt(account: '公共嵌入封面（无账号）', method: 'GET', url: '$uri')
+                ..responseBytes = (() {
+                  AppLog.instance.trace(
+                    "lib/services/media_processor.dart::MediaProcessor._cover.closure#3",
+                  );
+                  return bytes;
+                })
+                ..responseIsBinary = true
+                ..started();
           await wait(_safeCoverUri(uri));
           response = null;
           final request = await wait(client.getUrl(uri));
           request.followRedirects = false;
           request.headers.forEach((name, values) {
+            AppLog.instance.trace(
+              "lib/services/media_processor.dart::MediaProcessor._cover.closure#4",
+            );
+
             diagnostic!.requestHeaders[name] = List<String>.of(values);
           });
           final current = await wait(request.close());
@@ -977,6 +1261,10 @@ class MediaProcessor {
             ..status = current.statusCode
             ..completeness = '响应体接收中；失败时保留全部已接收字节';
           current.headers.forEach((name, values) {
+            AppLog.instance.trace(
+              "lib/services/media_processor.dart::MediaProcessor._cover.closure#5",
+            );
+
             diagnostic!.responseHeaders[name] = List<String>.of(values);
           });
           final redirect = const {
@@ -988,7 +1276,15 @@ class MediaProcessor {
           }.contains(current.statusCode);
           final location = current.headers.value(HttpHeaders.locationHeader);
           if (redirect && location != null && redirects < 5) {
-            await current.listen((_) {}).cancel();
+            await current.listen((_) {
+              AppLog.instance.trace(
+                "lib/services/media_processor.dart::MediaProcessor._cover.closure#6",
+              );
+            }).cancel();
+            diagnostic
+              ..completeness = '未读取响应体：跟随重定向'
+              ..responseByteCount = 0
+              ..succeeded();
             uri = uri.resolve(location);
             continue;
           }
@@ -1023,24 +1319,38 @@ class MediaProcessor {
           definitive = true;
           final png =
               bytes.length >= 8 &&
-              const [137, 80, 78, 71, 13, 10, 26, 10].asMap().entries.every(
-                (entry) => bytes[entry.key] == entry.value,
-              );
+              const [137, 80, 78, 71, 13, 10, 26, 10].asMap().entries.every((
+                entry,
+              ) {
+                AppLog.instance.trace(
+                  "lib/services/media_processor.dart::MediaProcessor._cover.closure#7",
+                );
+                return bytes[entry.key] == entry.value;
+              });
           final jpeg =
               bytes.length >= 3 &&
               bytes[0] == 255 &&
               bytes[1] == 216 &&
               bytes[2] == 255;
           if (!png && !jpeg) throw const FormatException('Invalid cover image');
+          diagnostic
+            ..responseByteCount = bytes.length
+            ..succeeded();
+          // The network attempt is complete; local file failures are not HTTP errors.
+          diagnostic = null;
           await checkpoint?.call();
           final file = File(p.join(directory, png ? 'cover.png' : 'cover.jpg'));
           await file.writeAsBytes(bytes, flush: true);
           return file.path;
         }
         throw const FormatException('Cover redirect limit');
-      } catch (error) {
-        if (retryableTransport(error)) diagnostic?.transportError = '$error';
-        await diagnostic?.fail(error);
+      } catch (error, stack) {
+        if (error is _MediaCancelled) {
+          diagnostic?.cancelled(error.error);
+        } else {
+          if (retryableTransport(error)) diagnostic?.transportError = '$error';
+          await diagnostic?.fail(error, stack);
+        }
         if (definitive ||
             attempt == 4 ||
             error is FormatException ||
@@ -1061,6 +1371,10 @@ class MediaProcessor {
   }
 
   static Future<List<InternetAddress>> _safeCoverUri(Uri uri) async {
+    AppLog.instance.trace(
+      "lib/services/media_processor.dart::MediaProcessor._safeCoverUri",
+    );
+
     if (!const {'http', 'https'}.contains(uri.scheme) ||
         uri.host.isEmpty ||
         uri.userInfo.isNotEmpty ||
@@ -1071,6 +1385,10 @@ class MediaProcessor {
         .timeout(const Duration(seconds: 10));
     if (addresses.isEmpty ||
         addresses.any((address) {
+          AppLog.instance.trace(
+            "lib/services/media_processor.dart::MediaProcessor._safeCoverUri.closure#1",
+          );
+
           final bytes = address.rawAddress;
           if (address.type == InternetAddressType.IPv4) {
             return bytes[0] == 0 ||
@@ -1102,61 +1420,119 @@ class MediaProcessor {
     Future<void> Function()? checkpoint,
     Duration timeout = const Duration(minutes: 30),
   }) async {
+    AppLog.instance.trace(
+      "lib/services/media_processor.dart::MediaProcessor._run",
+    );
+
     await checkpoint?.call();
     if (Platform.isAndroid) {
       final tools = await AndroidPlatform.mediaToolPaths();
       executable = tools[executable == ffmpegPath ? 'ffmpeg' : 'ffprobe']!;
     }
+    if (AppLog.instance.level == AppLogLevel.debug) {
+      AppLog.instance.write(
+        AppLogLevel.debug,
+        'media',
+        '启动媒体工具',
+        data: {'executable': executable, 'arguments': arguments},
+      );
+    }
     Process process;
     try {
       process = await Process.start(executable, arguments, runInShell: false);
-    } on ProcessException {
-      if (Platform.isAndroid) {
-        throw const XmlyException(
-          'media_tool_missing',
-          '随附 Android FFmpeg/FFprobe 无法启动，请重新安装完整安装包；源缓存已保留，在线收听不受影响',
-        );
-      }
-      throw const XmlyException('media_tool_missing', '无法启动媒体工具，请检查路径');
+    } on ProcessException catch (error, stack) {
+      AppLog.instance.write(
+        AppLogLevel.error,
+        'media',
+        '媒体工具启动失败',
+        data: {'executable': executable, 'arguments': arguments},
+        error: error,
+        stackTrace: stack,
+        promptUser: true,
+      );
+      final normalized = Platform.isAndroid
+          ? const XmlyException(
+              'media_tool_missing',
+              '随附 Android FFmpeg/FFprobe 无法启动，请重新安装完整安装包；源缓存已保留，在线收听不受影响',
+            )
+          : const XmlyException('media_tool_missing', '无法启动媒体工具，请检查路径');
+      AppLog.instance.linkError(normalized, error);
+      throw normalized;
     }
     final stdout = <int>[], stderr = <int>[];
     var overflow = false, finished = false;
     Object? stopped;
     StackTrace? stoppedStack;
     void stop(Object error, StackTrace stack) {
+      AppLog.instance.trace(
+        "lib/services/media_processor.dart::MediaProcessor._run.stop",
+      );
+
       stopped ??= error;
       stoppedStack ??= stack;
       process.kill(ProcessSignal.sigkill);
     }
 
-    Future<void> drain(Stream<List<int>> stream, List<int> buffer) async {
-      await for (final bytes in stream) {
-        final room = _limit - buffer.length;
-        if (room > 0) buffer.addAll(bytes.take(room));
-        if (bytes.length > room) {
-          overflow = true;
-          process.kill(ProcessSignal.sigkill);
+    Future<void> drain(
+      Stream<List<int>> stream,
+      List<int> buffer, {
+      bool logStderr = false,
+    }) async {
+      AppLog.instance.trace(
+        "lib/services/media_processor.dart::MediaProcessor._run.drain",
+      );
+
+      final log = logStderr && AppLog.instance.level == AppLogLevel.debug
+          ? const Utf8Decoder(allowMalformed: true).startChunkedConversion(
+              StringConversionSink.from(_StderrLogSink(executable)),
+            )
+          : null;
+      try {
+        await for (final bytes in stream) {
+          log?.add(bytes);
+          final room = _limit - buffer.length;
+          if (room > 0) buffer.addAll(bytes.take(room));
+          if (bytes.length > room) {
+            overflow = true;
+            process.kill(ProcessSignal.sigkill);
+          }
         }
+      } finally {
+        log?.close();
       }
     }
 
     final out = drain(process.stdout, stdout),
-        err = drain(process.stderr, stderr);
+        err = drain(process.stderr, stderr, logStderr: true);
     final exited = process.exitCode.then((code) {
+      AppLog.instance.trace(
+        "lib/services/media_processor.dart::MediaProcessor._run.closure#1",
+      );
+
       finished = true;
       return code;
     });
-    final timer = Timer(
-      timeout,
-      () => stop(
+    final timer = Timer(timeout, () {
+      AppLog.instance.trace(
+        "lib/services/media_processor.dart::MediaProcessor._run.closure#2",
+      );
+      stop(
         const XmlyException('media_timeout', '媒体处理超时，源文件已保留'),
         StackTrace.current,
-      ),
-    );
+      );
+    });
     final monitor = () async {
+      AppLog.instance.trace(
+        "lib/services/media_processor.dart::MediaProcessor._run.closure#3",
+      );
+
       while (!finished && stopped == null && !overflow) {
         await Future.any<void>([
-          exited.then((_) {}),
+          exited.then((_) {
+            AppLog.instance.trace(
+              "lib/services/media_processor.dart::MediaProcessor._run.closure#3.closure#1",
+            );
+          }),
           Future<void>.delayed(const Duration(milliseconds: 100)),
         ]);
         if (finished) break;
@@ -1170,6 +1546,18 @@ class MediaProcessor {
     try {
       final code = await exited;
       await Future.wait([out, err, monitor]);
+      if (AppLog.instance.level == AppLogLevel.debug) {
+        AppLog.instance.write(
+          AppLogLevel.debug,
+          'media',
+          '媒体工具已退出',
+          data: {
+            'executable': executable,
+            'arguments': arguments,
+            'exitCode': code,
+          },
+        );
+      }
       if (stopped != null) Error.throwWithStackTrace(stopped!, stoppedStack!);
       if (overflow)
         throw const XmlyException('media_output_limit', '媒体工具输出异常，源文件已保留');
@@ -1186,15 +1574,56 @@ class _DigestSink implements Sink<Digest> {
   Digest? value;
   @override
   void add(Digest data) {
+    AppLog.instance.trace("lib/services/media_processor.dart::_DigestSink.add");
+
     value = data;
   }
 
   @override
-  void close() {}
+  void close() {
+    AppLog.instance.trace(
+      "lib/services/media_processor.dart::_DigestSink.close",
+    );
+  }
 }
 
 class _MediaCancelled implements Exception {
-  _MediaCancelled(this.error, this.stack);
+  _MediaCancelled(this.error, this.stack) {
+    AppLog.instance.trace(
+      "lib/services/media_processor.dart::_MediaCancelled.new",
+    );
+  }
   final Object error;
   final StackTrace stack;
+}
+
+class _StderrLogSink implements Sink<String> {
+  _StderrLogSink(this.executable) {
+    AppLog.instance.trace(
+      "lib/services/media_processor.dart::_StderrLogSink.new",
+    );
+  }
+  final String executable;
+
+  @override
+  void add(String text) {
+    AppLog.instance.trace(
+      "lib/services/media_processor.dart::_StderrLogSink.add",
+    );
+
+    if (AppLog.instance.level != AppLogLevel.debug) return;
+    AppLog.instance.write(
+      AppLogLevel.debug,
+      'media',
+      '媒体工具错误输出',
+      data: {'executable': executable, 'stderr': text},
+    );
+  }
+
+  @override
+  void close() {
+    AppLog.instance.trace(
+      "lib/services/media_processor.dart::_StderrLogSink.close",
+    );
+  }
 }

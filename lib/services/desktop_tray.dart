@@ -3,6 +3,8 @@ import 'dart:io';
 
 import 'package:tray_manager/tray_manager.dart' as tray;
 
+import 'app_log.dart';
+
 /// The tray owns presentation and commands; the existing player keeps running.
 class DesktopTray {
   DesktopTray({
@@ -11,7 +13,9 @@ class DesktopTray {
     required this.onPlayPause,
     required this.onNext,
     required this.onExit,
-  });
+  }) {
+    AppLog.instance.trace("lib/services/desktop_tray.dart::DesktopTray.new");
+  }
 
   final Future<void> Function() onRestore, onMini, onPlayPause, onNext, onExit;
   tray.TrayIcon? _icon;
@@ -23,6 +27,10 @@ class DesktopTray {
   (String, bool, bool, bool)? _state;
 
   bool ensureReady() {
+    AppLog.instance.trace(
+      "lib/services/desktop_tray.dart::DesktopTray.ensureReady",
+    );
+
     if (!Platform.isWindows) return false;
     try {
       if (_icon == null) {
@@ -37,6 +45,10 @@ class DesktopTray {
         icon.icon = image;
         icon.setTooltip('XMPlus');
         _listener = icon.addListener((event) {
+          AppLog.instance.trace(
+            "lib/services/desktop_tray.dart::DesktopTray.ensureReady.closure#1",
+          );
+
           switch (event) {
             case tray.TrayIconClickedEvent():
               return onRestore();
@@ -56,7 +68,14 @@ class DesktopTray {
         icon.setContextMenu(menu);
       }
       if (_icon!.setVisible(true)) return true;
-    } catch (_) {
+    } catch (error, stack) {
+      AppLog.instance.write(
+        AppLogLevel.error,
+        'tray',
+        'Unable to initialize the desktop tray',
+        error: error,
+        stackTrace: stack,
+      );
       // Never hide the app unless the tray is available to bring it back.
     }
     dispose();
@@ -64,12 +83,20 @@ class DesktopTray {
   }
 
   tray.MenuItem _addItem(String label, Future<void> Function() action) {
+    AppLog.instance.trace(
+      "lib/services/desktop_tray.dart::DesktopTray._addItem",
+    );
+
     final item = tray.MenuItem.createWithLabelAndType(
       label,
       tray.MenuItemType.normal,
     );
     if (item == null) throw StateError('Tray menu creation failed');
     final listener = item.addListener((event) async {
+      AppLog.instance.trace(
+        "lib/services/desktop_tray.dart::DesktopTray._addItem.closure#1",
+      );
+
       if (event is tray.MenuItemClickedEvent) await action();
     });
     _items.add((item, listener));
@@ -83,6 +110,8 @@ class DesktopTray {
     required bool loading,
     required bool enabled,
   }) {
+    AppLog.instance.trace("lib/services/desktop_tray.dart::DesktopTray.update");
+
     if (_icon == null) return;
     final state = (title, playing, loading, enabled);
     if (_state == state) return;
@@ -99,6 +128,10 @@ class DesktopTray {
   }
 
   void dispose() {
+    AppLog.instance.trace(
+      "lib/services/desktop_tray.dart::DesktopTray.dispose",
+    );
+
     _icon?.setVisible(false);
     _icon?.setContextMenu(null);
     if (_listener != null) _icon?.removeListener(_listener!);
