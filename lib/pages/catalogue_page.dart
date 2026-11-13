@@ -367,6 +367,7 @@ class _AlbumPageViewState extends State<AlbumPageView> {
   List<Track> _visible = [];
   List<Track>? _complete;
   int _page = 1, _total = 0, _generation = 0;
+  Completer<void>? _catalogueCancelled;
   bool _busy = false, _autoBusy = false, _offline = false;
   bool _showSearch = false, _selectionMode = false, _cachedView = false;
   String? _error;
@@ -399,6 +400,7 @@ class _AlbumPageViewState extends State<AlbumPageView> {
   void dispose() {
     widget.runtime.removeListener(_runtimeChanged);
     _generation++;
+    _cancelCatalogue();
     _search.dispose();
     _range.dispose();
     _albumScroll.dispose();
@@ -417,6 +419,13 @@ class _AlbumPageViewState extends State<AlbumPageView> {
     final downloads = widget.runtime.downloads.tasks;
     final cached = widget.runtime.albumCache[widget.albumId];
     setState(() {
+      if (accountChanged) {
+        _complete = null;
+        _offline = false;
+        _filter = '';
+        _search.clear();
+        _clearSelection();
+      }
       if (!listEquals(downloads, _observedDownloads) ||
           !identical(cached, _observedCache)) {
         _observedDownloads = downloads;
@@ -428,6 +437,31 @@ class _AlbumPageViewState extends State<AlbumPageView> {
     });
     if (accountChanged || (libraryChanged && !_subscriptionMutating)) {
       _loadSubscription();
+    }
+    if (accountChanged) _loadPage(1, target: widget.initialTrack);
+  }
+
+  void _cancelCatalogue() {
+    _catalogueCancelled?.complete();
+    _catalogueCancelled = null;
+  }
+
+  Future<T> _readCatalogue<T>(
+    XmlyClient client,
+    Future<T> Function() read,
+  ) async {
+    _cancelCatalogue();
+    final cancelled = _catalogueCancelled = Completer<void>();
+    try {
+      return await client.withReadPolicy(
+        read,
+        rateLimitRetries: 4,
+        cancelled: cancelled.future,
+      );
+    } finally {
+      if (identical(_catalogueCancelled, cancelled)) {
+        _catalogueCancelled = null;
+      }
     }
   }
 
@@ -683,6 +717,8 @@ class _AlbumPageViewState extends State<AlbumPageView> {
   }
 
   Future<void> _loadPage(int page, {Track? target}) async {
+    final generation = ++_generation;
+    _cancelCatalogue();
     if (_offline) {
       final tracks = _orderedForDisplay(_cachedTracks());
       if (target != null) {
@@ -693,7 +729,6 @@ class _AlbumPageViewState extends State<AlbumPageView> {
       if (target != null) _revealTarget(target, _generation);
       return;
     }
-    final generation = ++_generation;
     final client = widget.runtime.client,
         key = widget.runtime.client.cacheIdentity;
     setState(() {
@@ -703,7 +738,10 @@ class _AlbumPageViewState extends State<AlbumPageView> {
     try {
       int? targetOrdinal;
       if (target != null) {
-        final located = await _locateAlbumTrack(client, widget.albumId, target);
+        final located = await _readCatalogue(
+          client,
+          () => _locateAlbumTrack(client, widget.albumId, target),
+        );
         if (!_sameAccount(client, key) || generation != _generation) return;
         targetOrdinal = _trackOrdinal(located)!;
         page = (targetOrdinal - 1) ~/ _pageSize + 1;
@@ -724,11 +762,14 @@ class _AlbumPageViewState extends State<AlbumPageView> {
           });
         }
       } else {
-        var result = await client.album(
-          widget.albumId,
-          page: page,
-          pageSize: _pageSize,
-          ascending: _ascending,
+        var result = await _readCatalogue(
+          client,
+          () => client.album(
+            widget.albumId,
+            page: page,
+            pageSize: _pageSize,
+            ascending: _ascending,
+          ),
         );
         if (!_sameAccount(client, key) || generation != _generation) return;
         if (!_ascending &&
@@ -737,11 +778,14 @@ class _AlbumPageViewState extends State<AlbumPageView> {
           final targetPage = (result.total - targetOrdinal) ~/ _pageSize + 1;
           if (targetPage != page) {
             page = targetPage;
-            result = await client.album(
-              widget.albumId,
-              page: page,
-              pageSize: _pageSize,
-              ascending: false,
+            result = await _readCatalogue(
+              client,
+              () => client.album(
+                widget.albumId,
+                page: page,
+                pageSize: _pageSize,
+                ascending: false,
+              ),
             );
           }
         }
@@ -794,6 +838,7 @@ class _AlbumPageViewState extends State<AlbumPageView> {
 
   Future<void> _setOrder(bool ascending) async {
     if (_busy || _ascending == ascending) return;
+    final epoch = _accountEpoch;
     setState(() {
       _busy = true;
       _error = null;
@@ -812,9 +857,10 @@ class _AlbumPageViewState extends State<AlbumPageView> {
         _albumScroll.jumpTo(_albumScroll.position.minScrollExtent);
       }
     } catch (_) {
-      if (mounted) setState(() => _error = '目录排序保存失败，请重试');
+      if (mounted && epoch == _accountEpoch)
+        setState(() => _error = '目录排序保存失败，请重试');
     } finally {
-      if (mounted) setState(() => _busy = false);
+      if (mounted && epoch == _accountEpoch) setState(() => _busy = false);
     }
   }
 
@@ -840,7 +886,10 @@ class _AlbumPageViewState extends State<AlbumPageView> {
     }
     final generation = _generation, client = widget.runtime.client;
     final identity = client.cacheIdentity;
-    final tracks = await XmlyCatalogue(client).album(widget.albumId);
+    final tracks = await _readCatalogue(
+      client,
+      () => XmlyCatalogue(client).album(widget.albumId),
+    );
     if (!mounted ||
         generation != _generation ||
         !identical(client, widget.runtime.client) ||
@@ -853,29 +902,34 @@ class _AlbumPageViewState extends State<AlbumPageView> {
 
   Future<void> _filterAll() async {
     if (_busy) return;
+    final generation = _generation;
+    final filter = _search.text.trim();
     setState(() {
       _busy = true;
       _error = null;
     });
     try {
       if (_offline) {
-        _filter = _search.text.trim();
+        _filter = filter;
         setState(() => _showCached(1));
         return;
       }
-      if (_search.text.trim().isNotEmpty) await _all();
-      _filter = _search.text.trim();
+      if (filter.isNotEmpty) await _all();
+      if (!mounted || generation != _generation) return;
+      _filter = filter;
     } catch (error) {
-      if (mounted) setState(() => _error = _safeError(error));
+      if (mounted && generation == _generation)
+        setState(() => _error = _safeError(error));
       return;
     } finally {
-      if (mounted) setState(() => _busy = false);
+      if (mounted && generation == _generation) setState(() => _busy = false);
     }
-    if (mounted) await _loadPage(1);
+    if (mounted && generation == _generation) await _loadPage(1);
   }
 
   Future<void> _download({bool all = false}) async {
     if (_busy) return;
+    final generation = _generation;
     final range = _range.text.trim();
     final selected = _selected.values.toList();
     setState(() {
@@ -899,9 +953,10 @@ class _AlbumPageViewState extends State<AlbumPageView> {
       if (!mounted) return;
       await requestDownloads(context, widget.runtime, tracks);
     } catch (error) {
-      if (mounted) setState(() => _error = _safeError(error));
+      if (mounted && generation == _generation)
+        setState(() => _error = _safeError(error));
     } finally {
-      if (mounted) setState(() => _busy = false);
+      if (mounted && generation == _generation) setState(() => _busy = false);
     }
   }
 
@@ -1424,7 +1479,9 @@ class _AlbumPageViewState extends State<AlbumPageView> {
                                 if (_album == null) ...[
                                   const SizedBox(height: 8),
                                   TextButton.icon(
-                                    onPressed: _busy ? null : () => _loadPage(_page),
+                                    onPressed: _busy
+                                        ? null
+                                        : () => _loadPage(_page),
                                     icon: const Icon(Icons.refresh_rounded),
                                     label: const Text('重新加载专辑'),
                                   ),
@@ -1489,15 +1546,16 @@ class _AlbumPageViewState extends State<AlbumPageView> {
                       );
                     },
                   ),
-                  if (_album != null) SliverToBoxAdapter(
-                    child: _Paging(
-                      page: _page,
-                      total: _total,
-                      pageSize: _pageSize,
-                      busy: _busy,
-                      onPage: _loadPage,
+                  if (_album != null)
+                    SliverToBoxAdapter(
+                      child: _Paging(
+                        page: _page,
+                        total: _total,
+                        pageSize: _pageSize,
+                        busy: _busy,
+                        onPage: _loadPage,
+                      ),
                     ),
-                  ),
                 ].map((sliver) => SliverPadding(padding: padding, sliver: sliver)).toList(),
               ),
             );
