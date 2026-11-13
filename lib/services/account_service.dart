@@ -189,6 +189,12 @@ class AccountService {
         (_clients.containsKey(identity) &&
             storage.state['activeAccountId'] == identity &&
             (!makePrimary || primaryAccountId == identity));
+    // A new backup account does not replace a client or either selection. Its
+    // credentials can be saved without interrupting work on existing accounts.
+    final addingSecondary =
+        !makePrimary &&
+        primaryAccountId != null &&
+        !(storage.state['accounts'] as Map).containsKey(identity);
     // A candidate is never mounted during validation.
     final candidate = XmlyClient(credentials: credentials);
     var committed = false;
@@ -208,7 +214,7 @@ class AccountService {
         // blocked and reachable for reconciliation after authentication.
         _admissionPaused = true;
         await quiesceForRestore!();
-      } else {
+      } else if (!addingSecondary) {
         if (recovering && _containsUnknown(storage.state['accounts'])) {
           throw const AccountException(
             'integration_required',
@@ -240,7 +246,7 @@ class AccountService {
       }
       await storage.transaction((state) {
         final accounts = state['accounts'] as Map<String, dynamic>;
-        if (!recovering) _assertSettled(accounts);
+        if (!recovering && !addingSecondary) _assertSettled(accounts);
         // Same uid/device identity retains every existing ledger/receipt.
         final record = Map<String, dynamic>.from(
           accounts[identity] as Map? ?? {},
@@ -610,30 +616,50 @@ class AccountService {
     if (quiesce == null || settle == null) {
       throw const AccountException('integration_required', '请先连接任务暂停及听时结算服务');
     }
+    // Reject known uncertainty before stopping the player's source. Reports
+    // still in flight and plain listening debt must finish through settlement.
+    if (_containsUnknown(storage.state['accounts'], includeSubmitting: false))
+      throw _unsettledError;
     _admissionPaused = true;
     await quiesce!();
     await settle!();
     _assertSettled(storage.state['accounts'] as Map);
   }
 
+  static const _unsettledError = AccountException(
+    'unsettled',
+    '仍有未结算或结果未知的扣时，请先核对原账号',
+  );
+
   static void _assertSettled(Map accounts) {
     for (final account in accounts.values) {
       if (_unsettled(account)) {
-        throw const AccountException('unsettled', '仍有未结算或结果未知的扣时，请先核对原账号');
+        throw _unsettledError;
       }
     }
   }
 
-  static bool _containsUnknown(Object? node) {
+  static bool _containsUnknown(Object? node, {bool includeSubmitting = true}) {
     if (node is Map) {
-      return node['usage_uncertain'] == true ||
+      final pending = node['usage_pending'];
+      return (node['usage_uncertain'] == true &&
+              (includeSubmitting ||
+                  pending is! Map ||
+                  pending['state'] != 'submitting')) ||
           node['uncertain'] == true ||
           node['state'] == 'uncertain' ||
-          node['state'] == 'submitting' ||
-          node['usage_pending'] is Map ||
-          node.values.any(_containsUnknown);
+          (includeSubmitting &&
+              (node['state'] == 'submitting' || pending is Map)) ||
+          node.values.any(
+            (value) =>
+                _containsUnknown(value, includeSubmitting: includeSubmitting),
+          );
     }
-    return node is List && node.any(_containsUnknown);
+    return node is List &&
+        node.any(
+          (value) =>
+              _containsUnknown(value, includeSubmitting: includeSubmitting),
+        );
   }
 
   // Accept the original online ledger fields and the download receipt states.
