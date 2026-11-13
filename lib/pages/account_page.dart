@@ -933,6 +933,7 @@ class _CredentialDialogState extends State<_CredentialDialog> {
   final _cookie = TextEditingController();
   bool _primary = true, _busy = false;
   String? _error;
+  bool _switchBlocked = false;
 
   @override
   void dispose() {
@@ -962,6 +963,7 @@ class _CredentialDialogState extends State<_CredentialDialog> {
 
         _busy = true;
         _error = null;
+        _switchBlocked = false;
       });
       try {
         final candidate = Credentials.parse(_cookie.text);
@@ -979,6 +981,9 @@ class _CredentialDialogState extends State<_CredentialDialog> {
               "lib/pages/account_page.dart::_CredentialDialogState._save.closure#1.closure#2",
             );
             _error = _accountError(error);
+            _switchBlocked =
+                error is AccountException && error.code == 'unsettled' ||
+                error is XmlyException && error.code == 'usage_uncertain';
           });
       } finally {
         if (mounted)
@@ -1064,6 +1069,8 @@ class _CredentialDialogState extends State<_CredentialDialog> {
                       color: Theme.of(context).colorScheme.error,
                     ),
                   ),
+                if (_switchBlocked && widget.recoveryIdentity == null)
+                  const Text('仅添加新账号时，可取消勾选“设为主账号”后重试。'),
                 if (_busy) const LinearProgressIndicator(),
               ],
             ),
@@ -1120,19 +1127,17 @@ class _SmsLoginDialogState extends State<_SmsLoginDialog> {
   final _phone = TextEditingController(), _code = TextEditingController();
   final _watch = Stopwatch()..start();
   Timer? _timer;
-  Duration _resendAt = Duration.zero, _expiresAt = Duration.zero;
+  Duration _expiresAt = Duration.zero;
   String? _challenge, _error;
   Credentials? _candidate;
   bool _busy = false, _committing = false, _primary = true, _cancelled = false;
+  bool _switchBlocked = false;
 
   int get _cooldown {
     AppLog.instance.trace(
       "lib/pages/account_page.dart::_SmsLoginDialogState._cooldown.get",
     );
-    return ((_resendAt - _watch.elapsed).inMilliseconds / 1000)
-        .ceil()
-        .clamp(0, 180)
-        .toInt();
+    return _login.smsCooldownSeconds(_phone.text.trim());
   }
 
   void _invalidate() {
@@ -1222,9 +1227,6 @@ class _SmsLoginDialogState extends State<_SmsLoginDialog> {
         _error = null;
       });
       try {
-        _login.clear();
-        _challenge = null;
-        _code.clear();
         final geetest = await GeetestDialog.show(
           context,
           captchaId: _login.config()['captcha_id'] as String,
@@ -1240,8 +1242,10 @@ class _SmsLoginDialogState extends State<_SmsLoginDialog> {
             !mounted ||
             _cancelled)
           return;
-        // Start cooldown before a single-send request: a timeout may still deliver.
-        _resendAt = _watch.elapsed + const Duration(seconds: 180);
+        // Keep the current code usable until the replacement send is confirmed.
+        _login.clear();
+        _challenge = null;
+        _code.clear();
         final response = await _login.sendSms(mobile, geetest);
         if (!mounted || _cancelled) return;
         _challenge = response['challenge_id'] as String;
@@ -1286,6 +1290,7 @@ class _SmsLoginDialogState extends State<_SmsLoginDialog> {
 
         _busy = true;
         _error = null;
+        _switchBlocked = false;
       });
       try {
         var candidate = _candidate;
@@ -1315,6 +1320,9 @@ class _SmsLoginDialogState extends State<_SmsLoginDialog> {
             );
 
             _error = _accountError(error);
+            _switchBlocked =
+                error is AccountException && error.code == 'unsettled' ||
+                error is XmlyException && error.code == 'usage_uncertain';
             if (error is XmlyException &&
                 [
                   'challenge_invalid',
@@ -1369,6 +1377,16 @@ class _SmsLoginDialogState extends State<_SmsLoginDialog> {
                   TextField(
                     controller: _phone,
                     enabled: !_busy && _challenge == null,
+                    onChanged: (_) {
+                      AppLog.instance.trace(
+                        "lib/pages/account_page.dart::_SmsLoginDialogState.build.closure#2",
+                      );
+                      setState(() {
+                        AppLog.instance.trace(
+                          "lib/pages/account_page.dart::_SmsLoginDialogState.build.closure#2.closure#1",
+                        );
+                      });
+                    },
                     autocorrect: false,
                     enableSuggestions: false,
                     enableIMEPersonalizedLearning: false,
@@ -1416,11 +1434,11 @@ class _SmsLoginDialogState extends State<_SmsLoginDialog> {
                       ? null
                       : (value) {
                           AppLog.instance.trace(
-                            "lib/pages/account_page.dart::_SmsLoginDialogState.build.closure#2",
+                            "lib/pages/account_page.dart::_SmsLoginDialogState.build.closure#3",
                           );
                           setState(() {
                             AppLog.instance.trace(
-                              "lib/pages/account_page.dart::_SmsLoginDialogState.build.closure#2.closure#1",
+                              "lib/pages/account_page.dart::_SmsLoginDialogState.build.closure#3.closure#1",
                             );
                             _primary = value!;
                           });
@@ -1433,6 +1451,8 @@ class _SmsLoginDialogState extends State<_SmsLoginDialog> {
                       color: Theme.of(context).colorScheme.error,
                     ),
                   ),
+                if (_switchBlocked)
+                  const Text('仅添加新账号时，可取消勾选“设为主账号”后重试，无需重新发送短信。'),
                 if (_busy) const LinearProgressIndicator(),
               ],
             ),
@@ -1444,7 +1464,7 @@ class _SmsLoginDialogState extends State<_SmsLoginDialog> {
                 ? null
                 : () {
                     AppLog.instance.trace(
-                      "lib/pages/account_page.dart::_SmsLoginDialogState.build.closure#3",
+                      "lib/pages/account_page.dart::_SmsLoginDialogState.build.closure#4",
                     );
 
                     _invalidate();

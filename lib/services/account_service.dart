@@ -373,6 +373,11 @@ class AccountService {
             (_clients.containsKey(identity) &&
                 storage.state['activeAccountId'] == identity &&
                 (!makePrimary || primaryAccountId == identity));
+        // A new secondary account does not replace either current selection.
+        final addingSecondary =
+            !makePrimary &&
+            primaryAccountId != null &&
+            !(storage.state['accounts'] as Map).containsKey(identity);
         // A candidate is never mounted during validation.
         final candidate = XmlyClient(credentials: credentials);
         var committed = false;
@@ -393,7 +398,7 @@ class AccountService {
             // blocked and reachable for reconciliation after authentication.
             _admissionPaused = true;
             await quiesceForRestore!();
-          } else {
+          } else if (!addingSecondary) {
             if (recovering && _containsUnknown(storage.state['accounts'])) {
               throw const AccountException(
                 'integration_required',
@@ -447,7 +452,7 @@ class AccountService {
             );
 
             final accounts = state['accounts'] as Map<String, dynamic>;
-            if (!recovering) _assertSettled(accounts);
+            if (!recovering && !addingSecondary) _assertSettled(accounts);
             // Same uid/device identity retains every existing ledger/receipt.
             final record = Map<String, dynamic>.from(
               accounts[identity] as Map? ?? {},
@@ -1046,11 +1051,20 @@ class AccountService {
     if (quiesce == null || settle == null) {
       throw const AccountException('integration_required', '请先连接任务暂停及听时结算服务');
     }
+    // Reject known uncertainty before stopping the player's source. Reports
+    // still in flight and plain listening debt must finish through settlement.
+    if (_containsUnknown(storage.state['accounts'], includeSubmitting: false))
+      throw _unsettledError;
     _admissionPaused = true;
     await quiesce!();
     await settle!();
     _assertSettled(storage.state['accounts'] as Map);
   }
+
+  static const _unsettledError = AccountException(
+    'unsettled',
+    '听时暂时无法确认，请稍后重试',
+  );
 
   static void _assertSettled(Map accounts) {
     AppLog.instance.trace(
@@ -1059,25 +1073,43 @@ class AccountService {
 
     for (final account in accounts.values) {
       if (_unsettled(account)) {
-        throw const AccountException('unsettled', '听时暂时无法确认，正在自动核对，请稍后再试');
+        throw _unsettledError;
       }
     }
   }
 
-  static bool _containsUnknown(Object? node) {
+  static bool _containsUnknown(Object? node, {bool includeSubmitting = true}) {
     AppLog.instance.trace(
       "lib/services/account_service.dart::AccountService._containsUnknown",
     );
 
     if (node is Map) {
-      return node['usage_uncertain'] == true ||
+      final pending = node['usage_pending'];
+      return (node['usage_uncertain'] == true &&
+              (includeSubmitting ||
+                  pending is! Map ||
+                  pending['state'] != 'submitting')) ||
           node['uncertain'] == true ||
           node['state'] == 'uncertain' ||
-          node['state'] == 'submitting' ||
-          node['usage_pending'] is Map ||
-          node.values.any(_containsUnknown);
+          (includeSubmitting &&
+              (node['state'] == 'submitting' || pending is Map)) ||
+          node.values.any((value) {
+            AppLog.instance.trace(
+              "lib/services/account_service.dart::AccountService._containsUnknown.closure#1",
+            );
+            return _containsUnknown(
+              value,
+              includeSubmitting: includeSubmitting,
+            );
+          });
     }
-    return node is List && node.any(_containsUnknown);
+    return node is List &&
+        node.any((value) {
+          AppLog.instance.trace(
+            "lib/services/account_service.dart::AccountService._containsUnknown.closure#2",
+          );
+          return _containsUnknown(value, includeSubmitting: includeSubmitting);
+        });
   }
 
   // Accept the original online ledger fields and the download receipt states.
@@ -1271,8 +1303,8 @@ class AccountService {
   }
 
   /// Does not own AppStorage; caller closes storage after all services finish.
-  /// A failed settlement leaves this service available for manual resolution.
-  /// Startup rollback preserves state because no work has been admitted yet.
+  /// A failed settlement leaves this service available to retry.
+  /// Preserve state after startup rollback or the approved runtime exit boundary.
   Future<void> close({bool preserveState = false}) {
     AppLog.instance.trace(
       "lib/services/account_service.dart::AccountService.close",

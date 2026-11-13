@@ -1197,10 +1197,16 @@ class AppRuntime extends ChangeNotifier {
               );
               return player.close(quiesced: true);
             },
-            accounts.close,
-            () async {
+            // The exit boundary already settled or preserved pending usage.
+            () {
               AppLog.instance.trace(
                 "lib/services/app_runtime.dart::AppRuntime.close.closure#1.closure#5",
+              );
+              return accounts.close(preserveState: true);
+            },
+            () async {
+              AppLog.instance.trace(
+                "lib/services/app_runtime.dart::AppRuntime.close.closure#1.closure#6",
               );
 
               await _playerChanges?.cancel();
@@ -1208,7 +1214,7 @@ class AppRuntime extends ChangeNotifier {
             autoDownloads.close,
             () async {
               AppLog.instance.trace(
-                "lib/services/app_runtime.dart::AppRuntime.close.closure#1.closure#6",
+                "lib/services/app_runtime.dart::AppRuntime.close.closure#1.closure#7",
               );
 
               await _automaticChanges?.cancel();
@@ -1216,7 +1222,7 @@ class AppRuntime extends ChangeNotifier {
             downloads.close,
             () async {
               AppLog.instance.trace(
-                "lib/services/app_runtime.dart::AppRuntime.close.closure#1.closure#7",
+                "lib/services/app_runtime.dart::AppRuntime.close.closure#1.closure#8",
               );
 
               await _downloadChanges?.cancel();
@@ -1224,7 +1230,7 @@ class AppRuntime extends ChangeNotifier {
             pipeline.close,
             () async {
               AppLog.instance.trace(
-                "lib/services/app_runtime.dart::AppRuntime.close.closure#1.closure#8",
+                "lib/services/app_runtime.dart::AppRuntime.close.closure#1.closure#9",
               );
 
               anonymous.close();

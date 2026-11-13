@@ -120,6 +120,9 @@ class MediaKitAudioDriver implements AudioDriver {
   ]);
   int _intent = 0;
   int? _resumeIntent;
+  // Native state can still be playing while a pause/open command is queued.
+  // Focus callbacks must respect the requested state from command admission.
+  bool _playRequested = false;
   @override
   Stream<AudioSnapshot> get snapshots {
     AppLog.instance.trace(
@@ -317,13 +320,21 @@ class MediaKitAudioDriver implements AudioDriver {
     return result;
   }
 
-  int _cancelResume() {
+  int _cancelResume({bool playRequested = false}) {
     AppLog.instance.trace(
       "lib/services/audio_driver.dart::MediaKitAudioDriver._cancelResume",
     );
 
+    _playRequested = playRequested;
     _resumeIntent = null;
     return ++_intent;
+  }
+
+  bool _canPlay(int intent) {
+    AppLog.instance.trace(
+      "lib/services/audio_driver.dart::MediaKitAudioDriver._canPlay",
+    );
+    return !_closed && _playRequested && intent == _intent;
   }
 
   void _event(String operation, Future<void> Function() action) {
@@ -388,8 +399,10 @@ class MediaKitAudioDriver implements AudioDriver {
     );
 
     if (_closed) return;
+    if (event.type == AudioInterruptionType.unknown) _playRequested = false;
     if (event.begin) {
       final resume =
+          _playRequested &&
           event.type != AudioInterruptionType.unknown &&
           (_player?.state.playing == true || _resumeIntent != null);
       final intent = ++_intent;
@@ -433,19 +446,19 @@ class MediaKitAudioDriver implements AudioDriver {
     );
 
     final player = _player;
-    if (player == null || _closed || intent != _intent) return;
+    if (player == null || !_canPlay(intent)) return;
     if (Platform.isAndroid) {
       final session = await _audioSession();
-      if (_closed || intent != _intent) return;
+      if (!_canPlay(intent)) return;
       final granted = await session.setActive(true);
       if (!granted) {
         await player.pause();
         throw StateError('无法获取音频焦点，请稍后重试');
       }
-      if (_closed || intent != _intent) return;
+      if (!_canPlay(intent)) return;
     }
     await player.play();
-    if (Platform.isAndroid && (_closed || intent != _intent)) {
+    if (Platform.isAndroid && !_canPlay(intent)) {
       await player.pause();
     }
   }
@@ -508,7 +521,7 @@ class MediaKitAudioDriver implements AudioDriver {
       "lib/services/audio_driver.dart::MediaKitAudioDriver.play",
     );
 
-    final intent = _cancelResume();
+    final intent = _cancelResume(playRequested: true);
     return _run(() {
       AppLog.instance.trace(
         "lib/services/audio_driver.dart::MediaKitAudioDriver.play.closure#1",
