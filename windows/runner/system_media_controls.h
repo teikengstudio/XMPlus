@@ -18,6 +18,7 @@ class SystemMediaControls {
   SystemMediaControls& operator=(const SystemMediaControls&) = delete;
 
   void ProcessEvents() noexcept;
+  bool HandleWindowMessage(UINT message, WPARAM wparam, LPARAM lparam) noexcept;
 
  private:
   struct Impl;
