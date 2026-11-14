@@ -147,11 +147,15 @@ class AppRuntime extends ChangeNotifier {
       downloads: downloads,
       pipeline: pipeline,
       anonymous: anonymous,
-      prepareDownload: (tracks) {
+      prepareDownload: (tracks, {String? accountIdentity}) {
         AppLog.instance.trace(
           "lib/services/app_runtime.dart::AppRuntime.new.closure#6",
         );
-        return prepareDownloads(tracks);
+        return prepareDownloads(
+          tracks,
+          accountIdentity: accountIdentity,
+          polling: accountIdentity == null ? null : false,
+        );
       },
       confirmDownload: (batch) async {
         AppLog.instance.trace(

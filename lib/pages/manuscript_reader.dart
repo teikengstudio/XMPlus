@@ -10,6 +10,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import 'package:sentry_flutter/sentry_flutter.dart';
 
+import '../common/widgets/app_scrollbar.dart';
 import '../services/app_log.dart';
 import '../services/webview_log.dart';
 
@@ -329,7 +330,7 @@ class _ManuscriptReaderState extends State<ManuscriptReader> {
           ),
         Expanded(
           child: !_html
-              ? Scrollbar(
+              ? AppScrollbar(
                   controller: _scroll,
                   child: SingleChildScrollView(
                     key: const ValueKey('manuscriptTextScroll'),

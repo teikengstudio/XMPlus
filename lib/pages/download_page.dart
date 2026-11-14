@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:path/path.dart' as p;
 import 'package:file_picker/file_picker.dart';
 
+import '../common/widgets/app_scrollbar.dart';
 import '../common/widgets/adaptive_text.dart';
 import '../services/app_runtime.dart';
 import '../services/app_log.dart';
@@ -180,11 +181,14 @@ Future<({String identity, bool polling})?> _chooseDownloadAccount(
 Future<void> requestDownloads(
   BuildContext context,
   AppRuntime runtime,
-  List<Track> tracks,
-) async {
+  List<Track> tracks, {
+  String? accountIdentity,
+}) async {
   AppLog.instance.trace("lib/pages/download_page.dart::requestDownloads");
 
-  final account = await _chooseDownloadAccount(context, runtime);
+  final account = accountIdentity == null
+      ? await _chooseDownloadAccount(context, runtime)
+      : (identity: accountIdentity, polling: false);
   if (account == null || !context.mounted) return;
   final batch = await runtime.prepareDownloads(
     tracks,
@@ -204,11 +208,14 @@ Future<void> requestDownloads(
 Future<void> requestAlbumDownloads(
   BuildContext context,
   AppRuntime runtime,
-  String albumId,
-) async {
+  String albumId, {
+  String? accountIdentity,
+}) async {
   AppLog.instance.trace("lib/pages/download_page.dart::requestAlbumDownloads");
 
-  final account = await _chooseDownloadAccount(context, runtime);
+  final account = accountIdentity == null
+      ? await _chooseDownloadAccount(context, runtime)
+      : (identity: accountIdentity, polling: false);
   if (account == null || !context.mounted) return;
   final batch = await runtime.prepareAlbumDownloads(
     albumId,
@@ -492,7 +499,7 @@ Future<bool> confirmDownloadBatch(
                   if (batch.items.isNotEmpty)
                     SizedBox(
                       height: (batch.items.length * 72.0).clamp(72.0, 260.0),
-                      child: Scrollbar(
+                      child: AppScrollbar(
                         child: ListView.builder(
                           itemCount: batch.items.length,
                           itemBuilder: (_, index) {
@@ -1480,7 +1487,7 @@ class _DownloadPageState extends State<DownloadPage> {
               ),
             ),
             Expanded(
-              child: Scrollbar(
+              child: AppScrollbar(
                 child: ListView.builder(
                   key: const PageStorageKey('compact-download-tasks'),
                   itemCount: jobs.length + standalone.length,
@@ -2673,7 +2680,7 @@ class _DownloadPageState extends State<DownloadPage> {
                   ? _albumList(completed, downloaded: true)
                   : visible.isEmpty
                   ? const Center(child: Text('未找到匹配的本地下载记录'))
-                  : Scrollbar(
+                  : AppScrollbar(
                       child: ListView.builder(
                         key: ValueKey('downloadSearch:$query'),
                         itemCount: visible.length,
@@ -2744,7 +2751,7 @@ class _DownloadPageState extends State<DownloadPage> {
       }
     }
     final albums = groups.entries.toList();
-    return Scrollbar(
+    return AppScrollbar(
       child: ListView.builder(
         key: PageStorageKey(
           downloaded ? 'downloaded-albums' : 'download-tasks',

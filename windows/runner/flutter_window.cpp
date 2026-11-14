@@ -64,6 +64,10 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
     if (system_media_controls_) system_media_controls_->ProcessEvents();
     return 0;
   }
+  if (system_media_controls_ &&
+      system_media_controls_->HandleWindowMessage(message, wparam, lparam)) {
+    return 0;
+  }
   // Give Flutter, including plugins, an opportunity to handle window messages.
   if (flutter_controller_) {
     std::optional<LRESULT> result =
@@ -76,7 +80,9 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
 
   switch (message) {
     case WM_FONTCHANGE:
-      flutter_controller_->engine()->ReloadSystemFonts();
+      if (flutter_controller_ && flutter_controller_->engine()) {
+        flutter_controller_->engine()->ReloadSystemFonts();
+      }
       break;
   }
 

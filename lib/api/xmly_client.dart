@@ -177,6 +177,15 @@ class XmlyClient {
             '/revision/search',
             '/revision/track/simple',
             '/revision/comment/queryReplies',
+            '/revision/user/basic',
+            '/revision/user/pub',
+            '/revision/user/track',
+            '/revision/user/following',
+            '/revision/album/v1/simple',
+            '/revision/category/v2/allCategory',
+            '/revision/category/v2/albums',
+            '/revision/rank/v3/cluster',
+            '/revision/rank/v3/element',
           }.contains(path);
     if (origin == collector)
       return method == 'POST' && path == '/nyx/v1/history/merge/android';
@@ -839,7 +848,7 @@ class XmlyClient {
 
     if (query.trim().isEmpty ||
         query.length > 200 ||
-        !['track', 'album'].contains(kind))
+        !const ['all', 'track', 'album', 'user'].contains(kind))
       throw const XmlyException(
         'invalid_search',
         '请输入 1..200 字的关键词',
@@ -862,34 +871,53 @@ class XmlyClient {
         'spellchecker': 'true',
       },
     );
-    final values = xmlyMap(
-      xmlyMap(xmlyMap(response['data'])['result'])['response'],
-    );
-    if (values['docs'] is! List)
-      throw const XmlyException('invalid_catalogue', '搜索结果无效');
-    final docs = (values['docs'] as List).take(pageSize);
+    final result = xmlyMap(xmlyMap(response['data'])['result']);
     final tracks = <Track>[], albums = <Album>[];
-    for (final raw in docs) {
-      if (raw is! Map) throw const XmlyException('invalid_catalogue', '搜索结果无效');
-      if (kind == 'album') {
-        final item = Album.fromApi(xmlyMap(raw));
-        albums.add(item);
-        _albums[item.id] = item;
-        while (_albums.length > 512) {
-          _albums.remove(_albums.keys.first);
+    final anchors = <AnchorSearchResult>[];
+    final totals = <String, int>{};
+    for (final section in kind == 'all' ? ['album', 'track', 'user'] : [kind]) {
+      final values = xmlyMap(result[kind == 'all' ? section : 'response']);
+      if (values['docs'] is! List) {
+        throw const XmlyException('invalid_catalogue', '搜索结果无效');
+      }
+      totals[section] = _total(values['numFound'] ?? 0);
+      final known = <String>{};
+      for (final raw in (values['docs'] as List).take(pageSize)) {
+        if (raw is! Map) {
+          throw const XmlyException('invalid_catalogue', '搜索结果无效');
         }
-      } else {
-        final item = Track.fromApi(xmlyMap(raw));
-        tracks.add(item);
-        _remember(item);
+        if (section == 'album') {
+          final item = Album.fromApi(xmlyMap(raw));
+          if (!known.add(item.id)) continue;
+          albums.add(item);
+          _albums[item.id] = item;
+          while (_albums.length > 512) {
+            _albums.remove(_albums.keys.first);
+          }
+        } else if (section == 'user') {
+          final item = AnchorSearchResult.fromApi(xmlyMap(raw));
+          if (known.add(item.uid)) anchors.add(item);
+        } else {
+          final item = Track.fromApi(xmlyMap(raw));
+          if (!known.add(item.id)) continue;
+          tracks.add(item);
+          _remember(item);
+        }
       }
     }
     return SearchPage(
       tracks: tracks,
       albums: albums,
+      anchors: anchors,
+      totals: Map.unmodifiable(totals),
       page: page,
       pageSize: pageSize,
-      total: _total(values['numFound'] ?? 0),
+      total: totals.values.fold(0, (sum, total) {
+        AppLog.instance.trace(
+          "lib/api/xmly_client.dart::XmlyClient.search.closure#1",
+        );
+        return sum + total;
+      }),
       kind: kind,
     );
   }

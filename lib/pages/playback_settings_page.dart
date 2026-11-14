@@ -219,6 +219,7 @@ class _PlaybackSettingsPageState extends State<PlaybackSettingsPage> {
   String? _error;
   String? _historyResult;
   final Map<String, double> _drafts = {};
+  final Map<String, String> _integerDrafts = {};
 
   Map get _settings {
     AppLog.instance.trace(
@@ -499,6 +500,31 @@ class _PlaybackSettingsPageState extends State<PlaybackSettingsPage> {
     );
   }
 
+  Future<void> _saveSeconds(
+    String key,
+    String title,
+    String text,
+    int min,
+    int max,
+  ) async {
+    AppLog.instance.trace(
+      "lib/pages/playback_settings_page.dart::_PlaybackSettingsPageState._saveSeconds",
+    );
+
+    final parsed = int.tryParse(text);
+    if (parsed == null || parsed < min || parsed > max) {
+      setState(() {
+        AppLog.instance.trace(
+          "lib/pages/playback_settings_page.dart::_PlaybackSettingsPageState._saveSeconds.closure#1",
+        );
+        _error = '$title请输入 $min–$max 秒';
+      });
+      return;
+    }
+    await _save(key, parsed);
+    if (_error == null) _integerDrafts.remove(key);
+  }
+
   Widget _number(String key, String title, int value, int min, int max) {
     AppLog.instance.trace(
       "lib/pages/playback_settings_page.dart::_PlaybackSettingsPageState._number",
@@ -532,7 +558,7 @@ class _PlaybackSettingsPageState extends State<PlaybackSettingsPage> {
               Expanded(
                 child: TextFormField(
                   key: ValueKey('$key:$value:$_busy'),
-                  initialValue: '$value',
+                  initialValue: _integerDrafts[key] ?? '$value',
                   enabled: !_busy,
                   textAlign: TextAlign.center,
                   keyboardType: TextInputType.number,
@@ -540,27 +566,42 @@ class _PlaybackSettingsPageState extends State<PlaybackSettingsPage> {
                   decoration: InputDecoration(
                     labelText: title,
                     suffixText: '秒',
+                    suffixIcon: IconButton(
+                      key: ValueKey('saveSeconds:$key'),
+                      tooltip: '保存$title',
+                      onPressed: _busy
+                          ? null
+                          : () {
+                              AppLog.instance.trace(
+                                "lib/pages/playback_settings_page.dart::_PlaybackSettingsPageState._number.closure#2",
+                              );
+
+                              _saveSeconds(
+                                key,
+                                title,
+                                _integerDrafts[key] ?? '$value',
+                                min,
+                                max,
+                              );
+                            },
+                      icon: const Icon(Icons.check_rounded),
+                    ),
                     contentPadding: const EdgeInsets.symmetric(
                       horizontal: 12,
                       vertical: 12,
                     ),
                   ),
+                  onChanged: (text) {
+                    AppLog.instance.trace(
+                      "lib/pages/playback_settings_page.dart::_PlaybackSettingsPageState._number.closure#3",
+                    );
+                    _integerDrafts[key] = text;
+                  },
                   onFieldSubmitted: (text) {
                     AppLog.instance.trace(
-                      "lib/pages/playback_settings_page.dart::_PlaybackSettingsPageState._number.closure#2",
+                      "lib/pages/playback_settings_page.dart::_PlaybackSettingsPageState._number.closure#4",
                     );
-
-                    final parsed = int.tryParse(text);
-                    if (parsed == null || parsed < min || parsed > max) {
-                      setState(() {
-                        AppLog.instance.trace(
-                          "lib/pages/playback_settings_page.dart::_PlaybackSettingsPageState._number.closure#2.closure#1",
-                        );
-                        _error = '$title请输入 $min–$max 秒';
-                      });
-                      return;
-                    }
-                    _save(key, parsed);
+                    _saveSeconds(key, title, text, min, max);
                   },
                 ),
               ),
@@ -571,7 +612,7 @@ class _PlaybackSettingsPageState extends State<PlaybackSettingsPage> {
                     ? null
                     : () {
                         AppLog.instance.trace(
-                          "lib/pages/playback_settings_page.dart::_PlaybackSettingsPageState._number.closure#3",
+                          "lib/pages/playback_settings_page.dart::_PlaybackSettingsPageState._number.closure#5",
                         );
                         _save(key, value + 1);
                       },
@@ -911,7 +952,7 @@ class _PlaybackSettingsPageState extends State<PlaybackSettingsPage> {
                         horizontal: 16,
                         vertical: 8,
                       ),
-                      child: Text('直接输入秒数后按完成保存，或使用加减按钮。'),
+                      child: Text('输入秒数后点勾保存，设为 0 则不跳过。'),
                     ),
                     _number(
                       'skipIntroSeconds',
@@ -958,7 +999,7 @@ class _PlaybackSettingsPageState extends State<PlaybackSettingsPage> {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
-                            '循环方式',
+                            '播放顺序',
                             style: Theme.of(context).textTheme.titleMedium,
                           ),
                           const SizedBox(height: 4),
@@ -977,6 +1018,8 @@ class _PlaybackSettingsPageState extends State<PlaybackSettingsPage> {
                             options: const [
                               ('off', '顺序播放'),
                               ('single', '单集循环'),
+                              ('all', '列表循环'),
+                              ('shuffle', '随机播放'),
                             ],
                             selected: resolved.loopMode,
                             onSelected: _busy

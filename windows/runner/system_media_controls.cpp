@@ -1,4 +1,5 @@
 #include "system_media_controls.h"
+#include "taskbar_controls.h"
 
 #include <flutter/method_channel.h>
 #include <flutter/standard_method_codec.h>
@@ -133,6 +134,7 @@ winrt::fire_and_forget LoadArtwork(std::weak_ptr<Mailbox> weak,
 
 struct SystemMediaControls::Impl {
   HWND window;
+  TaskbarControls taskbar;
   flutter::MethodChannel<EncodableValue> channel;
   std::shared_ptr<Mailbox> mailbox;
   SystemMediaTransportControls controls{nullptr};
@@ -150,6 +152,7 @@ struct SystemMediaControls::Impl {
 
   Impl(HWND hwnd, flutter::BinaryMessenger* messenger)
       : window(hwnd),
+        taskbar(hwnd),
         channel(messenger, "xmplus/system_media",
                 &flutter::StandardMethodCodec::GetInstance()) {
     channel.SetMethodCallHandler(
@@ -253,6 +256,7 @@ struct SystemMediaControls::Impl {
   }
 
   void Stop(MediaPlaybackStatus status = MediaPlaybackStatus::Closed) {
+    taskbar.Update({});
     InvalidateArtwork();
     if (mailbox) {
       std::lock_guard<std::mutex> lock(mailbox->mutex);
@@ -368,6 +372,30 @@ struct SystemMediaControls::Impl {
     }
     updater.Update();
     controls.IsEnabled(true);
+    taskbar.Update({true, status == "playing" || (has("pause") && !has("play")),
+        has("skipToPrevious"), has("play") || has("playPause"),
+        has("pause") || has("playPause"), has("skipToNext")});
+  }
+
+  bool HandleWindowMessage(UINT message, WPARAM wparam, LPARAM lparam) noexcept {
+    TaskbarControls::Action action;
+    const auto handled = taskbar.HandleMessage(message, wparam, lparam, action);
+    if (!mailbox || action == TaskbarControls::Action::none) return handled;
+    try {
+      Event event;
+      switch (action) {
+        case TaskbarControls::Action::previous: event.method = "skipToPrevious"; break;
+        case TaskbarControls::Action::play: event.method = "play"; break;
+        case TaskbarControls::Action::pause: event.method = "pause"; break;
+        case TaskbarControls::Action::next: event.method = "skipToNext"; break;
+        default: return handled;
+      }
+      // Use the same mailbox and permission checks as keyboard/SMTC commands.
+      mailbox->Push(std::move(event));
+    } catch (const std::exception&) {
+      ::OutputDebugStringW(L"XMPlus taskbar: unable to queue media command\n");
+    }
+    return handled;
   }
 
   bool Allowed(const std::string& method) const {
@@ -426,4 +454,9 @@ SystemMediaControls::~SystemMediaControls() = default;
 
 void SystemMediaControls::ProcessEvents() noexcept {
   impl_->ProcessEvents();
+}
+
+bool SystemMediaControls::HandleWindowMessage(UINT message, WPARAM wparam,
+                                              LPARAM lparam) noexcept {
+  return impl_->HandleWindowMessage(message, wparam, lparam);
 }

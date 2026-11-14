@@ -3,7 +3,9 @@ import 'dart:convert';
 
 import 'package:flutter/material.dart';
 
+import '../common/widgets/app_scrollbar.dart';
 import '../api/xmly_experience.dart';
+import '../api/xmly_client.dart';
 import '../api/xmly_history.dart';
 import '../common/widgets/adaptive_text.dart';
 import '../common/widgets/app_tab_button.dart';
@@ -12,6 +14,8 @@ import '../models/xmly_models.dart';
 import '../services/app_log.dart';
 import '../services/app_runtime.dart';
 import 'catalogue_page.dart';
+import 'download_page.dart' show requestDownloads;
+import 'anchor_following_page.dart';
 import 'player_panel.dart';
 
 void _recordListeningError(
@@ -243,18 +247,288 @@ class _ListeningPageState extends State<ListeningPage>
   final _busy = [false, false, false, false];
   final List<String?> _errors = [null, null, null, null];
   final _requests = [0, 0, 0, 0];
-  List<UpdateItem> _updates = [];
-  List<SubscriptionItem> _subscriptions = [];
-  List<Map<String, dynamic>> _cloudHistory = [];
-  List<Track> _favorites = [];
-  bool _moreFavorites = false;
-  int _favoritePage = 0;
   late int _libraryRevision;
   late bool _accountAvailable;
-  bool _moreUpdates = false, _moreSubscriptions = false, _acting = false;
-  int? _before;
-  int _subscriptionPage = 0, _accountEpoch = 0;
+  bool _acting = false;
+  int _accountEpoch = 0;
   late String _accountKey;
+  final _sources = <String, _ListeningAccount>{};
+  final List<Completer<void>?> _cancelled = [null, null, null, null];
+
+  List<T> _merge<T>(
+    Iterable<T> items,
+    String Function(T) id, {
+    int Function(T)? timestamp,
+  }) {
+    AppLog.instance.trace(
+      "lib/pages/listening_page.dart::_ListeningPageState._merge",
+    );
+
+    final found = <String, T>{};
+    for (final item in items) {
+      final previous = found[id(item)];
+      if (previous == null ||
+          (timestamp != null && timestamp(item) > timestamp(previous))) {
+        found[id(item)] = item;
+      }
+    }
+    final result = found.values.toList();
+    if (timestamp != null)
+      result.sort((a, b) {
+        AppLog.instance.trace(
+          "lib/pages/listening_page.dart::_ListeningPageState._merge.closure#1",
+        );
+
+        final order = timestamp(b).compareTo(timestamp(a));
+        return order == 0 ? id(a).compareTo(id(b)) : order;
+      });
+    return result;
+  }
+
+  List<UpdateItem> get _updates {
+    AppLog.instance.trace(
+      "lib/pages/listening_page.dart::_ListeningPageState._updates.get",
+    );
+
+    return _merge(
+      _sources.values.expand((source) {
+        AppLog.instance.trace(
+          "lib/pages/listening_page.dart::_ListeningPageState._updates.get.closure#1",
+        );
+
+        return source.updates;
+      }),
+      (item) {
+        AppLog.instance.trace(
+          "lib/pages/listening_page.dart::_ListeningPageState._updates.get.closure#2",
+        );
+
+        return item.track.id;
+      },
+      timestamp: (item) {
+        AppLog.instance.trace(
+          "lib/pages/listening_page.dart::_ListeningPageState._updates.get.closure#3",
+        );
+
+        return item.publishedAt;
+      },
+    );
+  }
+
+  List<SubscriptionItem> get _subscriptions {
+    AppLog.instance.trace(
+      "lib/pages/listening_page.dart::_ListeningPageState._subscriptions.get",
+    );
+
+    return _merge(
+      _sources.values.expand((source) {
+        AppLog.instance.trace(
+          "lib/pages/listening_page.dart::_ListeningPageState._subscriptions.get.closure#1",
+        );
+
+        return source.subscriptions;
+      }),
+      (item) {
+        AppLog.instance.trace(
+          "lib/pages/listening_page.dart::_ListeningPageState._subscriptions.get.closure#2",
+        );
+
+        return item.album.id;
+      },
+      timestamp: (item) {
+        AppLog.instance.trace(
+          "lib/pages/listening_page.dart::_ListeningPageState._subscriptions.get.closure#3",
+        );
+
+        return item.updatedAt;
+      },
+    );
+  }
+
+  List<Track> get _favorites {
+    AppLog.instance.trace(
+      "lib/pages/listening_page.dart::_ListeningPageState._favorites.get",
+    );
+
+    return _merge(
+      _sources.values.expand((source) {
+        AppLog.instance.trace(
+          "lib/pages/listening_page.dart::_ListeningPageState._favorites.get.closure#1",
+        );
+
+        return source.favorites;
+      }),
+      (item) {
+        AppLog.instance.trace(
+          "lib/pages/listening_page.dart::_ListeningPageState._favorites.get.closure#2",
+        );
+
+        return item.id;
+      },
+    );
+  }
+
+  List<Map<String, dynamic>> get _cloudHistory {
+    AppLog.instance.trace(
+      "lib/pages/listening_page.dart::_ListeningPageState._cloudHistory.get",
+    );
+
+    return [
+      for (final source in _sources.values)
+        for (final record in source.history)
+          {...record, 'accountIdentity': source.identity},
+    ];
+  }
+
+  bool get _moreUpdates {
+    AppLog.instance.trace(
+      "lib/pages/listening_page.dart::_ListeningPageState._moreUpdates.get",
+    );
+
+    return _sources.values.any((source) {
+      AppLog.instance.trace(
+        "lib/pages/listening_page.dart::_ListeningPageState._moreUpdates.get.closure#1",
+      );
+
+      return source.more[0];
+    });
+  }
+
+  bool get _moreSubscriptions {
+    AppLog.instance.trace(
+      "lib/pages/listening_page.dart::_ListeningPageState._moreSubscriptions.get",
+    );
+
+    return _sources.values.any((source) {
+      AppLog.instance.trace(
+        "lib/pages/listening_page.dart::_ListeningPageState._moreSubscriptions.get.closure#1",
+      );
+
+      return source.more[1];
+    });
+  }
+
+  bool get _moreFavorites {
+    AppLog.instance.trace(
+      "lib/pages/listening_page.dart::_ListeningPageState._moreFavorites.get",
+    );
+
+    return _sources.values.any((source) {
+      AppLog.instance.trace(
+        "lib/pages/listening_page.dart::_ListeningPageState._moreFavorites.get.closure#1",
+      );
+
+      return source.more[3];
+    });
+  }
+
+  int get _favoritePage {
+    AppLog.instance.trace(
+      "lib/pages/listening_page.dart::_ListeningPageState._favoritePage.get",
+    );
+
+    return _sources.isEmpty ||
+            _sources.values.any((source) {
+              AppLog.instance.trace(
+                "lib/pages/listening_page.dart::_ListeningPageState._favoritePage.get.closure#1",
+              );
+
+              return source.pages[3] == 0;
+            })
+        ? 0
+        : 1;
+  }
+
+  void _syncSources() {
+    AppLog.instance.trace(
+      "lib/pages/listening_page.dart::_ListeningPageState._syncSources",
+    );
+
+    _sources.clear();
+    final accounts = _runtime.accounts;
+    final identities = accounts.accountIds.toList();
+    identities.sort((a, b) {
+      AppLog.instance.trace(
+        "lib/pages/listening_page.dart::_ListeningPageState._syncSources.closure#1",
+      );
+
+      if (a == b) return 0;
+      if (a == accounts.primaryAccountId) return -1;
+      if (b == accounts.primaryAccountId) return 1;
+      return a.compareTo(b);
+    });
+    for (final identity in identities) {
+      _sources[identity] = _ListeningAccount(accounts.clientFor(identity));
+    }
+  }
+
+  String _accountLabel(String identity) {
+    AppLog.instance.trace(
+      "lib/pages/listening_page.dart::_ListeningPageState._accountLabel",
+    );
+
+    if (identity == 'anonymous') return '本地';
+    final record =
+        (_runtime.storage.state['accounts'] as Map)[identity] as Map?;
+    final uid = _sources[identity]?.client.credentials?.uid ?? record?['uid'];
+    return uid == null ? '原账号' : '账号 $uid';
+  }
+
+  List<_ListeningAccount> _owners(int section, String id) {
+    AppLog.instance.trace(
+      "lib/pages/listening_page.dart::_ListeningPageState._owners",
+    );
+
+    return _sources.values.where((source) {
+      AppLog.instance.trace(
+        "lib/pages/listening_page.dart::_ListeningPageState._owners.closure#1",
+      );
+
+      return switch (section) {
+        0 => source.updates.any((item) {
+          AppLog.instance.trace(
+            "lib/pages/listening_page.dart::_ListeningPageState._owners.closure#1.closure#1",
+          );
+
+          return item.track.id == id;
+        }),
+        1 => source.subscriptions.any((item) {
+          AppLog.instance.trace(
+            "lib/pages/listening_page.dart::_ListeningPageState._owners.closure#1.closure#2",
+          );
+
+          return item.album.id == id;
+        }),
+        3 => source.favorites.any((item) {
+          AppLog.instance.trace(
+            "lib/pages/listening_page.dart::_ListeningPageState._owners.closure#1.closure#3",
+          );
+
+          return item.id == id;
+        }),
+        _ => false,
+      };
+    }).toList();
+  }
+
+  String _ownerLabel(List<_ListeningAccount> owners) {
+    AppLog.instance.trace(
+      "lib/pages/listening_page.dart::_ListeningPageState._ownerLabel",
+    );
+
+    return _sources.length < 2
+        ? ''
+        : owners
+              .map((source) {
+                AppLog.instance.trace(
+                  "lib/pages/listening_page.dart::_ListeningPageState._ownerLabel.closure#1",
+                );
+
+                return _accountLabel(source.identity);
+              })
+              .join(' · ');
+  }
+
   AppRuntime get _runtime {
     AppLog.instance.trace(
       "lib/pages/listening_page.dart::_ListeningPageState._runtime.get",
@@ -266,14 +540,23 @@ class _ListeningPageState extends State<ListeningPage>
     AppLog.instance.trace(
       "lib/pages/listening_page.dart::_ListeningPageState._currentKey.get",
     );
-    return _runtime.client.cacheIdentity;
+    final identities = _runtime.accounts.accountIds.toList()..sort();
+    return identities
+        .map((id) {
+          AppLog.instance.trace(
+            "lib/pages/listening_page.dart::_ListeningPageState._currentKey.get.closure#1",
+          );
+
+          return '$id:${_runtime.accounts.clientFor(id).cacheIdentity}';
+        })
+        .join('|');
   }
 
   bool get _signedIn {
     AppLog.instance.trace(
       "lib/pages/listening_page.dart::_ListeningPageState._signedIn.get",
     );
-    return _runtime.client.accountAvailable;
+    return _runtime.accounts.accountIds.isNotEmpty;
   }
 
   String get _query {
@@ -292,6 +575,7 @@ class _ListeningPageState extends State<ListeningPage>
     super.initState();
     _tabs = TabController(length: 5, vsync: this)
       ..addListener(_searchTabChanged);
+    _syncSources();
     _accountKey = _currentKey;
     _libraryRevision = _runtime.libraryRevision;
     _accountAvailable = _signedIn;
@@ -340,6 +624,7 @@ class _ListeningPageState extends State<ListeningPage>
 
     _favoriteSearchTimer?.cancel();
     _favoriteSearchPaused = false;
+    _syncSources();
     _accountKey = _currentKey;
     _libraryRevision = _runtime.libraryRevision;
     _accountAvailable = _signedIn;
@@ -349,20 +634,12 @@ class _ListeningPageState extends State<ListeningPage>
         "lib/pages/listening_page.dart::_ListeningPageState._resetAccount.closure#1",
       );
 
-      _updates = [];
-      _subscriptions = [];
-      _cloudHistory = [];
-      _favorites = [];
-      _favoritePage = 0;
-      _moreFavorites = false;
-      _before = null;
-      _subscriptionPage = 0;
-      _moreUpdates = false;
-      _moreSubscriptions = false;
       for (var i = 0; i < _busy.length; i++) {
         _busy[i] = false;
         _errors[i] = null;
         ++_requests[i];
+        _cancelled[i]?.complete();
+        _cancelled[i] = null;
       }
     });
     _refresh();
@@ -403,291 +680,232 @@ class _ListeningPageState extends State<ListeningPage>
     AppLog.instance.trace(
       "lib/pages/listening_page.dart::_ListeningPageState._loadUpdates",
     );
-    return AppLog.instance.runWithErrorScope(() async {
-      AppLog.instance.trace(
-        "lib/pages/listening_page.dart::_ListeningPageState._loadUpdates.closure#1",
-      );
 
-      if (!_signedIn || (!reset && (_busy[0] || !_moreUpdates))) return;
-      final client = _runtime.client,
-          epoch = _accountEpoch,
-          request = ++_requests[0];
-      final key = client.cacheIdentity;
-      final before = reset ? null : _before;
-      setState(() {
-        AppLog.instance.trace(
-          "lib/pages/listening_page.dart::_ListeningPageState._loadUpdates.closure#1.closure#1",
-        );
-
-        _busy[0] = true;
-        _errors[0] = null;
-      });
-      try {
-        final result = await XmlyExperience(client)
-            .updates(before: before, pageSize: 50);
-        if (!_valid(0, request, epoch, key)) return;
-        final known = reset
-            ? <String>{}
-            : _updates.map((item) {
-                AppLog.instance.trace(
-                  "lib/pages/listening_page.dart::_ListeningPageState._loadUpdates.closure#1.closure#2",
-                );
-                return item.track.id;
-              }).toSet();
-        final added = result.items.where((item) {
-          AppLog.instance.trace(
-            "lib/pages/listening_page.dart::_ListeningPageState._loadUpdates.closure#1.closure#3",
-          );
-          return known.add(item.track.id);
-        }).toList();
-        if ((!reset && result.hasMore && added.isEmpty) ||
-            (result.hasMore &&
-                (result.nextTimeline == null ||
-                    result.nextTimeline == before))) {
-          throw const XmlyException('repeated_page', '更新列表没有前进，请稍后重试');
-        }
-        if ((reset ? 0 : _updates.length) + added.length > 5000) {
-          throw const XmlyException('feed_limit', '已加载 5000 条更新，请搜索或刷新列表');
-        }
-        setState(() {
-          AppLog.instance.trace(
-            "lib/pages/listening_page.dart::_ListeningPageState._loadUpdates.closure#1.closure#4",
-          );
-
-          _updates = [if (!reset) ..._updates, ...added];
-          _before = result.nextTimeline;
-          _moreUpdates = result.hasMore;
-        });
-      } catch (error, stack) {
-        _recordListeningError('Updates load failed', error, stack);
-        if (_valid(0, request, epoch, key))
-          setState(() {
-            AppLog.instance.trace(
-              "lib/pages/listening_page.dart::_ListeningPageState._loadUpdates.closure#1.closure#5",
-            );
-
-            _errors[0] = error is XmlyException && error.code == 'repeated_page'
-                ? '更多更新分页暂不可用，已保留当前列表'
-                : _message(error);
-            if (error is XmlyException && error.code == 'repeated_page')
-              _moreUpdates = false;
-          });
-      } finally {
-        if (_valid(0, request, epoch, key))
-          setState(() {
-            AppLog.instance.trace(
-              "lib/pages/listening_page.dart::_ListeningPageState._loadUpdates.closure#1.closure#6",
-            );
-            _busy[0] = false;
-          });
-      }
-    });
+    return _loadSection(0, reset: reset);
   }
 
   Future<void> _loadSubscriptions({bool reset = false}) {
     AppLog.instance.trace(
       "lib/pages/listening_page.dart::_ListeningPageState._loadSubscriptions",
     );
-    return AppLog.instance.runWithErrorScope(() async {
-      AppLog.instance.trace(
-        "lib/pages/listening_page.dart::_ListeningPageState._loadSubscriptions.closure#1",
-      );
 
-      if (!_signedIn || (!reset && (_busy[1] || !_moreSubscriptions))) return;
-      final client = _runtime.client,
-          epoch = _accountEpoch,
-          request = ++_requests[1];
-      final key = client.cacheIdentity,
-          page = reset ? 1 : _subscriptionPage + 1;
-      setState(() {
-        AppLog.instance.trace(
-          "lib/pages/listening_page.dart::_ListeningPageState._loadSubscriptions.closure#1.closure#1",
-        );
-
-        _busy[1] = true;
-        _errors[1] = null;
-      });
-      try {
-        final result = await XmlyExperience(client).subscriptions(page: page);
-        if (!_valid(1, request, epoch, key)) return;
-        final known = reset
-            ? <String>{}
-            : _subscriptions.map((item) {
-                AppLog.instance.trace(
-                  "lib/pages/listening_page.dart::_ListeningPageState._loadSubscriptions.closure#1.closure#2",
-                );
-                return item.album.id;
-              }).toSet();
-        final added = result.items.where((item) {
-          AppLog.instance.trace(
-            "lib/pages/listening_page.dart::_ListeningPageState._loadSubscriptions.closure#1.closure#3",
-          );
-          return known.add(item.album.id);
-        }).toList();
-        if (!reset && result.hasMore && added.isEmpty) {
-          throw const XmlyException('repeated_page', '订阅列表没有前进，请稍后重试');
-        }
-        if ((reset ? 0 : _subscriptions.length) + added.length > 5000) {
-          throw const XmlyException('subscription_limit', '已加载 5000 个订阅');
-        }
-        setState(() {
-          AppLog.instance.trace(
-            "lib/pages/listening_page.dart::_ListeningPageState._loadSubscriptions.closure#1.closure#4",
-          );
-
-          _subscriptions = [if (!reset) ..._subscriptions, ...added];
-          _subscriptionPage = page;
-          _moreSubscriptions = result.hasMore;
-        });
-      } catch (error, stack) {
-        _recordListeningError('Subscriptions load failed', error, stack);
-        if (_valid(1, request, epoch, key))
-          setState(() {
-            AppLog.instance.trace(
-              "lib/pages/listening_page.dart::_ListeningPageState._loadSubscriptions.closure#1.closure#5",
-            );
-            _errors[1] = _message(error);
-          });
-      } finally {
-        if (_valid(1, request, epoch, key))
-          setState(() {
-            AppLog.instance.trace(
-              "lib/pages/listening_page.dart::_ListeningPageState._loadSubscriptions.closure#1.closure#6",
-            );
-            _busy[1] = false;
-          });
-      }
-    });
+    return _loadSection(1, reset: reset);
   }
 
   Future<void> _loadHistory() {
     AppLog.instance.trace(
       "lib/pages/listening_page.dart::_ListeningPageState._loadHistory",
     );
-    return AppLog.instance.runWithErrorScope(() async {
-      AppLog.instance.trace(
-        "lib/pages/listening_page.dart::_ListeningPageState._loadHistory.closure#1",
-      );
 
-      if (!_signedIn) return;
-      final client = _runtime.client,
-          epoch = _accountEpoch,
-          request = ++_requests[2];
-      final key = client.cacheIdentity;
-      setState(() {
-        AppLog.instance.trace(
-          "lib/pages/listening_page.dart::_ListeningPageState._loadHistory.closure#1.closure#1",
-        );
-
-        _busy[2] = true;
-        _errors[2] = null;
-      });
-      try {
-        final result = await XmlyHistory(client).records();
-        if (_valid(2, request, epoch, key))
-          setState(() {
-            AppLog.instance.trace(
-              "lib/pages/listening_page.dart::_ListeningPageState._loadHistory.closure#1.closure#2",
-            );
-            _cloudHistory = result;
-          });
-      } catch (error, stack) {
-        _recordListeningError('History load failed', error, stack);
-        if (_valid(2, request, epoch, key))
-          setState(() {
-            AppLog.instance.trace(
-              "lib/pages/listening_page.dart::_ListeningPageState._loadHistory.closure#1.closure#3",
-            );
-            _errors[2] = _message(error);
-          });
-      } finally {
-        if (_valid(2, request, epoch, key))
-          setState(() {
-            AppLog.instance.trace(
-              "lib/pages/listening_page.dart::_ListeningPageState._loadHistory.closure#1.closure#4",
-            );
-            _busy[2] = false;
-          });
-      }
-    });
+    return _loadSection(2, reset: true);
   }
 
   Future<void> _loadFavorites({bool reset = false}) {
     AppLog.instance.trace(
       "lib/pages/listening_page.dart::_ListeningPageState._loadFavorites",
     );
-    return AppLog.instance.runWithErrorScope(() async {
+
+    return _loadSection(3, reset: reset);
+  }
+
+  Future<void> _loadSection(int section, {required bool reset}) async {
+    AppLog.instance.trace(
+      "lib/pages/listening_page.dart::_ListeningPageState._loadSection",
+    );
+
+    if (!_signedIn || (!reset && _busy[section])) return;
+    final epoch = _accountEpoch,
+        request = ++_requests[section],
+        key = _currentKey;
+    _cancelled[section]?.complete();
+    final cancelled = _cancelled[section] = Completer<void>();
+    final sources = _sources.values.where((source) {
       AppLog.instance.trace(
-        "lib/pages/listening_page.dart::_ListeningPageState._loadFavorites.closure#1",
+        "lib/pages/listening_page.dart::_ListeningPageState._loadSection.closure#1",
       );
 
-      if (!_signedIn || (!reset && (_busy[3] || !_moreFavorites))) return;
-      final client = _runtime.client,
-          epoch = _accountEpoch,
-          request = ++_requests[3];
-      final key = client.cacheIdentity, page = reset ? 1 : _favoritePage + 1;
-      setState(() {
-        AppLog.instance.trace(
-          "lib/pages/listening_page.dart::_ListeningPageState._loadFavorites.closure#1.closure#1",
-        );
+      return reset || source.more[section];
+    }).toList();
+    setState(() {
+      AppLog.instance.trace(
+        "lib/pages/listening_page.dart::_ListeningPageState._loadSection.closure#2",
+      );
 
-        _busy[3] = true;
-        _errors[3] = null;
-      });
-      try {
-        final result = await XmlyExperience(client).favorites(page: page);
-        if (!_valid(3, request, epoch, key)) return;
-        final known = reset
-            ? <String>{}
-            : _favorites.map((track) {
-                AppLog.instance.trace(
-                  "lib/pages/listening_page.dart::_ListeningPageState._loadFavorites.closure#1.closure#2",
-                );
-                return track.id;
-              }).toSet();
-        final added = result.items.where((track) {
-          AppLog.instance.trace(
-            "lib/pages/listening_page.dart::_ListeningPageState._loadFavorites.closure#1.closure#3",
-          );
-          return known.add(track.id);
-        }).toList();
-        if (!reset && result.hasMore && added.isEmpty) {
-          throw const XmlyException('repeated_page', '收藏列表没有前进，请稍后重试');
-        }
-        if ((reset ? 0 : _favorites.length) + added.length > 5000) {
-          throw const XmlyException('favorite_limit', '已加载 5000 条收藏，请搜索或刷新列表');
-        }
-        setState(() {
-          AppLog.instance.trace(
-            "lib/pages/listening_page.dart::_ListeningPageState._loadFavorites.closure#1.closure#4",
-          );
-
-          _favorites = [if (!reset) ..._favorites, ...added];
-          _favoritePage = page;
-          _moreFavorites = result.hasMore;
-        });
-      } catch (error, stack) {
-        _recordListeningError('Favorites load failed', error, stack);
-        if (_valid(3, request, epoch, key)) {
-          setState(() {
-            AppLog.instance.trace(
-              "lib/pages/listening_page.dart::_ListeningPageState._loadFavorites.closure#1.closure#5",
-            );
-            _errors[3] = _message(error);
-          });
-        }
-      } finally {
-        if (_valid(3, request, epoch, key)) {
-          setState(() {
-            AppLog.instance.trace(
-              "lib/pages/listening_page.dart::_ListeningPageState._loadFavorites.closure#1.closure#6",
-            );
-            _busy[3] = false;
-          });
-          _scheduleFavoriteSearch();
-        }
+      _busy[section] = true;
+      _errors[section] = null;
+      for (final source in sources) {
+        source.errors[section] = null;
       }
     });
+    bool current() {
+      AppLog.instance.trace(
+        "lib/pages/listening_page.dart::_ListeningPageState._loadSection.current",
+      );
+
+      return _valid(section, request, epoch, key);
+    }
+
+    Future<void> load(_ListeningAccount source) async {
+      AppLog.instance.trace(
+        "lib/pages/listening_page.dart::_ListeningPageState._loadSection.load",
+      );
+
+      if (!current()) return;
+      try {
+        await source.client.withReadPolicy(
+          () async {
+            AppLog.instance.trace(
+              "lib/pages/listening_page.dart::_ListeningPageState._loadSection.load.closure#1",
+            );
+
+            switch (section) {
+              case 0:
+                final before = reset ? null : source.before;
+                final result = await XmlyExperience(source.client)
+                    .updates(before: before, pageSize: 50);
+                if (!current()) return;
+                final known = {
+                  if (!reset)
+                    for (final item in source.updates) item.track.id,
+                };
+                final added = result.items.where((item) {
+                  AppLog.instance.trace(
+                    "lib/pages/listening_page.dart::_ListeningPageState._loadSection.load.closure#1.closure#1",
+                  );
+
+                  return known.add(item.track.id);
+                }).toList();
+                if (result.hasMore &&
+                    ((!reset && added.isEmpty) ||
+                        result.nextTimeline == null ||
+                        result.nextTimeline == before)) {
+                  throw const XmlyException('repeated_page', '更多更新暂不可用，请刷新重试');
+                }
+                if ((reset ? 0 : source.updates.length) + added.length > 5000) {
+                  throw const XmlyException('feed_limit', '已加载 5000 条更新');
+                }
+                source.updates = [if (!reset) ...source.updates, ...added];
+                source.before = result.nextTimeline;
+                source.more[0] = result.hasMore;
+              case 1:
+                final page = reset ? 1 : source.pages[1] + 1;
+                final result = await XmlyExperience(source.client)
+                    .subscriptions(page: page);
+                if (!current()) return;
+                final known = {
+                  if (!reset)
+                    for (final item in source.subscriptions) item.album.id,
+                };
+                final added = result.items.where((item) {
+                  AppLog.instance.trace(
+                    "lib/pages/listening_page.dart::_ListeningPageState._loadSection.load.closure#1.closure#2",
+                  );
+
+                  return known.add(item.album.id);
+                }).toList();
+                if (!reset && result.hasMore && added.isEmpty) {
+                  throw const XmlyException('repeated_page', '更多订阅暂不可用，请刷新重试');
+                }
+                if ((reset ? 0 : source.subscriptions.length) + added.length >
+                    5000) {
+                  throw const XmlyException(
+                    'subscription_limit',
+                    '已加载 5000 个订阅',
+                  );
+                }
+                source.subscriptions = [
+                  if (!reset) ...source.subscriptions,
+                  ...added,
+                ];
+                source.pages[1] = page;
+                source.more[1] = result.hasMore;
+              case 2:
+                final result = await XmlyHistory(source.client).records();
+                if (!current()) return;
+                source.history = result;
+                source.more[2] = false;
+              case 3:
+                final page = reset ? 1 : source.pages[3] + 1;
+                final result = await XmlyExperience(source.client)
+                    .favorites(page: page);
+                if (!current()) return;
+                final known = {
+                  if (!reset)
+                    for (final item in source.favorites) item.id,
+                };
+                final added = result.items.where((item) {
+                  AppLog.instance.trace(
+                    "lib/pages/listening_page.dart::_ListeningPageState._loadSection.load.closure#1.closure#3",
+                  );
+
+                  return known.add(item.id);
+                }).toList();
+                if (!reset && result.hasMore && added.isEmpty) {
+                  throw const XmlyException('repeated_page', '更多收藏暂不可用，请刷新重试');
+                }
+                if ((reset ? 0 : source.favorites.length) + added.length >
+                    5000) {
+                  throw const XmlyException('favorite_limit', '已加载 5000 条收藏');
+                }
+                source.favorites = [if (!reset) ...source.favorites, ...added];
+                source.pages[3] = page;
+                source.more[3] = result.hasMore;
+            }
+          },
+          rateLimitRetries: 0,
+          cancelled: cancelled.future,
+        );
+      } catch (error, stack) {
+        if (!current()) return;
+        _recordListeningError(
+          'Account library load failed',
+          error,
+          stack,
+          recoverable: true,
+        );
+        source.errors[section] = _message(error);
+        if (error is XmlyException &&
+            const {
+              'repeated_page',
+              'feed_limit',
+              'subscription_limit',
+              'favorite_limit',
+            }.contains(error.code)) {
+          source.more[section] = false;
+        }
+      }
+      if (current())
+        setState(() {
+          AppLog.instance.trace(
+            "lib/pages/listening_page.dart::_ListeningPageState._loadSection.load.closure#2",
+          );
+        });
+    }
+
+    try {
+      // Bound work per section; account failures are retained independently.
+      for (var offset = 0; offset < sources.length && current(); offset += 3) {
+        await Future.wait(sources.skip(offset).take(3).map(load));
+      }
+    } finally {
+      if (current()) {
+        _cancelled[section] = null;
+        setState(() {
+          AppLog.instance.trace(
+            "lib/pages/listening_page.dart::_ListeningPageState._loadSection.closure#3",
+          );
+
+          _busy[section] = false;
+          final errors = [
+            for (final source in _sources.values)
+              if (source.errors[section] != null)
+                '${_accountLabel(source.identity)}：${source.errors[section]}',
+          ];
+          _errors[section] = errors.isEmpty ? null : errors.join('\n');
+        });
+        if (section == 3) _scheduleFavoriteSearch();
+      }
+    }
   }
 
   void _searchTabChanged() {
@@ -807,47 +1025,112 @@ class _ListeningPageState extends State<ListeningPage>
     AppLog.instance.trace(
       "lib/pages/listening_page.dart::_ListeningPageState._active",
     );
+
     return mounted &&
         epoch == _accountEpoch &&
         key == _currentKey &&
-        identity == _runtime.player.libraryIdentity;
+        (identity == 'anonymous' ||
+            _sources.containsKey(identity) ||
+            (_runtime.storage.state['library'] as Map).containsKey(identity));
   }
 
   Future<void> _changeLibrary(
+    String identity,
     Future<void> Function(XmlyExperience api) change,
   ) async {
     AppLog.instance.trace(
       "lib/pages/listening_page.dart::_ListeningPageState._changeLibrary",
     );
 
-    if (!_signedIn) throw const XmlyException('login_required', '请先登录');
-    final client = _runtime.client, epoch = _accountEpoch;
-    final identity = _runtime.player.libraryIdentity;
+    final source = _sources[identity];
+    if (source == null) throw const XmlyException('missing_account', '请先登录原账号');
+    final client = source.client, epoch = _accountEpoch, key = _currentKey;
     var attempted = false;
     try {
-      await _runtime.accounts.runWithAccount(client.identity, (admitted) async {
+      await _runtime.accounts.runWithAccount(identity, (admitted) async {
         AppLog.instance.trace(
           "lib/pages/listening_page.dart::_ListeningPageState._changeLibrary.closure#1",
         );
 
-        if (!_active(epoch, client.cacheIdentity, identity) ||
+        if (!_active(epoch, key, identity) ||
             !identical(admitted, client) ||
+            client.cacheIdentity != source.key ||
             !client.accountAvailable) {
-          throw const XmlyException('account_changed', '账号已变更，请重试');
+          throw const XmlyException('account_changed', '原账号已变更，请刷新后重试');
         }
         attempted = true;
         await change(XmlyExperience(client));
       });
     } catch (error) {
       if (attempted &&
-          _active(epoch, client.cacheIdentity, identity) &&
-          (error is! XmlyException || !error.definitive)) {
+          _active(epoch, key, identity) &&
+          (error is! XmlyException || !error.definitive))
         _runtime.libraryChanged();
-      }
       rethrow;
     }
-    if (_active(epoch, client.cacheIdentity, identity))
-      _runtime.libraryChanged();
+    if (_active(epoch, key, identity)) _runtime.libraryChanged();
+  }
+
+  Future<void> _removeFavorite(
+    Track track,
+    List<_ListeningAccount> owners,
+  ) async {
+    AppLog.instance.trace(
+      "lib/pages/listening_page.dart::_ListeningPageState._removeFavorite",
+    );
+
+    if (owners.isEmpty) return;
+    final epoch = _accountEpoch, key = _currentKey;
+    String? identity;
+    if (owners.length == 1) {
+      identity = owners.single.identity;
+      if (!await showConfirmationDialog(
+        context,
+        Text('从${_accountLabel(identity)}取消收藏此声音？'),
+      ))
+        return;
+    } else {
+      identity = await showDialog<String>(
+        context: context,
+        builder: (context) {
+          AppLog.instance.trace(
+            "lib/pages/listening_page.dart::_ListeningPageState._removeFavorite.closure#1",
+          );
+
+          return SimpleDialog(
+            title: const Text('从哪个账号取消收藏'),
+            children: [
+              for (final owner in owners)
+                SimpleDialogOption(
+                  onPressed: () {
+                    AppLog.instance.trace(
+                      "lib/pages/listening_page.dart::_ListeningPageState._removeFavorite.closure#1.closure#1",
+                    );
+
+                    Navigator.pop(context, owner.identity);
+                  },
+                  child: Text(_accountLabel(owner.identity)),
+                ),
+            ],
+          );
+        },
+      );
+    }
+    if (identity == null || !_active(epoch, key, identity)) return;
+    final selected = identity;
+    await _act(() {
+      AppLog.instance.trace(
+        "lib/pages/listening_page.dart::_ListeningPageState._removeFavorite.closure#2",
+      );
+
+      return _changeLibrary(selected, (api) {
+        AppLog.instance.trace(
+          "lib/pages/listening_page.dart::_ListeningPageState._removeFavorite.closure#2.closure#1",
+        );
+
+        return api.setFavorite(track, favorite: false);
+      });
+    });
   }
 
   Future<void> _removeBookmark(
@@ -990,7 +1273,7 @@ class _ListeningPageState extends State<ListeningPage>
     });
   }
 
-  void _openAlbum(String id) {
+  void _openAlbum(String id, {String? accountIdentity}) {
     AppLog.instance.trace(
       "lib/pages/listening_page.dart::_ListeningPageState._openAlbum",
     );
@@ -1003,6 +1286,7 @@ class _ListeningPageState extends State<ListeningPage>
           return AlbumPageView(
             runtime: _runtime,
             albumId: id,
+            accountIdentity: accountIdentity,
             onDownload: widget.onDownload,
             onPlayAlbum: widget.onPlayAlbum,
           );
@@ -1036,11 +1320,16 @@ class _ListeningPageState extends State<ListeningPage>
         'duration': raw['duration'],
         'cover_url': raw['cover_url'],
       });
-      records[track.id] = _ListeningRecord(
+      final record = _ListeningRecord(
         track,
         (raw['position'] as num).toDouble(),
         ((raw['updated_at'] as num) * 1000).toInt(),
+        raw['accountIdentity'] as String,
       );
+      if (records[track.id] == null ||
+          record.updatedAt > records[track.id]!.updatedAt) {
+        records[track.id] = record;
+      }
     }
     return records.values.where((row) {
       AppLog.instance.trace(
@@ -1143,6 +1432,8 @@ class _ListeningPageState extends State<ListeningPage>
     double position = 0,
     String? removeLabel,
     VoidCallback? remove,
+    String? accountIdentity,
+    String accountText = '',
     String positionLabel = '已听',
     String note = '',
     VoidCallback? editNote,
@@ -1153,7 +1444,7 @@ class _ListeningPageState extends State<ListeningPage>
 
     final compact = MediaQuery.sizeOf(context).width < 320;
     final epoch = _accountEpoch, key = _currentKey;
-    final identity = _runtime.player.libraryIdentity;
+    final identity = accountIdentity ?? _runtime.player.libraryIdentity;
     final duration = track.duration;
     final progress = duration > 0
         ? (position / duration).clamp(0.0, 1.0).toDouble()
@@ -1173,6 +1464,7 @@ class _ListeningPageState extends State<ListeningPage>
         children: [
           if (note.isNotEmpty)
             Text(note, maxLines: 3, overflow: TextOverflow.ellipsis),
+          if (accountText.isNotEmpty) _accountCaption(accountText),
           if (track.album.isNotEmpty) AdaptiveText(track.album),
           AdaptiveText(
             position > 0
@@ -1217,7 +1509,10 @@ class _ListeningPageState extends State<ListeningPage>
                 AppLog.instance.trace(
                   "lib/pages/listening_page.dart::_ListeningPageState._trackTile.closure#2.closure#1",
                 );
-                return _runtime.player.addToQueue(track);
+                return _runtime.player.addToQueue(
+                  track,
+                  accountIdentity: accountIdentity,
+                );
               });
               break;
             case 'next':
@@ -1225,7 +1520,10 @@ class _ListeningPageState extends State<ListeningPage>
                 AppLog.instance.trace(
                   "lib/pages/listening_page.dart::_ListeningPageState._trackTile.closure#2.closure#2",
                 );
-                return _runtime.player.playNext(track);
+                return _runtime.player.playNext(
+                  track,
+                  accountIdentity: accountIdentity,
+                );
               });
               break;
             case 'download':
@@ -1233,11 +1531,13 @@ class _ListeningPageState extends State<ListeningPage>
                 AppLog.instance.trace(
                   "lib/pages/listening_page.dart::_ListeningPageState._trackTile.closure#2.closure#3",
                 );
-                return widget.onDownload([track]);
+                return requestDownloads(context, _runtime, [
+                  track,
+                ], accountIdentity: accountIdentity);
               });
               break;
             case 'album':
-              _openAlbum(track.albumId);
+              _openAlbum(track.albumId, accountIdentity: accountIdentity);
               break;
             case 'remove':
               remove?.call();
@@ -1294,7 +1594,7 @@ class _ListeningPageState extends State<ListeningPage>
       }
       rows.add(item as Object);
     }
-    return Scrollbar(
+    return AppScrollbar(
       child: CustomScrollView(
         slivers: [
           for (final header in headers) SliverToBoxAdapter(child: header),
@@ -1338,7 +1638,6 @@ class _ListeningPageState extends State<ListeningPage>
 
     final compact = MediaQuery.sizeOf(context).width < 320;
     final epoch = _accountEpoch, key = _currentKey;
-    final identity = _runtime.player.libraryIdentity;
     return SizedBox(
       height: compact
           ? (MediaQuery.textScalerOf(context).scale(16) * 1.5 + 8).clamp(
@@ -1365,6 +1664,7 @@ class _ListeningPageState extends State<ListeningPage>
           );
 
           final item = _subscriptions[index];
+          final identity = _owners(1, item.album.id).first.identity;
           return SizedBox(
             width: 72,
             child: InkWell(
@@ -1373,7 +1673,8 @@ class _ListeningPageState extends State<ListeningPage>
                   "lib/pages/listening_page.dart::_ListeningPageState._subscriptionStrip.closure#2.closure#1",
                 );
 
-                if (_active(epoch, key, identity)) _openAlbum(item.album.id);
+                if (_active(epoch, key, identity))
+                  _openAlbum(item.album.id, accountIdentity: identity);
               },
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
@@ -1399,6 +1700,7 @@ class _ListeningPageState extends State<ListeningPage>
       AppLog.instance.trace(
         "lib/pages/listening_page.dart::_ListeningPageState._updatesTab.closure#1",
       );
+
       return _matches(row.track);
     }).toList();
     return _dated<UpdateItem>(
@@ -1407,30 +1709,43 @@ class _ListeningPageState extends State<ListeningPage>
         AppLog.instance.trace(
           "lib/pages/listening_page.dart::_ListeningPageState._updatesTab.closure#2",
         );
+
         return row.publishedAt;
       },
       (row) {
         AppLog.instance.trace(
           "lib/pages/listening_page.dart::_ListeningPageState._updatesTab.closure#3",
         );
+
+        final owners = _owners(0, row.track.id);
+        final identity = owners.firstOrNull?.identity;
         return _trackTile(
           row.track,
+          accountIdentity: identity,
+          accountText: _ownerLabel(owners),
           play: () {
             AppLog.instance.trace(
               "lib/pages/listening_page.dart::_ListeningPageState._updatesTab.closure#3.closure#1",
             );
+
             _act(() {
               AppLog.instance.trace(
                 "lib/pages/listening_page.dart::_ListeningPageState._updatesTab.closure#3.closure#1.closure#1",
               );
+
               return _runtime.player.playUpdates(
                 visible.map((item) {
                   AppLog.instance.trace(
                     "lib/pages/listening_page.dart::_ListeningPageState._updatesTab.closure#3.closure#1.closure#1.closure#1",
                   );
+
                   return item.track;
                 }).toList(),
                 row.track.id,
+                accountIdentities: {
+                  for (final item in visible)
+                    item.track.id: _owners(0, item.track.id).first.identity,
+                },
               );
             });
           },
@@ -1442,6 +1757,7 @@ class _ListeningPageState extends State<ListeningPage>
           AppLog.instance.trace(
             "lib/pages/listening_page.dart::_ListeningPageState._updatesTab.closure#4",
           );
+
           _loadUpdates(reset: true);
         }),
         if (_subscriptions.isEmpty)
@@ -1449,28 +1765,28 @@ class _ListeningPageState extends State<ListeningPage>
             AppLog.instance.trace(
               "lib/pages/listening_page.dart::_ListeningPageState._updatesTab.closure#5",
             );
+
             _loadSubscriptions(reset: true);
           }),
       ],
       emptyMessage: _signedIn ? '暂无更新' : '登录后查看订阅更新',
-      footer: _moreUpdates
-          ? Padding(
-              padding: const EdgeInsets.all(16),
-              child: Center(
-                child: OutlinedButton(
-                  onPressed: _busy[0]
-                      ? null
-                      : () {
-                          AppLog.instance.trace(
-                            "lib/pages/listening_page.dart::_ListeningPageState._updatesTab.closure#6",
-                          );
-                          _loadUpdates();
-                        },
-                  child: const Text('加载更多更新'),
-                ),
-              ),
-            )
-          : null,
+      footer: _moreUpdates ? _moreButton(0, '加载更多更新', _loadUpdates) : null,
+    );
+  }
+
+  Widget _moreButton(int section, String label, Future<void> Function() load) {
+    AppLog.instance.trace(
+      "lib/pages/listening_page.dart::_ListeningPageState._moreButton",
+    );
+
+    return Padding(
+      padding: const EdgeInsets.all(16),
+      child: Center(
+        child: OutlinedButton(
+          onPressed: _busy[section] ? null : load,
+          child: Text(label),
+        ),
+      ),
     );
   }
 
@@ -1480,11 +1796,11 @@ class _ListeningPageState extends State<ListeningPage>
     );
 
     final epoch = _accountEpoch, key = _currentKey;
-    final identity = _runtime.player.libraryIdentity;
     final items = _subscriptions.where((row) {
       AppLog.instance.trace(
         "lib/pages/listening_page.dart::_ListeningPageState._subscriptionsTab.closure#1",
       );
+
       return _query.isEmpty ||
           '${row.album.title} ${row.latestTitle} ${row.album.artist}'
               .toLowerCase()
@@ -1496,31 +1812,40 @@ class _ListeningPageState extends State<ListeningPage>
         AppLog.instance.trace(
           "lib/pages/listening_page.dart::_ListeningPageState._subscriptionsTab.closure#2",
         );
+
         return row.updatedAt;
       },
       (row) {
         AppLog.instance.trace(
           "lib/pages/listening_page.dart::_ListeningPageState._subscriptionsTab.closure#3",
         );
+
+        final owners = _owners(1, row.album.id);
+        final identity = owners.first.identity;
+        final accountText = _ownerLabel(owners);
         return ListTile(
+          key: ValueKey('subscription-${row.album.id}'),
           contentPadding: const EdgeInsets.symmetric(
             horizontal: 12,
-            vertical: 2,
+            vertical: 4,
           ),
-          minTileHeight: 64,
-          minVerticalPadding: 4,
-          horizontalTitleGap: 12,
           leading: MediaQuery.sizeOf(context).width < 320
               ? null
               : CoverImage(uri: row.album.coverUrl, size: 48),
           title: _itemTitle(row.album.title),
-          subtitle: Text(
-            row.latestTitle,
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
+          subtitle: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                row.latestTitle,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+              ),
+              if (accountText.isNotEmpty) _accountCaption(accountText),
+            ],
           ),
           trailing: PopupMenuButton<String>(
-            tooltip: '专辑操作',
+            tooltip: '更多',
             enabled: !_acting,
             icon: row.unreadCount > 0
                 ? Badge(
@@ -1535,21 +1860,25 @@ class _ListeningPageState extends State<ListeningPage>
 
               if (!_active(epoch, key, identity)) return;
               if (value == 'album') {
-                _openAlbum(row.album.id);
-              } else if (value == 'unsubscribe' &&
-                  await showConfirmationDialog(
+                _openAlbum(row.album.id, accountIdentity: identity);
+                return;
+              }
+              final owner = value.substring('unsubscribe:'.length);
+              if (await showConfirmationDialog(
                     context,
-                    const Text('取消订阅此专辑？'),
+                    Text('从${_accountLabel(owner)}取消订阅此专辑？'),
                   ) &&
-                  _active(epoch, key, identity)) {
+                  _active(epoch, key, owner)) {
                 await _act(() {
                   AppLog.instance.trace(
                     "lib/pages/listening_page.dart::_ListeningPageState._subscriptionsTab.closure#3.closure#1.closure#1",
                   );
-                  return _changeLibrary((api) {
+
+                  return _changeLibrary(owner, (api) {
                     AppLog.instance.trace(
                       "lib/pages/listening_page.dart::_ListeningPageState._subscriptionsTab.closure#3.closure#1.closure#1.closure#1",
                     );
+
                     return api.setSubscribed(row.album.id, subscribed: false);
                   });
                 });
@@ -1559,9 +1888,18 @@ class _ListeningPageState extends State<ListeningPage>
               AppLog.instance.trace(
                 "lib/pages/listening_page.dart::_ListeningPageState._subscriptionsTab.closure#3.closure#2",
               );
-              return const [
-                PopupMenuItem(value: 'album', child: Text('查看专辑')),
-                PopupMenuItem(value: 'unsubscribe', child: Text('取消订阅')),
+
+              return [
+                const PopupMenuItem(value: 'album', child: Text('查看专辑')),
+                for (final owner in owners)
+                  PopupMenuItem(
+                    value: 'unsubscribe:${owner.identity}',
+                    child: Text(
+                      owners.length == 1
+                          ? '取消订阅'
+                          : '取消订阅 · ${_accountLabel(owner.identity)}',
+                    ),
+                  ),
               ];
             },
           ),
@@ -1570,7 +1908,8 @@ class _ListeningPageState extends State<ListeningPage>
               "lib/pages/listening_page.dart::_ListeningPageState._subscriptionsTab.closure#3.closure#3",
             );
 
-            if (_active(epoch, key, identity)) _openAlbum(row.album.id);
+            if (_active(epoch, key, identity))
+              _openAlbum(row.album.id, accountIdentity: identity);
           },
         );
       },
@@ -1579,27 +1918,13 @@ class _ListeningPageState extends State<ListeningPage>
           AppLog.instance.trace(
             "lib/pages/listening_page.dart::_ListeningPageState._subscriptionsTab.closure#4",
           );
+
           _loadSubscriptions(reset: true);
         }),
       ],
       emptyMessage: _signedIn ? '暂无订阅' : '登录后查看订阅',
       footer: _moreSubscriptions
-          ? Padding(
-              padding: const EdgeInsets.all(16),
-              child: Center(
-                child: OutlinedButton(
-                  onPressed: _busy[1]
-                      ? null
-                      : () {
-                          AppLog.instance.trace(
-                            "lib/pages/listening_page.dart::_ListeningPageState._subscriptionsTab.closure#5",
-                          );
-                          _loadSubscriptions();
-                        },
-                  child: const Text('加载更多订阅'),
-                ),
-              ),
-            )
+          ? _moreButton(1, '加载更多订阅', _loadSubscriptions)
           : null,
     );
   }
@@ -1609,30 +1934,35 @@ class _ListeningPageState extends State<ListeningPage>
       "lib/pages/listening_page.dart::_ListeningPageState._historyTab",
     );
 
-    final rows = _history();
     return _dated<_ListeningRecord>(
-      rows,
+      _history(),
       (row) {
         AppLog.instance.trace(
           "lib/pages/listening_page.dart::_ListeningPageState._historyTab.closure#1",
         );
+
         return row.updatedAt;
       },
       (row) {
         AppLog.instance.trace(
           "lib/pages/listening_page.dart::_ListeningPageState._historyTab.closure#2",
         );
+
         return _trackTile(
           row.track,
           position: row.position,
+          accountIdentity: row.identity,
+          accountText: _sources.length > 1 ? _accountLabel(row.identity) : '',
           play: () {
             AppLog.instance.trace(
               "lib/pages/listening_page.dart::_ListeningPageState._historyTab.closure#2.closure#1",
             );
+
             _act(() {
               AppLog.instance.trace(
                 "lib/pages/listening_page.dart::_ListeningPageState._historyTab.closure#2.closure#1.closure#1",
               );
+
               final historyProgress = (
                 position: row.position,
                 updatedAt: row.updatedAt,
@@ -1641,12 +1971,14 @@ class _ListeningPageState extends State<ListeningPage>
                   ? _runtime.player.playTrack(
                       row.track,
                       historyProgress: historyProgress,
+                      accountIdentity: row.identity,
                     )
                   : _runtime.player.playAlbum(
                       row.track.albumId,
                       row.track.id,
                       track: row.track,
                       historyProgress: historyProgress,
+                      accountIdentity: row.identity,
                     );
             });
           },
@@ -1666,10 +1998,8 @@ class _ListeningPageState extends State<ListeningPage>
       "lib/pages/listening_page.dart::_ListeningPageState._favoritesTab",
     );
 
-    final epoch = _accountEpoch, key = _currentKey;
-    final identity = _runtime.player.libraryIdentity;
     final items = _favorites.where(_matches).toList();
-    return Scrollbar(
+    return AppScrollbar(
       child: ListView.builder(
         itemCount: items.length + 2 + (_moreFavorites ? 1 : 0),
         itemBuilder: (_, index) {
@@ -1684,13 +2014,14 @@ class _ListeningPageState extends State<ListeningPage>
                   AppLog.instance.trace(
                     "lib/pages/listening_page.dart::_ListeningPageState._favoritesTab.closure#1.closure#1",
                   );
+
                   _loadFavorites(reset: true);
                 }),
                 if (_signedIn && _query.isNotEmpty)
                   _favoriteSearchStatus(items.length),
               ],
             );
-          if (index == 1) {
+          if (index == 1)
             return items.isEmpty
                 ? _empty(
                     !_signedIn
@@ -1705,68 +2036,62 @@ class _ListeningPageState extends State<ListeningPage>
                         : '全部收藏中没有匹配项',
                   )
                 : const SizedBox.shrink();
-          }
-          if (index == items.length + 2) {
-            return Padding(
-              padding: const EdgeInsets.all(16),
-              child: Center(
-                child: OutlinedButton(
-                  onPressed: _busy[3]
-                      ? null
-                      : () {
-                          AppLog.instance.trace(
-                            "lib/pages/listening_page.dart::_ListeningPageState._favoritesTab.closure#1.closure#2",
-                          );
-                          _loadFavorites();
-                        },
-                  child: const Text('加载更多收藏'),
-                ),
-              ),
-            );
-          }
+          if (index == items.length + 2)
+            return _moreButton(3, '加载更多收藏', _loadFavorites);
           final track = items[index - 2];
+          final owners = _owners(3, track.id), identity = owners.first.identity;
           return _trackTile(
             track,
+            accountIdentity: identity,
+            accountText: _ownerLabel(owners),
             play: () {
               AppLog.instance.trace(
-                "lib/pages/listening_page.dart::_ListeningPageState._favoritesTab.closure#1.closure#3",
+                "lib/pages/listening_page.dart::_ListeningPageState._favoritesTab.closure#1.closure#2",
               );
+
               _act(() {
                 AppLog.instance.trace(
-                  "lib/pages/listening_page.dart::_ListeningPageState._favoritesTab.closure#1.closure#3.closure#1",
+                  "lib/pages/listening_page.dart::_ListeningPageState._favoritesTab.closure#1.closure#2.closure#1",
                 );
+
                 return track.albumId.isEmpty
-                    ? _runtime.player.playTrack(track)
-                    : widget.onPlayAlbum(track.albumId, track.id, track: track);
+                    ? _runtime.player.playTrack(
+                        track,
+                        accountIdentity: identity,
+                      )
+                    : _runtime.player.playAlbum(
+                        track.albumId,
+                        track.id,
+                        track: track,
+                        accountIdentity: identity,
+                      );
               });
             },
             removeLabel: '取消收藏',
-            remove: () async {
+            remove: () {
               AppLog.instance.trace(
-                "lib/pages/listening_page.dart::_ListeningPageState._favoritesTab.closure#1.closure#4",
+                "lib/pages/listening_page.dart::_ListeningPageState._favoritesTab.closure#1.closure#3",
               );
 
-              if (await showConfirmationDialog(
-                    context,
-                    const Text('取消收藏此声音？'),
-                  ) &&
-                  _active(epoch, key, identity)) {
-                await _act(() {
-                  AppLog.instance.trace(
-                    "lib/pages/listening_page.dart::_ListeningPageState._favoritesTab.closure#1.closure#4.closure#1",
-                  );
-                  return _changeLibrary((api) {
-                    AppLog.instance.trace(
-                      "lib/pages/listening_page.dart::_ListeningPageState._favoritesTab.closure#1.closure#4.closure#1.closure#1",
-                    );
-                    return api.setFavorite(track, favorite: false);
-                  });
-                });
-              }
+              _removeFavorite(track, owners);
             },
           );
         },
       ),
+    );
+  }
+
+  Widget _accountCaption(String text) {
+    AppLog.instance.trace(
+      "lib/pages/listening_page.dart::_ListeningPageState._accountCaption",
+    );
+
+    return Text(
+      text,
+      maxLines: 1,
+      overflow: TextOverflow.ellipsis,
+      style: Theme.of(context).textTheme.bodySmall
+          ?.copyWith(color: Theme.of(context).colorScheme.onSurfaceVariant),
     );
   }
 
@@ -1776,31 +2101,50 @@ class _ListeningPageState extends State<ListeningPage>
     );
 
     final epoch = _accountEpoch, key = _currentKey;
-    final identity = _runtime.player.libraryIdentity;
-    final library =
-        (_runtime.storage.state['library'] as Map)[identity] as Map?;
-    final bookmarks = library?['bookmarks'] as List? ?? const [];
-    final rows = <({int index, Map record, Track track, String note})>[];
-    for (var i = 0; i < bookmarks.length; i++) {
-      final record = bookmarks[i];
-      if (record is! Map || record['track'] is! Map) continue;
-      try {
-        final track = Track.fromJson(xmlyMap(record['track']));
-        final note = record['note'] is String ? record['note'] as String : '';
-        if (_matches(track, extra: note)) {
-          rows.add((index: i, record: record, track: track, note: note));
+    final rows =
+        <
+          ({int index, Map record, Track track, String note, String identity})
+        >[];
+    final libraries = _runtime.storage.state['library'] as Map;
+    for (final entry in libraries.entries) {
+      if (entry.key is! String || entry.value is! Map) continue;
+      final identity = entry.key as String;
+      final bookmarks = (entry.value as Map)['bookmarks'] as List? ?? const [];
+      for (var i = 0; i < bookmarks.length; i++) {
+        final record = bookmarks[i];
+        if (record is! Map || record['track'] is! Map) continue;
+        try {
+          final track = Track.fromJson(xmlyMap(record['track']));
+          final note = record['note'] is String ? record['note'] as String : '';
+          if (_matches(track, extra: note)) {
+            rows.add((
+              index: i,
+              record: record,
+              track: track,
+              note: note,
+              identity: identity,
+            ));
+          }
+        } on XmlyException {
+          continue;
+        } on FormatException {
+          continue;
         }
-      } on XmlyException {
-        continue;
-      } on FormatException {
-        continue;
       }
     }
+    rows.sort((a, b) {
+      AppLog.instance.trace(
+        "lib/pages/listening_page.dart::_ListeningPageState._bookmarksTab.closure#1",
+      );
+
+      final first = a.record['createdAt'], second = b.record['createdAt'];
+      return (second is int ? second : 0).compareTo(first is int ? first : 0);
+    });
     return _dated(
       rows,
       (row) {
         AppLog.instance.trace(
-          "lib/pages/listening_page.dart::_ListeningPageState._bookmarksTab.closure#1",
+          "lib/pages/listening_page.dart::_ListeningPageState._bookmarksTab.closure#2",
         );
         return row.record['createdAt'] is int
             ? row.record['createdAt'] as int
@@ -1808,10 +2152,10 @@ class _ListeningPageState extends State<ListeningPage>
       },
       (row) {
         AppLog.instance.trace(
-          "lib/pages/listening_page.dart::_ListeningPageState._bookmarksTab.closure#2",
+          "lib/pages/listening_page.dart::_ListeningPageState._bookmarksTab.closure#3",
         );
 
-        final (:index, :record, :track, :note) = row;
+        final (:index, :record, :track, :note, :identity) = row;
         final saved = record['position'];
         final position = saved is num && saved.isFinite && saved >= 0
             ? saved.toDouble()
@@ -1820,39 +2164,74 @@ class _ListeningPageState extends State<ListeningPage>
           track,
           position: position,
           positionLabel: '书签位置',
+          accountIdentity: identity,
+          accountText: libraries.length > 1 ? _accountLabel(identity) : '',
           note: note,
           editNote: () {
             AppLog.instance.trace(
-              "lib/pages/listening_page.dart::_ListeningPageState._bookmarksTab.closure#2.closure#1",
+              "lib/pages/listening_page.dart::_ListeningPageState._bookmarksTab.closure#3.closure#1",
             );
 
             _editBookmarkNote(index, record, epoch, key, identity);
           },
           play: () {
             AppLog.instance.trace(
-              "lib/pages/listening_page.dart::_ListeningPageState._bookmarksTab.closure#2.closure#2",
+              "lib/pages/listening_page.dart::_ListeningPageState._bookmarksTab.closure#3.closure#2",
             );
             _act(() {
               AppLog.instance.trace(
-                "lib/pages/listening_page.dart::_ListeningPageState._bookmarksTab.closure#2.closure#2.closure#1",
+                "lib/pages/listening_page.dart::_ListeningPageState._bookmarksTab.closure#3.closure#2.closure#1",
               );
               return _runtime.player.playTrack(
                 track,
                 resumePosition: position,
                 manualPosition: true,
+                accountIdentity: identity,
               );
             });
           },
           removeLabel: '删除书签',
           remove: () {
             AppLog.instance.trace(
-              "lib/pages/listening_page.dart::_ListeningPageState._bookmarksTab.closure#2.closure#3",
+              "lib/pages/listening_page.dart::_ListeningPageState._bookmarksTab.closure#3.closure#3",
             );
             _removeBookmark(index, record, epoch, key, identity);
           },
         );
       },
       emptyMessage: _query.isEmpty ? '暂无书签' : '没有匹配的书签',
+    );
+  }
+
+  void _openFollowedAnchors() {
+    AppLog.instance.trace(
+      "lib/pages/listening_page.dart::_ListeningPageState._openFollowedAnchors",
+    );
+
+    final uids = {
+      for (final source in _sources.values)
+        if (source.client.credentials?.uid case final uid?) uid,
+    }.toList();
+    if (uids.isEmpty) {
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text('登录后查看关注的主播')));
+      return;
+    }
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) {
+          AppLog.instance.trace(
+            "lib/pages/listening_page.dart::_ListeningPageState._openFollowedAnchors.closure#1",
+          );
+          return AnchorFollowingPage(
+            runtime: _runtime,
+            uid: uids.first,
+            additionalUids: uids.skip(1).toList(),
+            onDownload: widget.onDownload,
+            onPlayAlbum: widget.onPlayAlbum,
+          );
+        },
+      ),
     );
   }
 
@@ -1865,13 +2244,26 @@ class _ListeningPageState extends State<ListeningPage>
         AppLog.instance.trace(
           "lib/pages/listening_page.dart::_ListeningPageState._libraryHeader.closure#1",
         );
-        final title = Text(
-          '我的收听',
-          style: Theme.of(context).textTheme.headlineLarge?.copyWith(
-            fontSize: 30,
-            fontWeight: FontWeight.w600,
-            height: 1.3,
-          ),
+        final title = Wrap(
+          spacing: 16,
+          runSpacing: 4,
+          crossAxisAlignment: WrapCrossAlignment.center,
+          children: [
+            Text(
+              '我的收听',
+              style: Theme.of(context).textTheme.headlineLarge?.copyWith(
+                fontSize: 30,
+                fontWeight: FontWeight.w600,
+                height: 1.3,
+              ),
+            ),
+            TextButton.icon(
+              key: const ValueKey('followedAnchorsLink'),
+              onPressed: _openFollowedAnchors,
+              icon: const Icon(Icons.people_outline, size: 18),
+              label: const Text('关注的主播'),
+            ),
+          ],
         );
         final search = Row(
           children: [
@@ -2018,6 +2410,9 @@ class _ListeningPageState extends State<ListeningPage>
 
     ++_accountEpoch;
     _favoriteSearchTimer?.cancel();
+    for (final cancelled in _cancelled) {
+      cancelled?.complete();
+    }
     _tabs.removeListener(_searchTabChanged);
     _tabs.dispose();
     _runtime.removeListener(_runtimeChanged);
@@ -2027,8 +2422,40 @@ class _ListeningPageState extends State<ListeningPage>
 }
 
 class _ListeningRecord {
-  const _ListeningRecord(this.track, this.position, this.updatedAt);
+  const _ListeningRecord(
+    this.track,
+    this.position,
+    this.updatedAt,
+    this.identity,
+  );
+  final String identity;
   final Track track;
   final double position;
   final int updatedAt;
+}
+
+class _ListeningAccount {
+  _ListeningAccount(this.client) : key = client.cacheIdentity {
+    AppLog.instance.trace(
+      "lib/pages/listening_page.dart::_ListeningAccount.new",
+    );
+  }
+  final XmlyClient client;
+  final String key;
+  String get identity {
+    AppLog.instance.trace(
+      "lib/pages/listening_page.dart::_ListeningAccount.identity.get",
+    );
+
+    return client.identity;
+  }
+
+  final pages = [0, 0, 0, 0];
+  final more = [true, true, false, true];
+  final List<String?> errors = [null, null, null, null];
+  int? before;
+  List<UpdateItem> updates = [];
+  List<SubscriptionItem> subscriptions = [];
+  List<Map<String, dynamic>> history = [];
+  List<Track> favorites = [];
 }

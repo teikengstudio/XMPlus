@@ -2,10 +2,12 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
+import '../common/widgets/app_scrollbar.dart';
 import '../common/widgets/adaptive_text.dart';
 import '../models/xmly_models.dart';
 import '../services/app_log.dart';
 import '../services/app_runtime.dart';
+import 'playback_mode_control.dart';
 
 void _recordQueueError(
   String operation,
@@ -275,6 +277,7 @@ class _PlayerQueuePanelState extends State<PlayerQueuePanel> {
                                     ],
                                   ),
                                 ),
+                                PlaybackModeButton(runtime: widget.runtime),
                                 IconButton(
                                   tooltip: '回到当前播放',
                                   onPressed: player.current == null
@@ -385,7 +388,7 @@ class _PlayerQueuePanelState extends State<PlayerQueuePanel> {
                   Expanded(
                     child: _tracks.isEmpty
                         ? const Center(child: Text('队列为空'))
-                        : Scrollbar(
+                        : AppScrollbar(
                             controller: _scroll,
                             child: ReorderableListView.builder(
                               key: const ValueKey('playerQueueScroll'),

@@ -2,7 +2,9 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../common/widgets/app_scrollbar.dart';
 import '../api/xmly_experience.dart';
+import '../api/xmly_client.dart';
 import '../common/widgets/adaptive_text.dart';
 import '../common/widgets/app_header.dart';
 import '../common/widgets/app_tab_button.dart';
@@ -13,6 +15,8 @@ import '../services/app_log.dart';
 import '../services/app_runtime.dart';
 import 'catalogue_page.dart';
 import 'home_album_section.dart';
+import 'home_browse_page.dart';
+import 'home_ranking_section.dart';
 
 void _recordHomeError(
   String operation,
@@ -393,6 +397,33 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
+  void _openBrowse([int? categoryId]) {
+    AppLog.instance.trace(
+      "lib/pages/home_page.dart::_HomePageState._openBrowse",
+    );
+
+    final current = _channels.where((channel) {
+      AppLog.instance.trace(
+        "lib/pages/home_page.dart::_HomePageState._openBrowse.closure#1",
+      );
+      return channel.pageId == _pageId;
+    }).firstOrNull;
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) {
+          AppLog.instance.trace(
+            "lib/pages/home_page.dart::_HomePageState._openBrowse.closure#2",
+          );
+          return HomeBrowsePage(
+            runtime: widget.runtime,
+            categoryId: categoryId ?? current?.categoryId ?? 0,
+            onOpenAlbum: _openAlbum,
+          );
+        },
+      ),
+    );
+  }
+
   void _openAlbum(Album album) {
     AppLog.instance.trace(
       "lib/pages/home_page.dart::_HomePageState._openAlbum",
@@ -568,18 +599,38 @@ class _HomePageState extends State<HomePage> {
                 child: _HomeFeed(
                   key: ObjectKey(_content ?? _error ?? 'initial-home'),
                   content: _content,
+                  client: widget.runtime.client,
+                  categoryId:
+                      _channels
+                          .where((channel) {
+                            AppLog.instance.trace(
+                              "lib/pages/home_page.dart::_HomePageState.build.closure#1.closure#3",
+                            );
+
+                            return channel.pageId == _pageId;
+                          })
+                          .firstOrNull
+                          ?.categoryId ??
+                      0,
                   busy: _busy,
                   error: _error,
                   horizontal: horizontal,
                   onRefresh: _loadChannels,
                   onOpenAlbum: _busy ? null : _openAlbum,
+                  onBrowse: (section) {
+                    AppLog.instance.trace(
+                      "lib/pages/home_page.dart::_HomePageState.build.closure#1.closure#4",
+                    );
+
+                    return _openBrowse(section.moreCategoryId);
+                  },
                   onRetry: _busy
                       ? null
                       : _pageId == null || _channels.isEmpty
                       ? _loadChannels
                       : () {
                           AppLog.instance.trace(
-                            "lib/pages/home_page.dart::_HomePageState.build.closure#1.closure#3",
+                            "lib/pages/home_page.dart::_HomePageState.build.closure#1.closure#5",
                           );
                           _loadHome(_pageId!, tabId: _tabId);
                         },
@@ -632,6 +683,17 @@ class _HomePageState extends State<HomePage> {
             ),
             const SizedBox(width: 8),
             IconButton(
+              key: const ValueKey('homeBrowseAlbums'),
+              tooltip: '全部专辑',
+              onPressed: () {
+                AppLog.instance.trace(
+                  "lib/pages/home_page.dart::_HomePageState._discoveryHeader.closure#1.closure#1",
+                );
+                return _openBrowse();
+              },
+              icon: const Icon(Icons.grid_view_rounded),
+            ),
+            IconButton(
               tooltip: '刷新首页',
               onPressed: _busy ? null : _loadChannels,
               icon: const Icon(Icons.refresh_rounded),
@@ -663,21 +725,27 @@ class _HomePageState extends State<HomePage> {
 class _HomeFeed extends StatefulWidget {
   const _HomeFeed({
     required this.content,
+    required this.client,
+    required this.categoryId,
     required this.busy,
     required this.error,
     required this.horizontal,
     required this.onRefresh,
     required this.onOpenAlbum,
+    required this.onBrowse,
     required this.onRetry,
     super.key,
   });
 
   final HomeContent? content;
+  final XmlyClient client;
+  final int categoryId;
   final bool busy;
   final String? error;
   final double horizontal;
   final Future<void> Function() onRefresh;
   final ValueChanged<Album>? onOpenAlbum;
+  final ValueChanged<HomeSection> onBrowse;
   final VoidCallback? onRetry;
 
   @override
@@ -702,10 +770,18 @@ class _HomeFeedState extends State<_HomeFeed> {
   Widget build(BuildContext context) {
     AppLog.instance.trace("lib/pages/home_page.dart::_HomeFeedState.build");
 
-    final sections = widget.content?.sections ?? const <HomeSection>[];
+    final sections =
+        widget.content?.sections.where((section) {
+          AppLog.instance.trace(
+            "lib/pages/home_page.dart::_HomeFeedState.build.closure#1",
+          );
+
+          return !section.isRanking;
+        }).toList() ??
+        const <HomeSection>[];
     return RefreshIndicator(
       onRefresh: widget.onRefresh,
-      child: Scrollbar(
+      child: AppScrollbar(
         controller: _scroll,
         child: CustomScrollView(
           controller: _scroll,
@@ -742,7 +818,7 @@ class _HomeFeedState extends State<_HomeFeed> {
                         ),
                       ),
                     )
-                  else if (!widget.busy && sections.isEmpty)
+                  else if (!widget.busy && widget.content == null)
                     const SliverFillRemaining(
                       hasScrollBody: false,
                       child: Center(child: Text('这个频道暂时没有推荐专辑')),
@@ -753,10 +829,25 @@ class _HomeFeedState extends State<_HomeFeed> {
                       ignoring: widget.busy,
                       sliver: SliverMainAxisGroup(
                         slivers: [
+                          if (widget.content != null)
+                            HomeRankingSection(
+                              client: widget.client,
+                              categoryId: widget.categoryId,
+                              onOpenAlbum: widget.onOpenAlbum,
+                            ),
                           for (final section in sections)
                             HomeAlbumSection(
                               section: section,
                               onOpenAlbum: widget.onOpenAlbum,
+                              moreLabel: '全部专辑',
+                              onMore: section.moreCategoryId == null
+                                  ? null
+                                  : () {
+                                      AppLog.instance.trace(
+                                        "lib/pages/home_page.dart::_HomeFeedState.build.closure#2",
+                                      );
+                                      return widget.onBrowse(section);
+                                    },
                             ),
                         ],
                       ),

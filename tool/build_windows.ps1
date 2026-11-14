@@ -26,10 +26,18 @@ $Flutter = Join-Path $SdkRoot 'bin\flutter.bat'
 $Dart = Join-Path $SdkRoot 'bin\dart.bat'
 $UploadSentrySymbols = $env:SENTRY_UPLOAD_SYMBOLS -ceq 'true'
 if ($UploadSentrySymbols) {
-    foreach ($name in @('SENTRY_DSN', 'SENTRY_AUTH_TOKEN')) {
-        if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($name, 'Process'))) {
-            throw "SENTRY_UPLOAD_SYMBOLS=true requires process environment $name before building."
-        }
+    $sentryEnvironment = $env:SENTRY_ENVIRONMENT
+    if ([string]::IsNullOrWhiteSpace($sentryEnvironment)) { $sentryEnvironment = 'production' }
+    $sentryDsn = $env:SENTRY_DSN
+    if ($sentryEnvironment.Trim() -cne 'production' -and
+        -not [string]::IsNullOrWhiteSpace($env:SENTRY_NON_PRODUCTION_DSN)) {
+        $sentryDsn = $env:SENTRY_NON_PRODUCTION_DSN
+    }
+    if ([string]::IsNullOrWhiteSpace($sentryDsn)) {
+        throw 'SENTRY_UPLOAD_SYMBOLS=true requires a DSN for the selected environment.'
+    }
+    if ([string]::IsNullOrWhiteSpace($env:SENTRY_AUTH_TOKEN)) {
+        throw 'SENTRY_UPLOAD_SYMBOLS=true requires process environment SENTRY_AUTH_TOKEN before building.'
     }
 }
 $Utf8 = New-Object System.Text.UTF8Encoding($false)
@@ -361,7 +369,7 @@ try {
         if (Test-Path -LiteralPath $obsolete -PathType Leaf) { Remove-Item -LiteralPath $obsolete }
     }
     $buildArguments = @('build', 'windows', '--release', '--no-pub')
-    foreach ($name in @('SENTRY_DSN', 'SENTRY_ENVIRONMENT')) {
+    foreach ($name in @('SENTRY_DSN', 'SENTRY_NON_PRODUCTION_DSN', 'SENTRY_ENVIRONMENT')) {
         $value = [Environment]::GetEnvironmentVariable($name, 'Process')
         if (-not [string]::IsNullOrWhiteSpace($value)) { $buildArguments += "--dart-define=$name=$value" }
     }
@@ -382,6 +390,7 @@ try {
     $enginePath = Join-Path $SdkRoot 'bin\cache\artifacts\engine\windows-x64-release\flutter_windows.dll'
     $engineHash = File-Hash $enginePath
     Assert-Hash (Join-Path $bundle 'flutter_windows.dll') $engineHash
+    if ($UploadSentrySymbols) { Assert-PlainPath ($enginePath + '.pdb') }
     $mpvFile = @($supplyReceipt.files | Where-Object { $_.path -eq 'runtime/libmpv-2.dll' })[0]
     Assert-Hash (Join-Path $bundle 'libmpv-2.dll') $mpvFile.sha256
     Copy-Tree (Join-Path $NativeSupply 'runtime\tools') (Join-Path $bundle 'tools') 'runtime'
@@ -576,8 +585,25 @@ try {
                 $symbolArguments += "--sentry-define=$key=$value"
             }
         }
-        & $Dart @symbolArguments
-        if ($LASTEXITCODE -ne 0) { throw "Sentry symbol upload failed with code $LASTEXITCODE." }
+        # Flutter keeps its engine PDB in the SDK/ephemeral directory, outside
+        # symbols_path. Stage the PDB beside build outputs only for upload;
+        # engineHash above binds this SDK to the DLL in the packaged runtime.
+        $engineSymbols = Child-Path $source ('build/windows/sentry-engine-' + [Guid]::NewGuid().ToString('N'))
+        $enginePdb = Join-Path $engineSymbols 'flutter_windows.dll.pdb'
+        Ensure-Directory $engineSymbols
+        try {
+            Copy-File ($enginePath + '.pdb') $enginePdb
+            & $Dart @symbolArguments
+            if ($LASTEXITCODE -ne 0) { throw "Sentry symbol upload failed with code $LASTEXITCODE." }
+        } finally {
+            # Both paths are private to this invocation; never traverse links.
+            Assert-PlainPath $engineSymbols
+            if (Test-Path -LiteralPath $enginePdb) {
+                Assert-PlainPath $enginePdb
+                Remove-Item -LiteralPath $enginePdb
+            }
+            Remove-Item -LiteralPath $engineSymbols
+        }
     }
     Write-Host "Bundle: $target"
     Write-Host "ZIP: $targetZip"

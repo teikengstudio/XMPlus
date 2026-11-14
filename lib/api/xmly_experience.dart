@@ -8,8 +8,13 @@ import 'xmly_client.dart';
 import "../services/app_log.dart";
 
 class HomeChannel {
-  const HomeChannel({required this.pageId, required this.title});
+  const HomeChannel({
+    required this.pageId,
+    required this.title,
+    this.categoryId,
+  });
   final int pageId;
+  final int? categoryId;
   final String title;
 }
 
@@ -36,6 +41,7 @@ class HomeSection {
     required this.title,
     required List<Album> albums,
     this.isRanking = false,
+    this.moreCategoryId,
     Map<String, HomeAlbumStats> stats = const {},
   }) : albums = List.unmodifiable(albums),
        stats = Map.unmodifiable(stats) {
@@ -44,6 +50,7 @@ class HomeSection {
   final String title;
   final List<Album> albums;
   final bool isRanking;
+  final int? moreCategoryId;
   final Map<String, HomeAlbumStats> stats;
 }
 
@@ -526,7 +533,13 @@ class XmlyExperience {
       final title = _text(row['title']).trim();
       if (id == null || id <= 0 || title.isEmpty || !ids.add(id))
         throw _invalid;
-      result.add(HomeChannel(pageId: id, title: title));
+      result.add(
+        HomeChannel(
+          pageId: id,
+          title: title,
+          categoryId: _integer(row['categoryId']),
+        ),
+      );
     }
     return List.unmodifiable(result);
   }
@@ -578,7 +591,14 @@ class XmlyExperience {
           rows.add(item['item'] as Map<String, dynamic>);
         }
         if (rows.isNotEmpty)
-          sections.add(_section(_text(module['title']), rows));
+          sections.add(
+            _section(
+              _text(module['title']),
+              rows,
+              moreCategoryId:
+                  _integer(xmlyMap(data['page'])['categoryId']) ?? 0,
+            ),
+          );
       } else if (module['moduleCode'] == 'contentPool') {
         final rows = _list(module['list']);
         if (rows.isNotEmpty)
@@ -592,6 +612,7 @@ class XmlyExperience {
     String title,
     List<dynamic> rows, {
     bool ranking = false,
+    int? moreCategoryId,
   }) {
     AppLog.instance.trace(
       "lib/api/xmly_experience.dart::XmlyExperience._section",
@@ -619,6 +640,7 @@ class XmlyExperience {
       title: title.isEmpty ? (ranking ? '排行榜' : '推荐专辑') : title,
       albums: albums,
       isRanking: ranking,
+      moreCategoryId: moreCategoryId,
       stats: stats,
     );
   }

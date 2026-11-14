@@ -5,6 +5,7 @@ import 'package:flutter/gestures.dart' show PointerDeviceKind;
 import 'package:flutter/material.dart';
 
 import "../../services/app_log.dart";
+import 'app_scrollbar.dart';
 
 const Set<PointerDeviceKind> desktopDragDevices = {
   PointerDeviceKind.touch,
@@ -18,7 +19,37 @@ const Set<PointerDeviceKind> desktopDragDevices = {
 class CustomScrollBehavior extends MaterialScrollBehavior {
   const CustomScrollBehavior();
 
-  // Keep Material's desktop scrollbar rather than suppressing it upstream.
+  @override
+  Widget buildScrollbar(
+    BuildContext context,
+    Widget child,
+    ScrollableDetails details,
+  ) {
+    AppLog.instance.trace(
+      "lib/common/widgets/scroll_behavior.dart::CustomScrollBehavior.buildScrollbar",
+    );
+
+    if (axisDirectionToAxis(details.direction) == Axis.horizontal) return child;
+    final scrollbar = context.findAncestorStateOfType<RawScrollbarState>();
+    // A primary ScrollView inserts PrimaryScrollController.none below itself.
+    // Resolve at the explicit scrollbar, before that boundary, to avoid twins.
+    final controller =
+        scrollbar?.widget.controller ??
+        (scrollbar == null
+            ? null
+            : PrimaryScrollController.maybeOf(scrollbar.context));
+    if (scrollbar != null && controller == details.controller) {
+      return child;
+    }
+    return switch (getPlatform(context)) {
+      TargetPlatform.windows || TargetPlatform.linux || TargetPlatform.macOS =>
+        AppScrollbar(controller: details.controller, child: child),
+      TargetPlatform.android ||
+      TargetPlatform.iOS ||
+      TargetPlatform.fuchsia => child,
+    };
+  }
+
   @override
   Widget buildOverscrollIndicator(
     BuildContext context,
@@ -29,7 +60,8 @@ class CustomScrollBehavior extends MaterialScrollBehavior {
       "lib/common/widgets/scroll_behavior.dart::CustomScrollBehavior.buildOverscrollIndicator",
     );
 
-    if (getPlatform(context) == TargetPlatform.android) {
+    if (getPlatform(context) == TargetPlatform.android &&
+        !MediaQuery.disableAnimationsOf(context)) {
       return StretchingOverscrollIndicator(
         axisDirection: details.direction,
         clipBehavior: details.decorationClipBehavior ?? Clip.hardEdge,

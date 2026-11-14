@@ -17,11 +17,21 @@ abstract final class ErrorReporting {
   static ValueListenable<ErrorReportingStatus> get status => _status;
 }
 
-const _dsn = String.fromEnvironment('SENTRY_DSN');
-const _environment = String.fromEnvironment(
+const _productionDsn = String.fromEnvironment('SENTRY_DSN');
+const _nonProductionDsn = String.fromEnvironment('SENTRY_NON_PRODUCTION_DSN');
+const _configuredEnvironment = String.fromEnvironment(
   'SENTRY_ENVIRONMENT',
   defaultValue: kReleaseMode ? 'production' : 'development',
 );
+final _environment = _configuredEnvironment.trim().isEmpty
+    ? (kReleaseMode ? 'production' : 'development')
+    : _configuredEnvironment.trim();
+// Select the project before SDK initialization so native crashes, sessions and
+// Dart events all use the same destination. Shared projects retain environment
+// separation when no dedicated non-production DSN has been configured.
+final _dsn = _environment != 'production' && _nonProductionDsn.trim().isNotEmpty
+    ? _nonProductionDsn.trim()
+    : _productionDsn.trim();
 const _diagnosticBytes = 64 * 1024;
 final _globalErrorKey = Object();
 bool _insideTelemetry = false;

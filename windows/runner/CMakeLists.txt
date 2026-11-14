@@ -14,6 +14,7 @@ add_executable(${BINARY_NAME} WIN32
   "flutter_window.cpp"
   "main.cpp"
   "system_media_controls.cpp"
+  "taskbar_controls.cpp"
   "utils.cpp"
   "win32_window.cpp"
   "${FLUTTER_MANAGED_DIR}/generated_plugin_registrant.cc"
@@ -40,6 +41,7 @@ target_compile_definitions(${BINARY_NAME} PRIVATE "NOMINMAX")
 target_link_libraries(${BINARY_NAME} PRIVATE flutter flutter_wrapper_app)
 target_link_libraries(${BINARY_NAME} PRIVATE "dwmapi.lib")
 target_link_libraries(${BINARY_NAME} PRIVATE "windowsapp.lib")
+target_link_libraries(${BINARY_NAME} PRIVATE "ole32.lib" "uuid.lib" "gdi32.lib")
 # C++/WinRT asynchronous artwork loading uses the SDK's C++17 coroutine support.
 set_source_files_properties("system_media_controls.cpp" PROPERTIES COMPILE_OPTIONS "/await")
 target_include_directories(${BINARY_NAME} PRIVATE "${CMAKE_SOURCE_DIR}")
