@@ -18,7 +18,29 @@ const Set<PointerDeviceKind> desktopDragDevices = {
 class CustomScrollBehavior extends MaterialScrollBehavior {
   const CustomScrollBehavior();
 
-  // Keep Material's desktop scrollbar rather than suppressing it upstream.
+  @override
+  Widget buildScrollbar(
+    BuildContext context,
+    Widget child,
+    ScrollableDetails details,
+  ) {
+    AppLog.instance.trace(
+      "lib/common/widgets/scroll_behavior.dart::CustomScrollBehavior.buildScrollbar",
+    );
+
+    final material = context.findAncestorWidgetOfExactType<Scrollbar>();
+    final raw = context.findAncestorWidgetOfExactType<RawScrollbar>();
+    final controller = material != null ? material.controller : raw?.controller;
+    if ((material != null || raw != null) &&
+        (controller == details.controller ||
+            controller == null &&
+                details.controller ==
+                    PrimaryScrollController.maybeOf(context))) {
+      return child;
+    }
+    return super.buildScrollbar(context, child, details);
+  }
+
   @override
   Widget buildOverscrollIndicator(
     BuildContext context,
@@ -29,7 +51,8 @@ class CustomScrollBehavior extends MaterialScrollBehavior {
       "lib/common/widgets/scroll_behavior.dart::CustomScrollBehavior.buildOverscrollIndicator",
     );
 
-    if (getPlatform(context) == TargetPlatform.android) {
+    if (getPlatform(context) == TargetPlatform.android &&
+        !MediaQuery.disableAnimationsOf(context)) {
       return StretchingOverscrollIndicator(
         axisDirection: details.direction,
         clipBehavior: details.decorationClipBehavior ?? Clip.hardEdge,

@@ -27,7 +27,7 @@ class AppTabButton extends StatelessWidget {
     final colors = theme.colorScheme;
     final duration = MediaQuery.disableAnimationsOf(context)
         ? Duration.zero
-        : const Duration(milliseconds: 180);
+        : const Duration(milliseconds: 160);
     return Semantics(
       selected: selected,
       inMutuallyExclusiveGroup: true,
@@ -35,20 +35,56 @@ class AppTabButton extends StatelessWidget {
         constraints: const BoxConstraints(maxWidth: 240),
         child: TextButton(
           onPressed: onPressed,
-          style: TextButton.styleFrom(
-            minimumSize: const Size(48, 48),
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-            foregroundColor: selected
-                ? colors.primary
-                : colors.onSurfaceVariant,
-            textStyle: theme.textTheme.labelLarge?.copyWith(
-              fontSize: 14,
-              fontWeight: FontWeight.w500,
-            ),
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(10),
-            ),
-          ).copyWith(animationDuration: duration),
+          style:
+              TextButton.styleFrom(
+                minimumSize: const Size(48, 48),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 14,
+                  vertical: 8,
+                ),
+                foregroundColor: selected
+                    ? colors.primary
+                    : colors.onSurfaceVariant,
+                backgroundColor: selected
+                    ? colors.primary.withValues(alpha: .055)
+                    : Colors.transparent,
+                textStyle: theme.textTheme.labelLarge?.copyWith(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w500,
+                ),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(10),
+                ),
+              ).copyWith(
+                animationDuration: duration,
+                overlayColor: WidgetStateProperty.resolveWith((states) {
+                  AppLog.instance.trace(
+                    "lib/common/widgets/app_tab_button.dart::AppTabButton.build.closure#1",
+                  );
+
+                  if (states.contains(WidgetState.focused)) {
+                    return colors.primary.withValues(alpha: .12);
+                  }
+                  if (states.contains(WidgetState.pressed)) {
+                    return colors.primary.withValues(alpha: .09);
+                  }
+                  if (states.contains(WidgetState.hovered)) {
+                    return colors.primary.withValues(alpha: .04);
+                  }
+                  return Colors.transparent;
+                }),
+                side: WidgetStateProperty.resolveWith((states) {
+                  AppLog.instance.trace(
+                    "lib/common/widgets/app_tab_button.dart::AppTabButton.build.closure#2",
+                  );
+
+                  return BorderSide(
+                    color: states.contains(WidgetState.focused)
+                        ? colors.primary.withValues(alpha: .5)
+                        : Colors.transparent,
+                  );
+                }),
+              ),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
@@ -72,16 +108,21 @@ class AppTabButton extends StatelessWidget {
               SizedBox(
                 width: 22,
                 height: 3,
-                child: AnimatedOpacity(
-                  opacity: selected ? 1 : 0,
+                child: AnimatedScale(
+                  scale: selected ? 1 : .6,
                   duration: duration,
                   curve: Curves.easeOutCubic,
-                  child: DecoratedBox(
-                    decoration: BoxDecoration(
-                      color: onPressed == null
-                          ? colors.onSurface.withValues(alpha: .38)
-                          : colors.primary,
-                      borderRadius: BorderRadius.circular(2),
+                  child: AnimatedOpacity(
+                    opacity: selected ? 1 : 0,
+                    duration: duration,
+                    curve: Curves.easeOutCubic,
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        color: onPressed == null
+                            ? colors.onSurface.withValues(alpha: .38)
+                            : colors.primary,
+                        borderRadius: BorderRadius.circular(2),
+                      ),
                     ),
                   ),
                 ),
@@ -94,7 +135,7 @@ class AppTabButton extends StatelessWidget {
   }
 }
 
-/// Keeps category rows at one height and makes overflow visible on desktop.
+/// Keeps category rows at one height with a draggable overflow indicator.
 class AppTabStrip extends StatefulWidget {
   const AppTabStrip({required this.children, super.key});
 
@@ -131,11 +172,8 @@ class _AppTabStripState extends State<AppTabStrip> {
       behavior: ScrollConfiguration.of(context).copyWith(scrollbars: false),
       child: Scrollbar(
         controller: _scroll,
-        thumbVisibility: true,
         interactive: true,
         scrollbarOrientation: ScrollbarOrientation.bottom,
-        thickness: 3,
-        radius: const Radius.circular(3),
         child: SingleChildScrollView(
           controller: _scroll,
           primary: false,

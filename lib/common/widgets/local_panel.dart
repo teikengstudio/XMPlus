@@ -14,6 +14,17 @@ Future<T?> showLocalPanel<T>({
   bool showHeader = true,
 }) {
   AppLog.instance.trace("lib/common/widgets/local_panel.dart::showLocalPanel");
+  final theme = Theme.of(context);
+  final colors = theme.colorScheme;
+  final dark = theme.brightness == Brightness.dark;
+  final animationStyle = MediaQuery.disableAnimationsOf(context)
+      ? AnimationStyle.noAnimation
+      : const AnimationStyle(
+          duration: Duration(milliseconds: 180),
+          reverseDuration: Duration(milliseconds: 140),
+          curve: Curves.easeOutCubic,
+          reverseCurve: Curves.easeInCubic,
+        );
 
   Widget frame(BuildContext context) {
     AppLog.instance.trace(
@@ -64,7 +75,8 @@ Future<T?> showLocalPanel<T>({
   if (MediaQuery.sizeOf(context).width >= 700) {
     return showDialog<T>(
       context: context,
-      barrierColor: Theme.of(context).colorScheme.scrim.withValues(alpha: 0.16),
+      barrierColor: colors.scrim.withValues(alpha: dark ? .28 : .14),
+      animationStyle: animationStyle,
       builder: (context) {
         AppLog.instance.trace(
           "lib/common/widgets/local_panel.dart::showLocalPanel.closure#1",
@@ -72,11 +84,14 @@ Future<T?> showLocalPanel<T>({
         return Dialog(
           alignment: Alignment.centerRight,
           insetPadding: const EdgeInsets.fromLTRB(24, 64, 20, 24),
-          elevation: 8,
-          shadowColor: Colors.black.withValues(alpha: 0.18),
+          elevation: 12,
+          shadowColor: colors.shadow.withValues(alpha: dark ? .28 : .12),
           surfaceTintColor: Colors.transparent,
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(20),
+            side: BorderSide(
+              color: colors.outlineVariant.withValues(alpha: .55),
+            ),
           ),
           clipBehavior: Clip.antiAlias,
           constraints: BoxConstraints(maxWidth: width),
@@ -89,6 +104,7 @@ Future<T?> showLocalPanel<T>({
     context: context,
     useRootNavigator: true,
     isScrollControlled: true,
+    sheetAnimationStyle: animationStyle,
     // Drag dismissal calls pop directly and bypasses forms' saving PopScopes.
     enableDrag: false,
     useSafeArea: true,

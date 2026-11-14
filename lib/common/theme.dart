@@ -194,6 +194,7 @@ ThemeData getThemeData({
   AppLog.instance.trace("lib/common/theme.dart::getThemeData");
 
   const fontFamily = 'HarmonyOS Sans SC';
+  final dark = brightness == Brightness.dark;
   final isOled = brightness == Brightness.dark && oledBlack;
   var colorScheme = ColorScheme.fromSeed(
     seedColor: seedColor,
@@ -222,7 +223,10 @@ ThemeData getThemeData({
       RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
     ),
     shadowColor: const WidgetStatePropertyAll(Colors.transparent),
+    animationDuration: const Duration(milliseconds: 160),
   );
+  final surfaceEdge = colorScheme.outlineVariant.withValues(alpha: .55);
+  final softShadow = colorScheme.shadow.withValues(alpha: dark ? .28 : .12);
   return ThemeData(
     useMaterial3: true,
     colorScheme: colorScheme,
@@ -230,6 +234,10 @@ ThemeData getThemeData({
     scaffoldBackgroundColor: colorScheme.surface,
     canvasColor: colorScheme.surface,
     materialTapTargetSize: MaterialTapTargetSize.padded,
+    splashFactory: NoSplash.splashFactory,
+    hoverColor: colorScheme.onSurface.withValues(alpha: .04),
+    focusColor: colorScheme.primary.withValues(alpha: .1),
+    highlightColor: colorScheme.onSurface.withValues(alpha: .06),
     textTheme: const TextTheme(
       bodyLarge: TextStyle(fontSize: 15),
       bodyMedium: TextStyle(fontSize: 14),
@@ -248,6 +256,8 @@ ThemeData getThemeData({
       builders: {
         ...const PageTransitionsTheme().builders,
         TargetPlatform.android: const _FadePageTransitionsBuilder(),
+        TargetPlatform.windows: const _FadePageTransitionsBuilder(),
+        TargetPlatform.linux: const _FadePageTransitionsBuilder(),
       },
     ),
     appBarTheme: AppBarTheme(
@@ -265,11 +275,72 @@ ThemeData getThemeData({
       ),
     ),
     navigationBarTheme: NavigationBarThemeData(
-      backgroundColor: isOled ? Colors.black : colorScheme.surfaceContainer,
+      backgroundColor: isOled ? Colors.black : colorScheme.surfaceContainerLow,
       surfaceTintColor: Colors.transparent,
+      indicatorColor: colorScheme.primary.withValues(alpha: .1),
+      indicatorShape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+      ),
+      iconTheme: WidgetStateProperty.resolveWith((states) {
+        AppLog.instance.trace("lib/common/theme.dart::getThemeData.closure#1");
+
+        return IconThemeData(
+          color: states.contains(WidgetState.selected)
+              ? colorScheme.primary
+              : colorScheme.onSurfaceVariant,
+        );
+      }),
     ),
     navigationRailTheme: NavigationRailThemeData(
       backgroundColor: colorScheme.surface,
+      indicatorShape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+      ),
+    ),
+    tabBarTheme: TabBarThemeData(
+      dividerHeight: 0,
+      indicatorSize: TabBarIndicatorSize.label,
+      indicatorAnimation: TabIndicatorAnimation.linear,
+      indicator: UnderlineTabIndicator(
+        borderSide: BorderSide(color: colorScheme.primary, width: 2),
+        borderRadius: BorderRadius.circular(2),
+      ),
+      labelColor: colorScheme.onSurface,
+      unselectedLabelColor: colorScheme.onSurfaceVariant,
+      labelStyle: const TextStyle(fontWeight: FontWeight.w600),
+      unselectedLabelStyle: const TextStyle(fontWeight: FontWeight.w500),
+    ),
+    scrollbarTheme: ScrollbarThemeData(
+      thumbVisibility: WidgetStateProperty.resolveWith((states) {
+        AppLog.instance.trace("lib/common/theme.dart::getThemeData.closure#2");
+
+        return states.contains(WidgetState.hovered) ||
+            states.contains(WidgetState.dragged);
+      }),
+      trackVisibility: const WidgetStatePropertyAll(false),
+      thickness: WidgetStateProperty.resolveWith((states) {
+        AppLog.instance.trace("lib/common/theme.dart::getThemeData.closure#3");
+
+        return states.contains(WidgetState.hovered) ||
+                states.contains(WidgetState.dragged)
+            ? 5.0
+            : 3.0;
+      }),
+      thumbColor: WidgetStateProperty.resolveWith((states) {
+        AppLog.instance.trace("lib/common/theme.dart::getThemeData.closure#4");
+
+        final opacity = states.contains(WidgetState.dragged)
+            ? .62
+            : states.contains(WidgetState.hovered)
+            ? .42
+            : .24;
+        return colorScheme.onSurfaceVariant.withValues(alpha: opacity);
+      }),
+      radius: const Radius.circular(6),
+      crossAxisMargin: 3,
+      mainAxisMargin: 4,
+      minThumbLength: 36,
+      interactive: true,
     ),
     snackBarTheme: SnackBarThemeData(
       elevation: 0,
@@ -284,23 +355,34 @@ ThemeData getThemeData({
     popupMenuTheme: PopupMenuThemeData(
       position: PopupMenuPosition.under,
       surfaceTintColor: Colors.transparent,
-      elevation: 6,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+      elevation: 8,
+      shadowColor: softShadow,
+      color: colorScheme.surface,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(14),
+        side: BorderSide(color: surfaceEdge),
+      ),
     ),
     cardTheme: CardThemeData(
-      elevation: 0,
+      elevation: isOled ? 0 : .5,
       margin: EdgeInsets.zero,
       color: colorScheme.surfaceContainerLow,
-      shadowColor: Colors.transparent,
+      shadowColor: softShadow,
       surfaceTintColor: Colors.transparent,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(18),
-        side: BorderSide(color: colorScheme.outlineVariant),
+        side: BorderSide(color: surfaceEdge),
       ),
     ),
     dialogTheme: DialogThemeData(
-      elevation: 0,
+      elevation: 12,
+      shadowColor: softShadow,
       surfaceTintColor: Colors.transparent,
+      barrierColor: colorScheme.scrim.withValues(alpha: dark ? .32 : .2),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(18),
+        side: BorderSide(color: surfaceEdge),
+      ),
       titleTextStyle: TextStyle(
         fontFamily: fontFamily,
         fontSize: 18,
@@ -318,15 +400,31 @@ ThemeData getThemeData({
         borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
       ),
     ),
-    tooltipTheme: const TooltipThemeData(
+    tooltipTheme: TooltipThemeData(
+      waitDuration: const Duration(milliseconds: 700),
+      exitDuration: const Duration(milliseconds: 100),
+      showDuration: const Duration(seconds: 2),
+      preferBelow: false,
+      verticalOffset: 20,
+      constraints: const BoxConstraints(minHeight: 24, maxWidth: 240),
+      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
+      margin: const EdgeInsets.symmetric(horizontal: 12),
       textStyle: TextStyle(
         fontFamily: fontFamily,
-        fontSize: 14,
-        color: Colors.white,
+        fontSize: 12,
+        height: 1.2,
+        color: colorScheme.onInverseSurface,
       ),
       decoration: BoxDecoration(
-        color: Color(0xE6616161),
-        borderRadius: BorderRadius.all(Radius.circular(4)),
+        color: colorScheme.inverseSurface.withValues(alpha: .94),
+        borderRadius: BorderRadius.circular(6),
+        boxShadow: [
+          BoxShadow(
+            color: softShadow,
+            blurRadius: 12,
+            offset: const Offset(0, 2),
+          ),
+        ],
       ),
     ),
     expansionTileTheme: const ExpansionTileThemeData(
@@ -373,7 +471,7 @@ class _FadePageTransitionsBuilder extends PageTransitionsBuilder {
     AppLog.instance.trace(
       "lib/common/theme.dart::_FadePageTransitionsBuilder.transitionDuration.get",
     );
-    return const Duration(milliseconds: 200);
+    return const Duration(milliseconds: 180);
   }
 
   @override
@@ -387,6 +485,13 @@ class _FadePageTransitionsBuilder extends PageTransitionsBuilder {
     AppLog.instance.trace(
       "lib/common/theme.dart::_FadePageTransitionsBuilder.buildTransitions",
     );
+    if (Theme.of(context).platform != TargetPlatform.android) {
+      if (MediaQuery.disableAnimationsOf(context)) return child;
+      return FadeTransition(
+        opacity: animation.drive(CurveTween(curve: Curves.easeOutCubic)),
+        child: child,
+      );
+    }
     return _PredictiveBackFadeTransition(
       route: route,
       animation: animation,
@@ -484,6 +589,7 @@ class _PredictiveBackFadeTransitionState
     AppLog.instance.trace(
       "lib/common/theme.dart::_PredictiveBackFadeTransitionState.build",
     );
+    if (MediaQuery.disableAnimationsOf(context)) return widget.child;
     return FadeTransition(opacity: widget.animation, child: widget.child);
   }
 }

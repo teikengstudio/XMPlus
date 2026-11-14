@@ -42,7 +42,7 @@ class _ContentCrossFadeState extends State<ContentCrossFade>
     }
     final controller = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 260),
+      duration: const Duration(milliseconds: 180),
       value: animate ? 0 : 1,
     );
     final layer = _ContentLayer(widget.child, controller);
@@ -160,7 +160,7 @@ class _ContentLayer {
   _ContentLayer(this.child, this.controller)
     : opacity = CurvedAnimation(
         parent: controller,
-        curve: Curves.easeInOutCubic,
+        curve: Curves.easeOutCubic,
       ) {
     AppLog.instance.trace(
       "lib/common/widgets/content_cross_fade.dart::_ContentLayer.new",
