@@ -184,6 +184,8 @@ class XmlyClient {
             '/revision/album/v1/simple',
             '/revision/category/v2/allCategory',
             '/revision/category/v2/albums',
+            '/revision/rank/v3/cluster',
+            '/revision/rank/v3/element',
           }.contains(path);
     if (origin == collector)
       return method == 'POST' && path == '/nyx/v1/history/merge/android';

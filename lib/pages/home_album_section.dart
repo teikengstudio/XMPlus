@@ -13,6 +13,7 @@ class HomeAlbumSection extends StatelessWidget {
     required this.section,
     required this.onOpenAlbum,
     this.onMore,
+    this.moreLabel = '更多',
     this.showTitle = true,
     super.key,
   });
@@ -20,6 +21,7 @@ class HomeAlbumSection extends StatelessWidget {
   final HomeSection section;
   final ValueChanged<Album>? onOpenAlbum;
   final VoidCallback? onMore;
+  final String moreLabel;
   final bool showTitle;
 
   @override
@@ -68,7 +70,7 @@ class HomeAlbumSection extends StatelessWidget {
                             ),
                             const SizedBox(width: 8),
                             Text(
-                              '更多',
+                              moreLabel,
                               style: theme.textTheme.labelMedium?.copyWith(
                                 color: theme.colorScheme.onSurfaceVariant,
                               ),
