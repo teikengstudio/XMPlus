@@ -787,7 +787,7 @@ class XmlyExperience {
       "lib/api/xmly_experience.dart::XmlyExperience._mutationSuccess",
     );
 
-    // request() checks nonzero ret; mutations also require an explicit success.
+    // Mutations require explicit success, not merely an accepted response.
     if (_integer(response['ret']) != 0) throw _invalid;
   }
 
@@ -808,6 +808,7 @@ class XmlyExperience {
       },
       form: true,
     );
+    if (liked && _integer(response['ret']) == 111) return;
     _mutationSuccess(response);
   }
 

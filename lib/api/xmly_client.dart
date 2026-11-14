@@ -732,7 +732,13 @@ class XmlyClient {
       }
       final code = '${payload['ret'] ?? 0}';
       diagnostic.apiCode = int.tryParse(code);
-      if (code != (origin == searchOrigin ? '200' : '0')) {
+      final alreadyLiked =
+          code == '111' &&
+          method == 'POST' &&
+          origin == mobile &&
+          path == '/favourite-business/favorite/track' &&
+          data?['favorite'] == 'true';
+      if (code != (origin == searchOrigin ? '200' : '0') && !alreadyLiked) {
         diagnostic.apiRejected = true;
         if (code == '429') _rateLimit(origin, const Duration(seconds: 30));
         if (code == '401') {
