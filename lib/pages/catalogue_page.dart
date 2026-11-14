@@ -156,15 +156,18 @@ class _DiscoveryPageState extends State<DiscoveryPage> {
       );
 
       final submittedQuery = query ?? _query.text;
+      final invalidQuery =
+          submittedQuery.trim().isEmpty || submittedQuery.length > 200;
       final generation = ++_generation;
       setState(() {
         AppLog.instance.trace(
           "lib/pages/catalogue_page.dart::_DiscoveryPageState._search.closure#1.closure#1",
         );
 
-        _loading = true;
-        _error = null;
+        _loading = !invalidQuery;
+        _error = invalidQuery ? '请输入 1～200 字的关键词' : null;
       });
+      if (invalidQuery) return;
       try {
         final result = await widget.runtime.client.search(
           submittedQuery,

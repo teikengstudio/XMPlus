@@ -732,24 +732,48 @@ class XmlyClient {
       }
       final code = '${payload['ret'] ?? 0}';
       diagnostic.apiCode = int.tryParse(code);
-      if (code != (origin == searchOrigin ? '200' : '0')) {
+      final alreadyLiked =
+          code == '111' &&
+          method == 'POST' &&
+          origin == mobile &&
+          path == '/favourite-business/favorite/track' &&
+          data?['favorite'] == 'true';
+      if (code != (origin == searchOrigin ? '200' : '0') && !alreadyLiked) {
         diagnostic.apiRejected = true;
-        if (code == '429') _rateLimit(origin, const Duration(seconds: 30));
-        if (code == '401') {
-          if (authenticated) _expire();
-          throw const XmlyException(
-            'login_expired',
-            '登录信息已失效，请重新登录',
-            definitive: true,
+        try {
+          if (code == '429') _rateLimit(origin, const Duration(seconds: 30));
+          if (code == '401') {
+            if (authenticated) _expire();
+            throw const XmlyException(
+              'login_expired',
+              '登录信息已失效，请重新登录',
+              definitive: true,
+            );
+          }
+          if (['5', '403', '726'].contains(code))
+            throw const XmlyException(
+              'permission_denied',
+              '未获得本次请求的完整权限，请检查账号、听时和版权限制',
+              definitive: true,
+            );
+          throw const XmlyException('rejected', '喜马拉雅拒绝了请求', definitive: true);
+        } on XmlyException catch (error, stack) {
+          if (origin != paidOrigin ||
+              method != 'GET' ||
+              !RegExp(r'^/mobile/track/pay/[1-9][0-9]{0,18}/ts-[0-9]+$')
+                  .hasMatch(path)) {
+            rethrow;
+          }
+          Error.throwWithStackTrace(
+            _paidAuthorizationFailure(
+              error,
+              payload,
+              stage: 'api_ret',
+              trackId: path.split('/')[4],
+            ),
+            stack,
           );
         }
-        if (['5', '403', '726'].contains(code))
-          throw const XmlyException(
-            'permission_denied',
-            '未获得本次请求的完整权限，请检查账号、听时和版权限制',
-            definitive: true,
-          );
-        throw const XmlyException('rejected', '喜马拉雅拒绝了请求', definitive: true);
       }
       return payload;
     } catch (error, stack) {
@@ -1622,45 +1646,172 @@ class XmlyClient {
         AppLogLevel.debug,
         'api',
         'XmlyClient.paidAudio parameters',
+        localOnly: true,
         data: {'trackId': trackId},
       );
     }
 
-    if (metadata['ret'] != 0)
-      throw const XmlyException(
-        'permission_denied',
-        '未获得付费声音的完整权限',
-        definitive: true,
+    var stage = 'ret';
+    try {
+      if (metadata['ret'] != 0)
+        throw const XmlyException(
+          'permission_denied',
+          '未获得付费声音的完整权限',
+          definitive: true,
+        );
+      stage = 'track_id';
+      _matchingId(metadata, xmlyIdentifier(trackId));
+      stage = 'album_id';
+      if ('${metadata['albumId'] ?? ''}' != xmlyIdentifier(albumId))
+        throw const XmlyException(
+          'id_mismatch',
+          '返回的专辑 ID 不匹配',
+          definitive: true,
+        );
+      stage = 'is_authorized';
+      if (metadata['isAuthorized'] != true)
+        throw const XmlyException(
+          'permission_denied',
+          '未获得付费声音的完整权限',
+          definitive: true,
+        );
+      stage = 'preview_flags';
+      if (metadata['isPreview'] == true || metadata['isTrial'] == true)
+        throw const XmlyException(
+          'preview_only',
+          '仅获得试听音频，不能下载完整声音',
+          definitive: true,
+        );
+      stage = 'paid_media_url';
+      final url = XmlyCrypto.paidMediaUrl(metadata, uid: uid);
+      stage = 'media_uri';
+      final uri = mediaUri(url);
+      stage = 'preview_path';
+      if (uri.path.toLowerCase().contains('_preview_'))
+        throw const XmlyException(
+          'preview_only',
+          '仅获得试听音频，不能下载完整声音',
+          definitive: true,
+        );
+      // Official parseChargeJsonAndGetUrl selects the default 64-kbit resource,
+      // not the requested quality or highestQualityLevel (which is only a ceiling).
+      return (
+        uri: uri,
+        quality: uri.path.endsWith('.m4a') ? 'm4a_64' : 'mp3_64',
       );
-    _matchingId(metadata, xmlyIdentifier(trackId));
-    if ('${metadata['albumId'] ?? ''}' != xmlyIdentifier(albumId))
-      throw const XmlyException(
-        'id_mismatch',
-        '返回的专辑 ID 不匹配',
-        definitive: true,
+    } on XmlyException catch (error, stack) {
+      Error.throwWithStackTrace(
+        _paidAuthorizationFailure(
+          error,
+          metadata,
+          stage: stage,
+          trackId: trackId,
+          albumId: albumId,
+        ),
+        stack,
       );
-    if (metadata['isAuthorized'] != true)
-      throw const XmlyException(
-        'permission_denied',
-        '未获得付费声音的完整权限',
-        definitive: true,
+    }
+  }
+
+  static XmlyException _paidAuthorizationFailure(
+    XmlyException error,
+    Map<String, dynamic> metadata, {
+    required String stage,
+    String? trackId,
+    String? albumId,
+  }) {
+    AppLog.instance.trace(
+      'lib/api/xmly_client.dart::XmlyClient._paidAuthorizationFailure',
+    );
+
+    Map<String, Object?> field(String key) {
+      AppLog.instance.trace(
+        'lib/api/xmly_client.dart::XmlyClient._paidAuthorizationFailure.field',
       );
-    if (metadata['isPreview'] == true || metadata['isTrial'] == true)
-      throw const XmlyException(
-        'preview_only',
-        '仅获得试听音频，不能下载完整声音',
-        definitive: true,
+      final value = metadata[key];
+      return {
+        'present': metadata.containsKey(key),
+        'type': value.runtimeType.toString(),
+        'isNull': value == null,
+        if (value is String) 'length': value.length,
+        if (value is String) 'empty': value.isEmpty,
+        if (value is List) 'empty': value.isEmpty,
+        if (value is Map) 'empty': value.isEmpty,
+        if (key == 'duration')
+          'valid':
+              value is num &&
+              value.isFinite &&
+              value > 0 &&
+              value <= 2147483647 &&
+              value == value.toInt(),
+        if (key == 'ret' &&
+            (value is bool ||
+                (value is num && value.isFinite && value.abs() <= 2147483647) ||
+                (value is String &&
+                    value.length <= 11 &&
+                    RegExp(r'^-?[0-9]+$').hasMatch(value) &&
+                    (int.tryParse(value)?.abs() ?? 2147483648) <= 2147483647)))
+          'value': value,
+        if (const ['isAuthorized', 'isPreview', 'isTrial'].contains(key) &&
+            (value is bool ||
+                (value is num && (value == 0 || value == 1)) ||
+                (value is String &&
+                    const ['true', 'false', '0', '1'].contains(value))))
+          'value': value,
+      };
+    }
+
+    bool? matches(Object? value, String? requested) {
+      AppLog.instance.trace(
+        'lib/api/xmly_client.dart::XmlyClient._paidAuthorizationFailure.matches',
       );
-    final uri = mediaUri(XmlyCrypto.paidMediaUrl(metadata, uid: uid));
-    if (uri.path.toLowerCase().contains('_preview_'))
-      throw const XmlyException(
-        'preview_only',
-        '仅获得试听音频，不能下载完整声音',
-        definitive: true,
-      );
-    // Official parseChargeJsonAndGetUrl selects the default 64-kbit resource,
-    // not the requested quality or highestQualityLevel (which is only a ceiling).
-    return (uri: uri, quality: uri.path.endsWith('.m4a') ? 'm4a_64' : 'mp3_64');
+      if (requested == null) return null;
+      final expected = requested.startsWith('xmly:')
+          ? requested.substring(5)
+          : requested;
+      return (value is String || value is num) && '$value' == expected;
+    }
+
+    final failure = XmlyException(
+      error.code,
+      error.message,
+      retryAfter: error.retryAfter,
+      definitive: error.definitive,
+      fingerprint: error.fingerprint,
+      diagnostics: {
+        ...?error.diagnostics,
+        'paidAuthorization': {
+          'method': 'GET',
+          'endpoint': '/mobile/track/pay/{trackId}/ts-{timestamp}',
+          'httpStatus': 200,
+          'stage': stage,
+          'trackMatches': matches(
+            metadata['trackId'] ?? metadata['id'],
+            trackId,
+          ),
+          'albumMatches': matches(metadata['albumId'], albumId),
+          'fields': {
+            for (final key in const [
+              'ret',
+              'isAuthorized',
+              'isPreview',
+              'isTrial',
+              'trackId',
+              'id',
+              'albumId',
+              'domain',
+              'apiVersion',
+              'fileId',
+              'ep',
+              'duration',
+            ])
+              key: field(key),
+          },
+        },
+      },
+    );
+    AppLog.instance.linkError(failure, error);
+    return failure;
   }
 
   static final _mediaRedirectPath = RegExp(
