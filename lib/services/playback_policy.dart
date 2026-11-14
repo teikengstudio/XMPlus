@@ -1,3 +1,5 @@
+import 'dart:math';
+
 import "app_log.dart";
 
 /// Pure playback decisions. Device commands and actual listening accounting live
@@ -97,8 +99,8 @@ class PlaybackSettings {
     }
 
     final loop = value('loopMode', 'off');
-    if (loop != 'off' && loop != 'single') {
-      throw const FormatException('循环方式必须为 off 或 single');
+    if (!const {'off', 'single', 'all', 'shuffle'}.contains(loop)) {
+      throw const FormatException('播放方式无效');
     }
     final masterVolume = global['masterVolume'] ?? 100;
     if (masterVolume is! num ||
@@ -143,6 +145,72 @@ class PlaybackSettings {
       'masterVolume': masterVolume,
       'masterMuted': masterMuted,
     };
+  }
+}
+
+/// Shuffle without immediate repeats, with history for previous/next controls.
+class PlaybackShuffle {
+  PlaybackShuffle({Random? random}) : _random = random ?? Random() {
+    AppLog.instance.trace(
+      "lib/services/playback_policy.dart::PlaybackShuffle.new",
+    );
+  }
+  final Random _random;
+  List<String> _items = [], _remaining = [], _history = [];
+  int _cursor = 0;
+
+  void reset() {
+    AppLog.instance.trace(
+      "lib/services/playback_policy.dart::PlaybackShuffle.reset",
+    );
+
+    _items = [];
+    _remaining = [];
+    _history = [];
+    _cursor = 0;
+  }
+
+  String pick(List<String> items, String current, {bool previous = false}) {
+    AppLog.instance.trace(
+      "lib/services/playback_policy.dart::PlaybackShuffle.pick",
+    );
+
+    if (items.isEmpty || !items.contains(current)) {
+      throw ArgumentError('当前声音不在播放列表中');
+    }
+    var same = items.length == _items.length;
+    for (var i = 0; same && i < items.length; i++) {
+      same = items[i] == _items[i];
+    }
+    if (!same || _history.isEmpty || _history[_cursor] != current) {
+      _items = List.of(items);
+      _history = [current];
+      _cursor = 0;
+      _remaining = items.where((id) {
+        AppLog.instance.trace(
+          "lib/services/playback_policy.dart::PlaybackShuffle.pick.closure#1",
+        );
+        return id != current;
+      }).toList()..shuffle(_random);
+    }
+    if (previous) return _history[_cursor > 0 ? --_cursor : _cursor];
+    if (_cursor + 1 < _history.length) return _history[++_cursor];
+    if (_remaining.isEmpty) {
+      _remaining = items.where((id) {
+        AppLog.instance.trace(
+          "lib/services/playback_policy.dart::PlaybackShuffle.pick.closure#2",
+        );
+        return id != current;
+      }).toList()..shuffle(_random);
+    }
+    final next = _remaining.isEmpty ? current : _remaining.removeLast();
+    _history.add(next);
+    _cursor++;
+    if (_history.length > 5000) {
+      _history.removeAt(0);
+      _cursor--;
+    }
+    return next;
   }
 }
 
@@ -291,6 +359,24 @@ class PlaybackPolicy {
       "lib/services/playback_policy.dart::PlaybackPolicy.updateSettings",
     );
     _settings = settings;
+  }
+
+  /// Applying a new intro setting may advance playback, but never overrides a
+  /// position that the listener deliberately chose with seek or replay.
+  double? introSeekPosition(double position) {
+    AppLog.instance.trace(
+      "lib/services/playback_policy.dart::PlaybackPolicy.introSeekPosition",
+    );
+
+    if (!_started ||
+        _finished ||
+        !_canSkip ||
+        !position.isFinite ||
+        position < 0 ||
+        position >= _settings.skipIntroSeconds) {
+      return null;
+    }
+    return _settings.skipIntroSeconds.toDouble();
   }
 
   /// A single chapter epoch emits at most one completion, regardless of whether

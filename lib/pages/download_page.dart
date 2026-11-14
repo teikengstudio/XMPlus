@@ -180,11 +180,14 @@ Future<({String identity, bool polling})?> _chooseDownloadAccount(
 Future<void> requestDownloads(
   BuildContext context,
   AppRuntime runtime,
-  List<Track> tracks,
-) async {
+  List<Track> tracks, {
+  String? accountIdentity,
+}) async {
   AppLog.instance.trace("lib/pages/download_page.dart::requestDownloads");
 
-  final account = await _chooseDownloadAccount(context, runtime);
+  final account = accountIdentity == null
+      ? await _chooseDownloadAccount(context, runtime)
+      : (identity: accountIdentity, polling: false);
   if (account == null || !context.mounted) return;
   final batch = await runtime.prepareDownloads(
     tracks,
@@ -204,11 +207,14 @@ Future<void> requestDownloads(
 Future<void> requestAlbumDownloads(
   BuildContext context,
   AppRuntime runtime,
-  String albumId,
-) async {
+  String albumId, {
+  String? accountIdentity,
+}) async {
   AppLog.instance.trace("lib/pages/download_page.dart::requestAlbumDownloads");
 
-  final account = await _chooseDownloadAccount(context, runtime);
+  final account = accountIdentity == null
+      ? await _chooseDownloadAccount(context, runtime)
+      : (identity: accountIdentity, polling: false);
   if (account == null || !context.mounted) return;
   final batch = await runtime.prepareAlbumDownloads(
     albumId,

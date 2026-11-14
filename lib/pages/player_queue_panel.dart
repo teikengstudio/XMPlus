@@ -6,6 +6,7 @@ import '../common/widgets/adaptive_text.dart';
 import '../models/xmly_models.dart';
 import '../services/app_log.dart';
 import '../services/app_runtime.dart';
+import 'playback_mode_control.dart';
 
 void _recordQueueError(
   String operation,
@@ -275,6 +276,7 @@ class _PlayerQueuePanelState extends State<PlayerQueuePanel> {
                                     ],
                                   ),
                                 ),
+                                PlaybackModeButton(runtime: widget.runtime),
                                 IconButton(
                                   tooltip: '回到当前播放',
                                   onPressed: player.current == null
