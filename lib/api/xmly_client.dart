@@ -177,6 +177,8 @@ class XmlyClient {
             '/revision/search',
             '/revision/track/simple',
             '/revision/comment/queryReplies',
+            '/revision/category/v2/allCategory',
+            '/revision/category/v2/albums',
           }.contains(path);
     if (origin == collector)
       return method == 'POST' && path == '/nyx/v1/history/merge/android';

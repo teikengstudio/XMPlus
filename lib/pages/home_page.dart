@@ -13,6 +13,7 @@ import '../services/app_log.dart';
 import '../services/app_runtime.dart';
 import 'catalogue_page.dart';
 import 'home_album_section.dart';
+import 'home_browse_page.dart';
 
 void _recordHomeError(
   String operation,
@@ -393,6 +394,33 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
+  void _openBrowse([int? categoryId]) {
+    AppLog.instance.trace(
+      "lib/pages/home_page.dart::_HomePageState._openBrowse",
+    );
+
+    final current = _channels.where((channel) {
+      AppLog.instance.trace(
+        "lib/pages/home_page.dart::_HomePageState._openBrowse.closure#1",
+      );
+      return channel.pageId == _pageId;
+    }).firstOrNull;
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) {
+          AppLog.instance.trace(
+            "lib/pages/home_page.dart::_HomePageState._openBrowse.closure#2",
+          );
+          return HomeBrowsePage(
+            runtime: widget.runtime,
+            categoryId: categoryId ?? current?.categoryId ?? 0,
+            onOpenAlbum: _openAlbum,
+          );
+        },
+      ),
+    );
+  }
+
   void _openAlbum(Album album) {
     AppLog.instance.trace(
       "lib/pages/home_page.dart::_HomePageState._openAlbum",
@@ -573,13 +601,19 @@ class _HomePageState extends State<HomePage> {
                   horizontal: horizontal,
                   onRefresh: _loadChannels,
                   onOpenAlbum: _busy ? null : _openAlbum,
+                  onBrowse: (section) {
+                    AppLog.instance.trace(
+                      "lib/pages/home_page.dart::_HomePageState.build.closure#1.closure#3",
+                    );
+                    return _openBrowse(section.moreCategoryId);
+                  },
                   onRetry: _busy
                       ? null
                       : _pageId == null || _channels.isEmpty
                       ? _loadChannels
                       : () {
                           AppLog.instance.trace(
-                            "lib/pages/home_page.dart::_HomePageState.build.closure#1.closure#3",
+                            "lib/pages/home_page.dart::_HomePageState.build.closure#1.closure#4",
                           );
                           _loadHome(_pageId!, tabId: _tabId);
                         },
@@ -632,6 +666,17 @@ class _HomePageState extends State<HomePage> {
             ),
             const SizedBox(width: 8),
             IconButton(
+              key: const ValueKey('homeBrowseAlbums'),
+              tooltip: '全部专辑',
+              onPressed: () {
+                AppLog.instance.trace(
+                  "lib/pages/home_page.dart::_HomePageState._discoveryHeader.closure#1.closure#1",
+                );
+                return _openBrowse();
+              },
+              icon: const Icon(Icons.grid_view_rounded),
+            ),
+            IconButton(
               tooltip: '刷新首页',
               onPressed: _busy ? null : _loadChannels,
               icon: const Icon(Icons.refresh_rounded),
@@ -668,6 +713,7 @@ class _HomeFeed extends StatefulWidget {
     required this.horizontal,
     required this.onRefresh,
     required this.onOpenAlbum,
+    required this.onBrowse,
     required this.onRetry,
     super.key,
   });
@@ -678,6 +724,7 @@ class _HomeFeed extends StatefulWidget {
   final double horizontal;
   final Future<void> Function() onRefresh;
   final ValueChanged<Album>? onOpenAlbum;
+  final ValueChanged<HomeSection> onBrowse;
   final VoidCallback? onRetry;
 
   @override
@@ -757,6 +804,14 @@ class _HomeFeedState extends State<_HomeFeed> {
                             HomeAlbumSection(
                               section: section,
                               onOpenAlbum: widget.onOpenAlbum,
+                              onMore: section.moreCategoryId == null
+                                  ? null
+                                  : () {
+                                      AppLog.instance.trace(
+                                        "lib/pages/home_page.dart::_HomeFeedState.build.closure#1",
+                                      );
+                                      return widget.onBrowse(section);
+                                    },
                             ),
                         ],
                       ),

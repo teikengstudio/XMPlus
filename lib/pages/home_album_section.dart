@@ -12,11 +12,15 @@ class HomeAlbumSection extends StatelessWidget {
   const HomeAlbumSection({
     required this.section,
     required this.onOpenAlbum,
+    this.onMore,
+    this.showTitle = true,
     super.key,
   });
 
   final HomeSection section;
   final ValueChanged<Album>? onOpenAlbum;
+  final VoidCallback? onMore;
+  final bool showTitle;
 
   @override
   Widget build(BuildContext context) {
@@ -29,18 +33,57 @@ class HomeAlbumSection extends StatelessWidget {
     final showCover = MediaQuery.sizeOf(context).width >= 320;
     return SliverMainAxisGroup(
       slivers: [
-        SliverToBoxAdapter(
-          child: Padding(
-            padding: const EdgeInsets.only(top: 16, bottom: 8),
-            child: Text(
-              section.isRanking ? '排行榜 · ${section.title}' : section.title,
-              style: theme.textTheme.titleLarge?.copyWith(
-                fontSize: 22,
-                fontWeight: FontWeight.w600,
-              ),
+        if (showTitle)
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: const EdgeInsets.only(top: 16, bottom: 8),
+              child: onMore == null
+                  ? Text(
+                      section.isRanking
+                          ? '排行榜 · ${section.title}'
+                          : section.title,
+                      style: theme.textTheme.titleLarge?.copyWith(
+                        fontSize: 22,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    )
+                  : InkWell(
+                      key: ValueKey('homeMore${section.title}'),
+                      onTap: onMore,
+                      borderRadius: BorderRadius.circular(8),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 6),
+                        child: Row(
+                          children: [
+                            Expanded(
+                              child: Text(
+                                section.isRanking
+                                    ? '排行榜 · ${section.title}'
+                                    : section.title,
+                                style: theme.textTheme.titleLarge?.copyWith(
+                                  fontSize: 22,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            Text(
+                              '更多',
+                              style: theme.textTheme.labelMedium?.copyWith(
+                                color: theme.colorScheme.onSurfaceVariant,
+                              ),
+                            ),
+                            Icon(
+                              Icons.chevron_right_rounded,
+                              size: 20,
+                              color: theme.colorScheme.onSurfaceVariant,
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
             ),
           ),
-        ),
         SliverLayoutBuilder(
           builder: (context, constraints) {
             AppLog.instance.trace(
