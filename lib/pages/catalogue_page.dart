@@ -2066,9 +2066,15 @@ class _AlbumPageViewState extends State<AlbumPageView> {
       case 'play':
         await _play(track);
       case 'queue':
-        await widget.runtime.player.addToQueue(track);
+        await widget.runtime.player.addToQueue(
+          track,
+          accountIdentity: widget.accountIdentity,
+        );
       case 'next':
-        await widget.runtime.player.playNext(track);
+        await widget.runtime.player.playNext(
+          track,
+          accountIdentity: widget.accountIdentity,
+        );
       case 'download':
         final task = await _localDownload(track);
         if (mounted && task == null)
