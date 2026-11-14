@@ -311,35 +311,30 @@ ThemeData getThemeData({
       unselectedLabelStyle: const TextStyle(fontWeight: FontWeight.w500),
     ),
     scrollbarTheme: ScrollbarThemeData(
-      thumbVisibility: WidgetStateProperty.resolveWith((states) {
+      thumbVisibility: const WidgetStatePropertyAll(false),
+      trackVisibility: const WidgetStatePropertyAll(false),
+      thickness: WidgetStateProperty.resolveWith((states) {
         AppLog.instance.trace("lib/common/theme.dart::getThemeData.closure#2");
 
         return states.contains(WidgetState.hovered) ||
-            states.contains(WidgetState.dragged);
-      }),
-      trackVisibility: const WidgetStatePropertyAll(false),
-      thickness: WidgetStateProperty.resolveWith((states) {
-        AppLog.instance.trace("lib/common/theme.dart::getThemeData.closure#3");
-
-        return states.contains(WidgetState.hovered) ||
                 states.contains(WidgetState.dragged)
-            ? 5.0
-            : 3.0;
+            ? 4.0
+            : 2.5;
       }),
       thumbColor: WidgetStateProperty.resolveWith((states) {
-        AppLog.instance.trace("lib/common/theme.dart::getThemeData.closure#4");
+        AppLog.instance.trace("lib/common/theme.dart::getThemeData.closure#3");
 
         final opacity = states.contains(WidgetState.dragged)
-            ? .62
+            ? .48
             : states.contains(WidgetState.hovered)
-            ? .42
-            : .24;
+            ? .32
+            : .18;
         return colorScheme.onSurfaceVariant.withValues(alpha: opacity);
       }),
       radius: const Radius.circular(6),
       crossAxisMargin: 3,
       mainAxisMargin: 4,
-      minThumbLength: 36,
+      minThumbLength: 28,
       interactive: true,
     ),
     snackBarTheme: SnackBarThemeData(

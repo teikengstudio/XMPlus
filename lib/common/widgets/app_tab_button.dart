@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import 'app_scrollbar.dart';
 import "../../services/app_log.dart";
 
 /// A quiet tab with a fixed label footprint and a short selection indicator.
@@ -170,7 +171,7 @@ class _AppTabStripState extends State<AppTabStrip> {
     );
     return ScrollConfiguration(
       behavior: ScrollConfiguration.of(context).copyWith(scrollbars: false),
-      child: Scrollbar(
+      child: AppScrollbar(
         controller: _scroll,
         interactive: true,
         scrollbarOrientation: ScrollbarOrientation.bottom,

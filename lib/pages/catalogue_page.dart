@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:flutter/foundation.dart' show listEquals;
 import 'package:flutter/material.dart';
 
+import '../common/widgets/app_scrollbar.dart';
 import '../api/xmly_catalogue.dart';
 import '../api/xmly_client.dart';
 import '../api/xmly_experience.dart';
@@ -818,7 +819,7 @@ class _DiscoveryPageState extends State<DiscoveryPage>
                       : null,
                 ),
                 Expanded(
-                  child: Scrollbar(
+                  child: AppScrollbar(
                     controller: _scroll,
                     child: CustomScrollView(
                       controller: _scroll,
@@ -2446,7 +2447,7 @@ class _AlbumPageViewState extends State<AlbumPageView> {
                 double.infinity,
               ),
             );
-            return Scrollbar(
+            return AppScrollbar(
               controller: _albumScroll,
               child: CustomScrollView(
                 controller: _albumScroll,

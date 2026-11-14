@@ -3,6 +3,7 @@ import 'dart:convert';
 
 import 'package:flutter/material.dart';
 
+import '../common/widgets/app_scrollbar.dart';
 import '../api/xmly_experience.dart';
 import '../api/xmly_client.dart';
 import '../api/xmly_history.dart';
@@ -1593,7 +1594,7 @@ class _ListeningPageState extends State<ListeningPage>
       }
       rows.add(item as Object);
     }
-    return Scrollbar(
+    return AppScrollbar(
       child: CustomScrollView(
         slivers: [
           for (final header in headers) SliverToBoxAdapter(child: header),
@@ -1998,7 +1999,7 @@ class _ListeningPageState extends State<ListeningPage>
     );
 
     final items = _favorites.where(_matches).toList();
-    return Scrollbar(
+    return AppScrollbar(
       child: ListView.builder(
         itemCount: items.length + 2 + (_moreFavorites ? 1 : 0),
         itemBuilder: (_, index) {

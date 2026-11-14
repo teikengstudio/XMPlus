@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../common/widgets/app_scrollbar.dart';
 import '../api/xmly_browse.dart';
 import '../api/xmly_client.dart';
 import '../api/xmly_experience.dart';
@@ -310,7 +311,7 @@ class _HomeBrowsePageState extends State<HomeBrowsePage> {
                 );
                 return _load(reset: true);
               },
-              child: Scrollbar(
+              child: AppScrollbar(
                 controller: _scroll,
                 child: CustomScrollView(
                   controller: _scroll,

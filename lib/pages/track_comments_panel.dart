@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import '../api/xmly_client.dart';
 import '../api/xmly_comments.dart';
 import '../models/xmly_models.dart';
+import '../common/widgets/app_scrollbar.dart';
 import '../common/widgets/logged_network_image.dart';
 import '../services/app_log.dart';
 import '../services/app_runtime.dart';
@@ -322,7 +323,7 @@ class _TrackCommentsPanelState extends State<TrackCommentsPanel> {
               ),
               const SizedBox(height: 8),
               Expanded(
-                child: Scrollbar(
+                child: AppScrollbar(
                   controller: _scroll,
                   child: RefreshIndicator(
                     onRefresh: _refresh,

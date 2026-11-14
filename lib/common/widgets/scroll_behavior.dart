@@ -5,6 +5,7 @@ import 'package:flutter/gestures.dart' show PointerDeviceKind;
 import 'package:flutter/material.dart';
 
 import "../../services/app_log.dart";
+import 'app_scrollbar.dart';
 
 const Set<PointerDeviceKind> desktopDragDevices = {
   PointerDeviceKind.touch,
@@ -28,17 +29,25 @@ class CustomScrollBehavior extends MaterialScrollBehavior {
       "lib/common/widgets/scroll_behavior.dart::CustomScrollBehavior.buildScrollbar",
     );
 
-    final material = context.findAncestorWidgetOfExactType<Scrollbar>();
-    final raw = context.findAncestorWidgetOfExactType<RawScrollbar>();
-    final controller = material != null ? material.controller : raw?.controller;
-    if ((material != null || raw != null) &&
-        (controller == details.controller ||
-            controller == null &&
-                details.controller ==
-                    PrimaryScrollController.maybeOf(context))) {
+    if (axisDirectionToAxis(details.direction) == Axis.horizontal) return child;
+    final scrollbar = context.findAncestorStateOfType<RawScrollbarState>();
+    // A primary ScrollView inserts PrimaryScrollController.none below itself.
+    // Resolve at the explicit scrollbar, before that boundary, to avoid twins.
+    final controller =
+        scrollbar?.widget.controller ??
+        (scrollbar == null
+            ? null
+            : PrimaryScrollController.maybeOf(scrollbar.context));
+    if (scrollbar != null && controller == details.controller) {
       return child;
     }
-    return super.buildScrollbar(context, child, details);
+    return switch (getPlatform(context)) {
+      TargetPlatform.windows || TargetPlatform.linux || TargetPlatform.macOS =>
+        AppScrollbar(controller: details.controller, child: child),
+      TargetPlatform.android ||
+      TargetPlatform.iOS ||
+      TargetPlatform.fuchsia => child,
+    };
   }
 
   @override

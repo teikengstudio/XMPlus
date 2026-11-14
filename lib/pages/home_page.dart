@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../common/widgets/app_scrollbar.dart';
 import '../api/xmly_experience.dart';
 import '../common/widgets/adaptive_text.dart';
 import '../common/widgets/app_header.dart';
@@ -752,7 +753,7 @@ class _HomeFeedState extends State<_HomeFeed> {
     final sections = widget.content?.sections ?? const <HomeSection>[];
     return RefreshIndicator(
       onRefresh: widget.onRefresh,
-      child: Scrollbar(
+      child: AppScrollbar(
         controller: _scroll,
         child: CustomScrollView(
           controller: _scroll,

@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../common/widgets/app_scrollbar.dart';
 import '../api/xmly_anchor.dart';
 import '../common/widgets/app_header.dart';
 import '../models/xmly_models.dart';
@@ -353,7 +354,7 @@ class _AnchorFollowingPageState extends State<AnchorFollowingPage> {
             constraints: const BoxConstraints(maxWidth: 960),
             child: RefreshIndicator(
               onRefresh: _refresh,
-              child: Scrollbar(
+              child: AppScrollbar(
                 controller: _scroll,
                 child: ListView.builder(
                   controller: _scroll,

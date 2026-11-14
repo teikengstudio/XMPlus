@@ -4,6 +4,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../common/widgets/app_scrollbar.dart';
 import '../api/xmly_anchor.dart';
 import '../common/widgets/adaptive_text.dart';
 import '../common/widgets/app_header.dart';
@@ -854,7 +855,7 @@ class _AnchorPageState extends State<AnchorPage>
                 final padding = constraints.maxWidth >= 800 ? 32.0 : 16.0;
                 return RefreshIndicator(
                   onRefresh: _refresh,
-                  child: Scrollbar(
+                  child: AppScrollbar(
                     controller: _scroll,
                     child: CustomScrollView(
                       controller: _scroll,
