@@ -250,7 +250,7 @@ class PlayerService {
   String? _completedTrackId;
   CloseSequence? _closeSteps;
   double? _pendingDurationPosition;
-  bool _pendingCloudResume = false;
+  PlaybackResume? _pendingResumeSource;
   bool _manualChapterPosition = false;
   bool _sleepStopped = false, _manualPaused = false;
   int _savedAt = 0;
@@ -703,7 +703,9 @@ class PlayerService {
     _sleepStopped = false;
     duration = current?.duration ?? 0;
     final track = current;
-    final progress = track == null ? null : _latestQueueProgress(track);
+    final progress = track == null || effectiveSettings.disableLocalResume
+        ? null
+        : _latestQueueProgress(track);
     _restoredTrackId = progress == null ? null : track!.id;
     _restoredPosition = progress?.position;
     position = duration > 0
@@ -1801,9 +1803,8 @@ class PlayerService {
     PlaybackSource source,
     int request,
     int epoch,
-    ({double position, int updatedAt})? knownProgress, {
-    required bool preservePosition,
-  }) async {
+    ({double position, int updatedAt})? knownProgress,
+  ) async {
     AppLog.instance.trace(
       "lib/services/player_service.dart::PlayerService._restoreCloudProgress",
     );
@@ -1857,7 +1858,9 @@ class PlayerService {
         );
 
         try {
-          if (!active() || preservePosition || _atEnd) return;
+          if (!active() || effectiveSettings.disableCloudResume || _atEnd) {
+            return;
+          }
           final remote = cloud;
           if (remote != null &&
               (knownProgress == null ||
@@ -1867,7 +1870,7 @@ class PlayerService {
               duration: duration,
               resumePosition: (remote['position'] as num).toDouble(),
               settings: effectiveSettings,
-              cloudResume: true,
+              resumeSource: PlaybackResume.cloud,
             );
             await _driver.seek(restored);
             if (!active()) return;
@@ -1875,7 +1878,7 @@ class PlayerService {
             position = restored;
             if (_pendingDurationPosition != null) {
               _pendingDurationPosition = restored;
-              _pendingCloudResume = true;
+              _pendingResumeSource = PlaybackResume.cloud;
             }
             // Only a subsequent device observation may persist the restored
             // position; the pre-seek fallback is not an official observation.
@@ -1959,9 +1962,6 @@ class PlayerService {
 
     final track = current;
     if (track == null || request != _request) return;
-    final saved =
-        resumePosition ??
-        (track.id == _restoredTrackId ? _restoredPosition : null);
     final previousTaskId = _source?.taskId;
     final preferredPrepaid =
         previousTaskId != null &&
@@ -1981,7 +1981,7 @@ class PlayerService {
     error = null;
     _sourceWarning = null;
     _notify();
-    final settings = effectiveSettings;
+    final listenAndDownload = effectiveSettings.listenAndDownload;
     final source = await _admission(
       request,
       () {
@@ -1992,7 +1992,7 @@ class PlayerService {
             ? _local(downloads.task(localTaskId))
             : _prepare(
                 track,
-                settings.listenAndDownload,
+                listenAndDownload,
                 request,
                 existingTaskId: preferredPrepaid,
                 confirmedDownload: confirmedDownload,
@@ -2012,11 +2012,25 @@ class PlayerService {
       return;
     }
     _source = source;
-    var knownProgress = _localProgress(track);
-    var cloudResume = false;
+    final settings = effectiveSettings;
+    final saved =
+        resumePosition ??
+        (!settings.disableLocalResume && track.id == _restoredTrackId
+            ? _restoredPosition
+            : null);
+    var knownProgress = settings.disableLocalResume
+        ? null
+        : _localProgress(track);
+    var resumeSource =
+        resumePosition == null && (saved != null || knownProgress != null)
+        ? PlaybackResume.local
+        : null;
     // Keep the album/history page's dated observation when a fresh cloud query
     // fails, without replacing newer local or remote progress.
     if (historyProgress != null &&
+        !(historyProgress.fromCloud
+            ? settings.disableCloudResume
+            : settings.disableLocalResume) &&
         historyProgress.position.isFinite &&
         historyProgress.position >= 0 &&
         historyProgress.position <= 2147483647 &&
@@ -2027,7 +2041,11 @@ class PlayerService {
         position: historyProgress.position,
         updatedAt: historyProgress.updatedAt,
       );
-      cloudResume = saved == null && historyProgress.fromCloud;
+      if (saved == null) {
+        resumeSource = historyProgress.fromCloud
+            ? PlaybackResume.cloud
+            : PlaybackResume.local;
+      }
     }
     try {
       final resume = saved ?? knownProgress?.position ?? 0.0;
@@ -2053,10 +2071,10 @@ class PlayerService {
         resumePosition: resume,
         settings: settings,
         manualReplay: manualReplay,
-        cloudResume: cloudResume,
+        resumeSource: resumeSource,
       );
-      _pendingDurationPosition = duration <= 0 ? position : null;
-      _pendingCloudResume = cloudResume;
+      _pendingDurationPosition = position;
+      _pendingResumeSource = resumeSource;
       rate = settings.speed;
       volume = settings.outputVolume;
       await _driver.open(source.uri, epoch: epoch, startPosition: position);
@@ -2071,16 +2089,11 @@ class PlayerService {
         return;
       }
       _official.start('player', track, source.identity);
-      unawaited(
-        _restoreCloudProgress(
-          track,
-          source,
-          request,
-          epoch,
-          knownProgress,
-          preservePosition: saved != null || manualReplay,
-        ),
-      );
+      if (!settings.disableCloudResume && saved == null && !manualReplay) {
+        unawaited(
+          _restoreCloudProgress(track, source, request, epoch, knownProgress),
+        );
+      }
       final sleep = policy.pollSleep();
       if (sleep != null) {
         await _sleep(sleep);
@@ -2101,6 +2114,9 @@ class PlayerService {
           'taskId': source.taskId,
           'kind': source.kind,
           'epoch': epoch,
+          'startPosition': position,
+          'duration': duration,
+          'resumeSource': resumeSource?.name,
         },
       );
       _notify();
@@ -2697,7 +2713,7 @@ class PlayerService {
         position = policy.manualSeek(seconds);
         if (_pendingDurationPosition != null) {
           _pendingDurationPosition = position;
-          _pendingCloudResume = false;
+          _pendingResumeSource = null;
         }
         await _driver.seek(position);
         if (_atEnd) {
@@ -2888,21 +2904,22 @@ class PlayerService {
     _observedPosition = snapshot.position;
     if (snapshot.duration > 0) duration = snapshot.duration;
     final pendingPosition = _pendingDurationPosition;
-    if (pendingPosition != null && duration > 0) {
+    if (pendingPosition != null && snapshot.duration > 0 && !_atEnd) {
       _pendingDurationPosition = null;
-      final cloudResume = _pendingCloudResume;
-      _pendingCloudResume = false;
-      // Opening may report zero after the requested resume seek was issued.
-      // Keep that target, or newer playback progress, when applying chapter skips.
+      final resumeSource = _pendingResumeSource;
+      _pendingResumeSource = null;
+      // Recheck the saved target against the real duration, not against a
+      // position the device may already have advanced beyond while opening.
       final resume = position < pendingPosition ? pendingPosition : position;
       final initial = policy.start(
         duration: duration,
-        resumePosition: cloudResume ? pendingPosition : resume,
+        resumePosition: resumeSource == null ? resume : pendingPosition,
         settings: effectiveSettings,
         manualReplay: _manualChapterPosition,
-        cloudResume: cloudResume,
+        resumeSource: resumeSource,
       );
-      position = cloudResume && initial >= pendingPosition && initial < resume
+      position =
+          resumeSource != null && initial >= pendingPosition && initial < resume
           ? resume
           : initial;
       if (position != resume) {
@@ -2948,10 +2965,27 @@ class PlayerService {
           !_sleepStopping &&
           (snapshot.playing || snapshot.completed),
     );
-    if (finished && !_atEnd)
+    if (finished && !_atEnd) {
+      AppLog.instance.write(
+        AppLogLevel.info,
+        'player',
+        'Playback chapter ended',
+        data: {
+          'trackId': current?.id,
+          'epoch': _epoch,
+          'position': position,
+          'duration': duration,
+          'reason': snapshot.completed
+              ? 'device'
+              : position >= duration
+              ? 'duration'
+              : 'outro',
+        },
+      );
       await _finish();
-    else
+    } else {
       _prefetchNext(snapshot);
+    }
     _notify();
   }
 
@@ -4161,7 +4195,7 @@ class PlayerService {
     buffering = false;
     _actual = false;
     _pendingDurationPosition = null;
-    _pendingCloudResume = false;
+    _pendingResumeSource = null;
   }
 
   Future<void> stopTaskReference(String taskId) async {

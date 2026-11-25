@@ -795,15 +795,18 @@ class _PlayerPanelState extends State<PlayerPanel> {
       _visitedPages.add(page);
     });
     if (_paneCount == 1 && _pages.hasClients && !_changingPaneLayout) {
-      unawaited(
-        _pages.animateToPage(
-          _pageOrder.indexOf(page),
-          duration: MediaQuery.disableAnimationsOf(context)
-              ? Duration.zero
-              : const Duration(milliseconds: 250),
-          curve: Curves.easeOutCubic,
-        ),
-      );
+      final index = _pageOrder.indexOf(page);
+      if (MediaQuery.disableAnimationsOf(context)) {
+        _pages.jumpToPage(index);
+      } else {
+        unawaited(
+          _pages.animateToPage(
+            index,
+            duration: const Duration(milliseconds: 250),
+            curve: Curves.easeOutCubic,
+          ),
+        );
+      }
     }
   }
 

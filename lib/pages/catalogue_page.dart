@@ -1685,20 +1685,23 @@ class _AlbumPageViewState extends State<AlbumPageView> {
         fromCloud: false,
       );
     }
+    final settings = player.effectiveSettings;
     ({Track track, double position, int updatedAt, bool fromCloud})? latest;
-    for (final track in _knownAlbumTracks.values) {
-      final saved = _savedProgress(track.id);
-      if (saved != null &&
-          (latest == null || saved.updatedAt > latest.updatedAt)) {
-        latest = (
-          track: track,
-          position: saved.position,
-          updatedAt: saved.updatedAt,
-          fromCloud: false,
-        );
+    if (!settings.disableLocalResume) {
+      for (final track in _knownAlbumTracks.values) {
+        final saved = _savedProgress(track.id);
+        if (saved != null &&
+            (latest == null || saved.updatedAt > latest.updatedAt)) {
+          latest = (
+            track: track,
+            position: saved.position,
+            updatedAt: saved.updatedAt,
+            fromCloud: false,
+          );
+        }
       }
     }
-    final cloud = _cloudProgress;
+    final cloud = settings.disableCloudResume ? null : _cloudProgress;
     if (cloud != null && cloud['album_id'] == widget.albumId) {
       final updatedAt = ((cloud['updated_at'] as num) * 1000).toInt();
       if (latest == null || updatedAt > latest.updatedAt) {
@@ -1759,9 +1762,10 @@ class _AlbumPageViewState extends State<AlbumPageView> {
     });
     try {
       final currentPlayer = widget.runtime.player;
-      if (currentPlayer.current?.albumId != albumId ||
-          currentPlayer.playbackIdentity != client.identity ||
-          currentPlayer.sourceKind.isEmpty) {
+      if ((currentPlayer.current?.albumId != albumId ||
+              currentPlayer.playbackIdentity != client.identity ||
+              currentPlayer.sourceKind.isEmpty) &&
+          !currentPlayer.effectiveSettings.disableCloudResume) {
         await _historyRead;
         if (!active()) return;
       }

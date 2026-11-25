@@ -11,18 +11,17 @@
 
 <br/>
 
-
+> [!IMPORTANT]
+> 请不要在国内社交媒体(包括但不限于Bilibili 小红书 贴吧)传播本应用。
+> 您将本应用分享给他人时应当主动告知此事！
 
 ## 下载
 
 从 [Releases](https://github.com/teikengstudio/XMPlus/releases) 下载。
 
+从[莘应用资源站](https://xinappstore.qiumingsanyu.top/app/1661)下载(大陆推荐)
 
 ## 编译
-
-工具链：Flutter 3.47.9 / Dart 3.13.7、Java 25、Gradle 9.9.0、AGP 9.5.1、Kotlin 2.4.21；Android `compileSdk` / `targetSdk` 为 36，NDK 为 28.2.13676358。依赖版本和校验值锁定在 `pubspec.lock`。
-
-先在 Linux x86_64 安装 Android NDK 28.2.13676358、`jq`、`make`、`tar`、`sha256sum`（构建 x86_64 时还需 `nasm`），再运行：
 
 ```sh
 flutter pub get --enforce-lockfile
@@ -30,16 +29,15 @@ bash tool/build_android_media.sh
 flutter build apk --release --split-per-abi --no-pub
 ```
 
-正式 Android 构建必须配置 JKS 签名环境变量：`ANDROID_KEYSTORE_PATH`、`ANDROID_KEYSTORE_PASSWORD`、`ANDROID_KEY_PASSWORD`、`ANDROID_KEY_ALIAS`。签名材料不得提交到仓库。
 
 Windows 构建命令见 `licenses/native/SOURCE-MATERIALS-INCOMPLETE.txt`。
 
 
 ## 许可与安全
 
-项目按 [AGPL-3.0-or-later](LICENSE) 提供。第三方组件保留各自许可与版权声明，详见 [NOTICE](NOTICE) 和 `licenses/`；发布时须履行对应源码提供义务。
+项目按 [AGPL-3.0-or-later](LICENSE) 提供。第三方组件保留各自许可与版权声明，详见 [NOTICE](NOTICE) 和 `licenses/`。
 
-本项目与喜马拉雅无隶属、合作或背书关系。请遵守平台规则、版权及当地法律。反馈问题时请附应用版本、系统版本和复现步骤；不要上传 Cookie、令牌、账号备份或签名私钥。
+本项目与喜马拉雅无隶属、合作或背书关系。请遵守平台规则、版权及当地法律。反馈问题时请附应用日志
 
 ## 致谢与交流
 

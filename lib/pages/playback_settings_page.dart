@@ -1033,7 +1033,7 @@ class _PlaybackSettingsPageState extends State<PlaybackSettingsPage> {
           );
           return AlertDialog(
             title: const Text('上传收听进度？'),
-            content: const Text('开播时会自动读取云进度。开启后，还会上传当前账号在线播放与本地文件播放的实际进度。'),
+            content: const Text('开启后会向当前账号上传在线播放和本地播放进度。'),
             actions: [
               TextButton(
                 onPressed: () {
@@ -1460,11 +1460,23 @@ class _PlaybackSettingsPageState extends State<PlaybackSettingsPage> {
                         onTap: _busy ? null : widget.onOpenFullSettings,
                       )
                     else if (widget.albumId == null) ...[
+                      _section('历史恢复', [
+                        _toggle(
+                          'disableLocalResume',
+                          '禁用本地恢复',
+                          resolved.disableLocalResume,
+                        ),
+                        _toggle(
+                          'disableCloudResume',
+                          '禁用云端恢复',
+                          resolved.disableCloudResume,
+                        ),
+                      ]),
                       _section('历史同步', [
                         SwitchListTile(
                           key: const ValueKey('syncHistory'),
                           title: const Text('上传云端收听进度'),
-                          subtitle: const Text('开播时自动读取云进度，此开关仅控制上传'),
+                          subtitle: const Text('仅控制上传，不影响云端恢复'),
                           value: _global['syncHistory'] == true,
                           onChanged: _busy ? null : _sync,
                         ),

@@ -12,6 +12,8 @@ class PlaybackSettings {
     required this.seekBackwardSeconds,
     required this.seekForwardSeconds,
     required this.autoNext,
+    required this.disableLocalResume,
+    required this.disableCloudResume,
     required this.loopMode,
     required this.listenAndDownload,
     required this.volume,
@@ -25,6 +27,8 @@ class PlaybackSettings {
   final int seekBackwardSeconds;
   final int seekForwardSeconds;
   final bool autoNext;
+  final bool disableLocalResume;
+  final bool disableCloudResume;
   final String loopMode;
   final bool listenAndDownload;
   final double volume;
@@ -88,12 +92,14 @@ class PlaybackSettings {
       return raw.toInt();
     }
 
-    bool boolean(String key, bool fallback) {
+    bool boolean(String key, bool fallback, {bool globalOnly = false}) {
       AppLog.instance.trace(
         "lib/services/playback_policy.dart::PlaybackSettings.resolve.boolean",
       );
 
-      final raw = value(key, fallback);
+      final raw = globalOnly
+          ? (global.containsKey(key) ? global[key] : fallback)
+          : value(key, fallback);
       if (raw is! bool) throw FormatException('播放设置 $key 必须为开关值');
       return raw;
     }
@@ -120,6 +126,16 @@ class PlaybackSettings {
       seekBackwardSeconds: seconds('seekBackwardSeconds', 15, 1, 300),
       seekForwardSeconds: seconds('seekForwardSeconds', 30, 1, 300),
       autoNext: boolean('autoNext', true),
+      disableLocalResume: boolean(
+        'disableLocalResume',
+        false,
+        globalOnly: true,
+      ),
+      disableCloudResume: boolean(
+        'disableCloudResume',
+        false,
+        globalOnly: true,
+      ),
       loopMode: loop as String,
       listenAndDownload: boolean('listenAndDownload', false),
       volume: number('volume', 100, 0, 100),
@@ -139,6 +155,8 @@ class PlaybackSettings {
       'seekBackwardSeconds': seekBackwardSeconds,
       'seekForwardSeconds': seekForwardSeconds,
       'autoNext': autoNext,
+      'disableLocalResume': disableLocalResume,
+      'disableCloudResume': disableCloudResume,
       'loopMode': loopMode,
       'listenAndDownload': listenAndDownload,
       'volume': volume,
@@ -298,6 +316,8 @@ class SleepRequest {
   }
 }
 
+enum PlaybackResume { local, cloud }
+
 class PlaybackPolicy {
   PlaybackPolicy({DateTime Function()? clock})
     : _clock = clock ?? DateTime.now {
@@ -338,7 +358,7 @@ class PlaybackPolicy {
     double resumePosition = 0,
     required PlaybackSettings settings,
     bool manualReplay = false,
-    bool cloudResume = false,
+    PlaybackResume? resumeSource,
   }) {
     AppLog.instance.trace(
       "lib/services/playback_policy.dart::PlaybackPolicy.start",
@@ -352,8 +372,13 @@ class PlaybackPolicy {
     var resume = _clamp(resumePosition);
     final canSkip = _canSkip;
     final end = _duration - (canSkip ? settings.skipOutroSeconds : 0);
-    if (cloudResume && !manualReplay && end > 0 && resume > end * 0.95) {
-      resume = 0;
+    if (!manualReplay && end > 0) {
+      final shouldRestart = switch (resumeSource) {
+        PlaybackResume.local => resume >= end,
+        PlaybackResume.cloud => resume > end * 0.95,
+        null => false,
+      };
+      if (shouldRestart) resume = 0;
     }
     return canSkip && resume < settings.skipIntroSeconds
         ? settings.skipIntroSeconds.toDouble()
